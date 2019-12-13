@@ -1,0 +1,20 @@
+Archivist new-client-key: Create a new client key.
+
+Description:
+
+  Creates a new client key and writes it to disk with permissions
+  by the creating user. The client key is derived from a master key,
+  the master will be able to decrypt data written by the generated key.
+
+  Keep this key secure, it is not able to decrypt archived data, but should
+  still be kept private.
+
+  Note, each client key has it's own data 'deduplication space'. If you share
+  client keys across multiple machines, you will get better data deduplication,
+  but will leave your data more vulnerable to attackers wishing to corrupt
+  future data streams (They will still not be able to corrupt previously archived data). 
+
+Quick examples:
+
+  $ archivist new-master-key -o ./backups-master.key
+  $ archivist new-client-key -m ./backups-master.key -o ./backups-client1.key

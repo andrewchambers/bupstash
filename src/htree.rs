@@ -142,6 +142,7 @@ impl<'a> TreeWriter<'a> {
     }
 }
 
+// FIXME: use the failure module.
 #[derive(Debug)]
 pub enum HTreeError {
     CorruptOrTamperedDataError,
