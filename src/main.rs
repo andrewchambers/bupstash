@@ -1,3 +1,7 @@
+pub mod address;
+pub mod crypto;
+pub mod hex;
+pub mod htree;
 pub mod hydrogen;
 pub mod keys;
 
@@ -10,8 +14,9 @@ fn die(s: String) -> ! {
 
 fn print_help_and_exit(subcommand: &str, opts: &Options) {
     let brief = match subcommand {
-        "help" => "help help help",
-        "new-master-key" => "",
+        "help" => include_str!("../doc/cli/help.txt"),
+        "new-master-key" => include_str!("../doc/cli/new-master-key.txt"),
+        "new-client-key" => include_str!("../doc/cli/new-client-key.txt"),
         _ => panic!(),
     };
     print!("{}", opts.usage(brief));
@@ -25,6 +30,9 @@ fn default_cli_opts() -> Options {
 }
 
 fn default_parse_opts(opts: Options, args: &[String]) -> Matches {
+    if args[1] == "-h" || args[1] == "--help" {
+        print_help_and_exit(&args[0], &opts)
+    }
     let matches = opts
         .parse(&args[1..])
         .unwrap_or_else(|e| die(e.to_string()));

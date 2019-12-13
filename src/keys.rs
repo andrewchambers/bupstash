@@ -5,28 +5,28 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
-const KEYID_SZ: usize = 32;
+pub const KEYID_SZ: usize = 32;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct MasterKey {
-    id: [u8; KEYID_SZ],
-    hash_key1: [u8; hydrogen::HASH_KEYBYTES],
-    data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
-    data_psk: [u8; hydrogen::KX_PSKBYTES],
+    pub id: [u8; KEYID_SZ],
+    pub hash_key1: [u8; hydrogen::HASH_KEYBYTES],
+    pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    pub data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
+    pub data_psk: [u8; hydrogen::KX_PSKBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct ClientKey {
-    id: [u8; KEYID_SZ],
-    master_key_id: [u8; KEYID_SZ],
-    master_data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    hash_key1: [u8; hydrogen::HASH_KEYBYTES],
-    hash_key2: [u8; hydrogen::HASH_KEYBYTES],
-    data_psk: [u8; hydrogen::KX_PSKBYTES],
+    pub id: [u8; KEYID_SZ],
+    pub master_key_id: [u8; KEYID_SZ],
+    pub master_data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    pub hash_key1: [u8; hydrogen::HASH_KEYBYTES],
+    pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
+    pub data_psk: [u8; hydrogen::KX_PSKBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum Key {
     MasterKeyV1(MasterKey),
     ClientKeyV1(ClientKey),

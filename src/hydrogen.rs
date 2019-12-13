@@ -1,6 +1,3 @@
-// The simplest possible bindings to libhydrogen we can use.
-// Don't even create wrapper types, as we do that at a higher level.
-
 mod libhydrogen {
     #![allow(non_upper_case_globals)]
     #![allow(non_camel_case_types)]
@@ -11,6 +8,8 @@ mod libhydrogen {
 
 use std::ffi::c_void;
 
+pub const SECRETBOX_KEYBYTES: usize = libhydrogen::hydro_secretbox_KEYBYTES as usize;
+pub const SECRETBOX_HEADERBYTES: usize = libhydrogen::hydro_secretbox_HEADERBYTES as usize;
 pub const HASH_BYTES: usize = libhydrogen::hydro_hash_BYTES as usize;
 pub const HASH_KEYBYTES: usize = libhydrogen::hydro_hash_KEYBYTES as usize;
 pub const KX_PUBLICKEYBYTES: usize = libhydrogen::hydro_kx_PUBLICKEYBYTES as usize;
@@ -54,6 +53,27 @@ pub fn kx_n_1(
     (session_kp.tx, session_kp.rx, packet1)
 }
 
+pub fn kx_n_2(
+    packet1: &[u8; KX_N_PACKET1BYTES],
+    psk: &[u8; KX_PSKBYTES],
+    pk: &[u8; KX_PUBLICKEYBYTES],
+    sk: &[u8; KX_SECRETKEYBYTES],
+) -> Option<([u8; KX_SESSIONKEYBYTES], [u8; KX_SESSIONKEYBYTES])> {
+    let kp = libhydrogen::hydro_kx_keypair { pk: *pk, sk: *sk };
+    let mut session_kp = libhydrogen::hydro_kx_session_keypair {
+        tx: [0; KX_SESSIONKEYBYTES],
+        rx: [0; KX_SESSIONKEYBYTES],
+    };
+    let rc = unsafe {
+        libhydrogen::hydro_kx_n_2(&mut session_kp, packet1.as_ptr(), psk as *const u8, &kp)
+    };
+    if rc == 0 {
+        Some((session_kp.tx, session_kp.rx))
+    } else {
+        None
+    }
+}
+
 pub fn kx_psk_keygen() -> [u8; KX_PSKBYTES] {
     let mut k = [0; KX_PSKBYTES];
     random_buf(&mut k);
@@ -72,19 +92,88 @@ pub fn random_buf(buf: &mut [u8]) {
     unsafe { libhydrogen::hydro_random_buf(buf.as_mut_ptr() as *mut c_void, buf.len() as usize) }
 }
 
-pub fn hash(message: &mut [u8], context: &[u8; 8], key: &[u8; HASH_KEYBYTES]) -> [u8; HASH_BYTES] {
+pub fn hash(message: &[u8], context: &[u8; 8]) -> [u8; HASH_BYTES] {
     let mut h = [0; HASH_BYTES];
     unsafe {
         libhydrogen::hydro_hash_hash(
             (&mut h).as_mut_ptr(),
             h.len() as usize,
-            message.as_mut_ptr() as *mut c_void,
+            message.as_ptr() as *mut c_void,
+            message.len(),
+            context.as_ptr() as *const i8,
+            0 as *const u8,
+        );
+    }
+    h
+}
+
+pub fn hash_with_key(
+    message: &[u8],
+    context: &[u8; 8],
+    key: &[u8; HASH_KEYBYTES],
+) -> [u8; HASH_BYTES] {
+    let mut h = [0; HASH_BYTES];
+    unsafe {
+        libhydrogen::hydro_hash_hash(
+            (&mut h).as_mut_ptr(),
+            h.len() as usize,
+            message.as_ptr() as *mut c_void,
             message.len(),
             context.as_ptr() as *const i8,
             key.as_ptr(),
         );
     }
     h
+}
+
+#[inline(always)]
+pub fn secretbox_encrypt(
+    ct: &mut [u8],
+    pt: &[u8],
+    tag: u64,
+    context: &[u8; 8],
+    k: &[u8; SECRETBOX_KEYBYTES],
+) {
+    if ct.len() < pt.len() + SECRETBOX_HEADERBYTES {
+        panic!();
+    }
+    if unsafe {
+        libhydrogen::hydro_secretbox_encrypt(
+            ct.as_mut_ptr(),
+            pt.as_ptr() as *const c_void,
+            pt.len(),
+            tag,
+            context.as_ptr() as *const i8,
+            k as *const u8,
+        )
+    } != 0
+    {
+        panic!();
+    }
+}
+
+#[inline(always)]
+pub fn secretbox_decrypt(
+    pt: &mut [u8],
+    ct: &[u8],
+    tag: u64,
+    context: &[u8; 8],
+    k: &[u8; SECRETBOX_KEYBYTES],
+) -> bool {
+    if pt.len() < ct.len() - SECRETBOX_HEADERBYTES {
+        panic!();
+    }
+
+    unsafe {
+        libhydrogen::hydro_secretbox_decrypt(
+            pt.as_mut_ptr() as *mut c_void,
+            ct.as_ptr(),
+            ct.len(),
+            tag,
+            context.as_ptr() as *const i8,
+            k as *const u8,
+        ) == 0
+    }
 }
 
 pub unsafe fn init() {
