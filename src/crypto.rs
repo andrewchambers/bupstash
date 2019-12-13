@@ -28,8 +28,8 @@ fn combined_hashkey(
     k2: &[u8; hydrogen::HASH_KEYBYTES],
 ) -> [u8; hydrogen::HASH_KEYBYTES] {
     let mut hash_key = [0; hydrogen::HASH_KEYBYTES];
-    for i in 0..hydrogen::HASH_KEYBYTES {
-        hash_key[i] = k1[i] ^ k2[i];
+    for (i, b) in hash_key.iter_mut().enumerate() {
+        *b = k1[i] ^ k2[i];
     }
     hash_key
 }
@@ -47,8 +47,8 @@ impl EncryptContext {
     }
 
     #[inline(always)]
-    pub fn encrypt_chunk(&self, pt: &[u8], ct: &mut [u8]) -> () {
-        hydrogen::secretbox_encrypt(ct, pt, 0, b"_chunk_\0", &self.session_tx_key)
+    pub fn encrypt_chunk(&self, pt: &[u8], ct: &mut [u8]) {
+        hydrogen::secretbox_encrypt(ct, pt, 0, *b"_chunk_\0", &self.session_tx_key)
     }
 
     pub fn encryption_header(&self) -> VersionedEncryptionHeader {
@@ -83,9 +83,7 @@ impl DecryptContext {
 
                 let mut packet1: [u8; hydrogen::KX_N_PACKET1BYTES] =
                     [0; hydrogen::KX_N_PACKET1BYTES];
-                for i in 0..hydrogen::KX_N_PACKET1BYTES {
-                    packet1[i] = hdr.packet1[i];
-                }
+                packet1.clone_from_slice(&hdr.packet1);
 
                 match hydrogen::kx_n_2(&packet1, &k.data_psk, &k.data_pk, &k.data_sk) {
                     Some((_session_tx_key, session_rx_key)) => Ok(DecryptContext {
@@ -101,7 +99,7 @@ impl DecryptContext {
 
     #[inline(always)]
     pub fn decrypt_chunk(&self, ct: &[u8], pt: &mut [u8]) -> bool {
-        hydrogen::secretbox_decrypt(pt, ct, 0, b"_chunk_\0", &self.session_rx_key)
+        hydrogen::secretbox_decrypt(pt, ct, 0, *b"_chunk_\0", &self.session_rx_key)
     }
 }
 

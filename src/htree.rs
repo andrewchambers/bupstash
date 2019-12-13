@@ -61,7 +61,7 @@ impl<'a> TreeWriter<'a> {
         let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
         std::mem::swap(&mut block, &mut self.tree_blocks[level]);
         self.write_header(level);
-        let block_address = Address::from_bytes(&hydrogen::hash(&block, b"_htree_\0"));
+        let block_address = Address::from_bytes(&hydrogen::hash(&block, *b"_htree_\0"));
         self.sink.send_chunk(block_address, block)?;
         self.add_addr(level + 1, block_address)?;
         Ok(())

@@ -1,9 +1,11 @@
 pub mod address;
+pub mod chunker;
 pub mod crypto;
 pub mod hex;
 pub mod htree;
 pub mod hydrogen;
 pub mod keys;
+pub mod rollsum;
 
 use getopts::{Matches, Options};
 
@@ -77,7 +79,7 @@ fn main() {
     let mut args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
     args.remove(0);
-    if args.len() < 1 {
+    if args.is_empty() {
         die(format!(
             "Expected at least a single subcommand, try '{} help'.",
             program
@@ -98,8 +100,7 @@ fn main() {
         )),
     };
 
-    match result {
-        Err(err) => die(format!("Error during command: {}", err)),
-        _ => (),
+    if let Err(err) = result {
+        die(format!("Error during command: {}", err));
     }
 }

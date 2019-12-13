@@ -92,7 +92,7 @@ pub fn random_buf(buf: &mut [u8]) {
     unsafe { libhydrogen::hydro_random_buf(buf.as_mut_ptr() as *mut c_void, buf.len() as usize) }
 }
 
-pub fn hash(message: &[u8], context: &[u8; 8]) -> [u8; HASH_BYTES] {
+pub fn hash(message: &[u8], context: [u8; 8]) -> [u8; HASH_BYTES] {
     let mut h = [0; HASH_BYTES];
     unsafe {
         libhydrogen::hydro_hash_hash(
@@ -101,7 +101,7 @@ pub fn hash(message: &[u8], context: &[u8; 8]) -> [u8; HASH_BYTES] {
             message.as_ptr() as *mut c_void,
             message.len(),
             context.as_ptr() as *const i8,
-            0 as *const u8,
+            std::ptr::null(),
         );
     }
     h
@@ -109,7 +109,7 @@ pub fn hash(message: &[u8], context: &[u8; 8]) -> [u8; HASH_BYTES] {
 
 pub fn hash_with_key(
     message: &[u8],
-    context: &[u8; 8],
+    context: [u8; 8],
     key: &[u8; HASH_KEYBYTES],
 ) -> [u8; HASH_BYTES] {
     let mut h = [0; HASH_BYTES];
@@ -131,7 +131,7 @@ pub fn secretbox_encrypt(
     ct: &mut [u8],
     pt: &[u8],
     tag: u64,
-    context: &[u8; 8],
+    context: [u8; 8],
     k: &[u8; SECRETBOX_KEYBYTES],
 ) {
     if ct.len() < pt.len() + SECRETBOX_HEADERBYTES {
@@ -157,7 +157,7 @@ pub fn secretbox_decrypt(
     pt: &mut [u8],
     ct: &[u8],
     tag: u64,
-    context: &[u8; 8],
+    context: [u8; 8],
     k: &[u8; SECRETBOX_KEYBYTES],
 ) -> bool {
     if pt.len() < ct.len() - SECRETBOX_HEADERBYTES {
@@ -176,6 +176,9 @@ pub fn secretbox_decrypt(
     }
 }
 
+/// # Safety
+///
+/// This function should only be called once at the beginning of a program using libhydrogen.
 pub unsafe fn init() {
     libhydrogen::hydro_init();
 }

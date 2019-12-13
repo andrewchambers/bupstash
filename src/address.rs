@@ -50,9 +50,7 @@ impl fmt::Display for HexAddress {
 
 impl Default for HexAddress {
     fn default() -> HexAddress {
-        HexAddress {
-            bytes: ['0' as u8; 64],
-        }
+        HexAddress { bytes: [b'0'; 64] }
     }
 }
 
