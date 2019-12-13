@@ -28,12 +28,12 @@ impl Address {
 
 impl Default for Address {
     fn default() -> Address {
-        Address::from_bytes(&[0; 32])
+        Address::from_bytes(&[0; ADDRESS_SZ])
     }
 }
 
 pub struct HexAddress {
-    bytes: [u8; 64],
+    bytes: [u8; ADDRESS_SZ * 2],
 }
 
 impl<'a> HexAddress {
@@ -50,7 +50,9 @@ impl fmt::Display for HexAddress {
 
 impl Default for HexAddress {
     fn default() -> HexAddress {
-        HexAddress { bytes: [b'0'; 64] }
+        HexAddress {
+            bytes: [b'0'; ADDRESS_SZ * 2],
+        }
     }
 }
 
