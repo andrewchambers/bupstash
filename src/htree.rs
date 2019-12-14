@@ -1,5 +1,6 @@
 use super::address::*;
 use super::hydrogen;
+use failure;
 use std::fmt;
 
 // XXX consider making 1 byte once we have real data.
@@ -10,7 +11,7 @@ pub const MINIMUM_ADDR_CHUNK_SIZE: usize = HDR_SZ + 2 * ADDRESS_SZ;
 pub const SENSIBLE_ADDR_MAX_CHUNK_SIZE: usize = HDR_SZ + 30000 * ADDRESS_SZ;
 
 pub trait Sink {
-    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), std::io::Error>;
+    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error>;
 }
 
 pub trait Source {
@@ -57,7 +58,7 @@ impl<'a> TreeWriter<'a> {
         v.extend(&[height_hi, height_lo]);
     }
 
-    fn clear_level(&mut self, level: usize) -> Result<(), std::io::Error> {
+    fn clear_level(&mut self, level: usize) -> Result<(), failure::Error> {
         let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
         std::mem::swap(&mut block, &mut self.tree_blocks[level]);
         self.write_header(level);
@@ -80,7 +81,7 @@ impl<'a> TreeWriter<'a> {
         true
     }
 
-    fn add_addr(&mut self, level: usize, addr: Address) -> Result<(), std::io::Error> {
+    fn add_addr(&mut self, level: usize, addr: Address) -> Result<(), failure::Error> {
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
             self.write_header(level);
@@ -101,13 +102,13 @@ impl<'a> TreeWriter<'a> {
         Ok(())
     }
 
-    pub fn add(&mut self, addr: Address, data: Vec<u8>) -> Result<(), std::io::Error> {
+    pub fn add(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.sink.send_chunk(addr, data)?;
         self.add_addr(0, addr)?;
         Ok(())
     }
 
-    fn finish_level(&mut self, level: usize) -> Result<Address, std::io::Error> {
+    fn finish_level(&mut self, level: usize) -> Result<Address, failure::Error> {
         if self.tree_blocks.len() - 1 == level
             && self.tree_blocks[level].len() == HDR_SZ + ADDRESS_SZ
         {
@@ -133,7 +134,7 @@ impl<'a> TreeWriter<'a> {
         Ok(self.finish_level(level + 1)?)
     }
 
-    pub fn finish(mut self) -> Result<Address, std::io::Error> {
+    pub fn finish(mut self) -> Result<Address, failure::Error> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
@@ -288,7 +289,7 @@ impl<'a> TreeReader<'a> {
 use std::collections::HashMap;
 
 impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
-    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), std::io::Error> {
+    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.insert(addr, data);
         Ok(())
     }

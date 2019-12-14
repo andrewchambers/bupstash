@@ -6,6 +6,7 @@ pub mod htree;
 pub mod hydrogen;
 pub mod keys;
 pub mod rollsum;
+pub mod store;
 
 use getopts::{Matches, Options};
 

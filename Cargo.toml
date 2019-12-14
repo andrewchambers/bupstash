@@ -5,8 +5,12 @@ authors = ["Andrew Chambers <ac@acha.ninja>"]
 edition = "2018"
 
 [dependencies]
+rusqlite = "0.21.0"
 getopts = "0.2"
 failure = "0.1.6"
+fs2 = "0.4.3"
+rand = "0.7.2"
+tempdir = "0.3.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
