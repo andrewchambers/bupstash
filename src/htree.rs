@@ -1,5 +1,6 @@
 use super::address::*;
 use super::hydrogen;
+use super::rollsum;
 use failure;
 use std::fmt;
 
@@ -20,9 +21,10 @@ pub trait Source {
 
 pub struct TreeWriter<'a> {
     max_addr_chunk_size: usize,
-    split_mask: [u8; 32],
     sink: &'a mut dyn Sink,
     tree_blocks: Vec<Vec<u8>>,
+    chunk_mask: u32,
+    rollsums: Vec<rollsum::Rollsum>,
 }
 
 fn u16_be_bytes(v: u16) -> (u8, u8) {
@@ -37,14 +39,15 @@ impl<'a> TreeWriter<'a> {
     pub fn new(
         sink: &'a mut dyn Sink,
         max_addr_chunk_size: usize,
-        split_mask: [u8; ADDRESS_SZ],
+        chunk_mask: u32,
     ) -> TreeWriter<'a> {
         assert!(max_addr_chunk_size >= MINIMUM_ADDR_CHUNK_SIZE);
         TreeWriter {
-            split_mask,
+            chunk_mask,
             max_addr_chunk_size,
             sink,
             tree_blocks: Vec::new(),
+            rollsums: Vec::new(),
         }
     }
 
@@ -65,36 +68,30 @@ impl<'a> TreeWriter<'a> {
         let block_address = Address::from_bytes(&hydrogen::hash(&block, *b"_htree_\0"));
         self.sink.send_chunk(block_address, block)?;
         self.add_addr(level + 1, block_address)?;
+        self.rollsums[level].reset();
         Ok(())
-    }
-
-    fn is_split_point(&self, addr: &Address) -> bool {
-        assert!(ADDRESS_SZ == self.split_mask.len());
-
-        for i in 0..ADDRESS_SZ {
-            let ri = ADDRESS_SZ - 1 - i;
-            if (addr.bytes[ri] & self.split_mask[ri]) != 0 {
-                return false;
-            }
-        }
-
-        true
     }
 
     fn add_addr(&mut self, level: usize, addr: Address) -> Result<(), failure::Error> {
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
+            self.rollsums
+                .push(rollsum::Rollsum::new_with_chunk_mask(self.chunk_mask));
             self.write_header(level);
         }
 
         assert!(self.tree_blocks[level].len() >= HDR_SZ);
         self.tree_blocks[level].extend(&addr.bytes);
+        // An address is a hash of all the content, it is an open question
+        // as to how effective using more or less bits of the hash in the
+        // rollsum will really be.
+        let is_split_point = self.rollsums[level].roll_byte(addr.bytes[0]);
 
         if self.tree_blocks[level].len() >= MINIMUM_ADDR_CHUNK_SIZE {
             let next_would_overflow_max_size =
                 self.tree_blocks[level].len() + ADDRESS_SZ > self.max_addr_chunk_size;
 
-            if self.is_split_point(&addr) || next_would_overflow_max_size {
+            if is_split_point || next_would_overflow_max_size {
                 self.clear_level(level)?;
             }
         }
@@ -316,8 +313,8 @@ mod tests {
     fn test_write_no_level() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
-        // Split mask that is never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, [0xff; 32]);
+        // Split mask is almost never successful.
+        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
 
         tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -333,8 +330,8 @@ mod tests {
     fn test_write_shape_single_level() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
-        // Split mask is never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, [0xff; 32]);
+        // Split mask is almost never successful.
+        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
 
         tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -355,8 +352,8 @@ mod tests {
     fn test_write_shape_two_levels() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
-        // Split mask always is never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, [0xff; 32]);
+        // Split mask always is almost never successful.
+        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
 
         tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -380,8 +377,8 @@ mod tests {
     fn test_write_shape_single_level_content_split() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Allow large chunks.
-        // Split mask always is successful.
-        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, [0; 32]);
+        // Split mask that is always successful.
+        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
 
         tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -403,7 +400,7 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Allow large chunks.
         // Split mask that is always successful.
-        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, [0; 32]);
+        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
 
         tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -430,8 +427,8 @@ mod tests {
 
         {
             // Chunks that can only fit two addresses.
-            // Split mask always is never successful.
-            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, [0xff; 32]);
+            // Split mask is never successful.
+            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
             tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
                 .unwrap();
             tw.add(Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
@@ -480,8 +477,8 @@ mod tests {
 
         {
             // Chunks that can only fit two addresses.
-            // Split mask always is never successful.
-            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, [0xff; 32]);
+            // Split mask is never successful.
+            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
             tw.add(Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
                 .unwrap();
             tw.add(Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
