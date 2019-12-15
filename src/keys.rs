@@ -11,6 +11,7 @@ pub const KEYID_SZ: usize = 32;
 pub struct MasterKey {
     pub id: [u8; KEYID_SZ],
     pub hash_key1: [u8; hydrogen::HASH_KEYBYTES],
+    pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
     pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
     pub data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
     pub data_psk: [u8; hydrogen::KX_PSKBYTES],
