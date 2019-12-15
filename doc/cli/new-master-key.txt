@@ -5,7 +5,7 @@ Description:
   that are readable only by the creating user.
 
   Keep this key private and secure as it is needed to read
-  any archived data sent using client keys derived from the
+  any archived data sent using send keys derived from the
   master key.
 
 Quick examples:

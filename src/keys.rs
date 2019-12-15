@@ -18,7 +18,7 @@ pub struct MasterKey {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub struct ClientKey {
+pub struct SendKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
     pub master_data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
@@ -30,7 +30,7 @@ pub struct ClientKey {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum Key {
     MasterKeyV1(MasterKey),
-    ClientKeyV1(ClientKey),
+    SendKeyV1(SendKey),
 }
 
 impl Key {
@@ -71,12 +71,14 @@ impl MasterKey {
     pub fn gen() -> MasterKey {
         let id = keyid_gen();
         let hash_key1 = hydrogen::hash_keygen();
+        let hash_key2 = hydrogen::hash_keygen();
         let data_psk = hydrogen::kx_psk_keygen();
         let (data_pk, data_sk) = hydrogen::kx_keygen();
 
         MasterKey {
             id,
             hash_key1,
+            hash_key2,
             data_psk,
             data_pk,
             data_sk,
@@ -84,9 +86,9 @@ impl MasterKey {
     }
 }
 
-impl ClientKey {
-    pub fn gen(mk: &MasterKey) -> ClientKey {
-        ClientKey {
+impl SendKey {
+    pub fn gen(mk: &MasterKey) -> SendKey {
+        SendKey {
             id: keyid_gen(),
             master_key_id: mk.id,
             hash_key1: mk.hash_key1,

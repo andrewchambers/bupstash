@@ -19,7 +19,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
     let brief = match subcommand {
         "help" => include_str!("../doc/cli/help.txt"),
         "new-master-key" => include_str!("../doc/cli/new-master-key.txt"),
-        "new-client-key" => include_str!("../doc/cli/new-client-key.txt"),
+        "new-send-key" => include_str!("../doc/cli/new-send-key.txt"),
         _ => panic!(),
     };
     print!("{}", opts.usage(brief));
@@ -55,20 +55,20 @@ fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt("o", "output", "set output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
-    let mk = keys::Key::MasterKeyV1(keys::MasterKey::gen());
-    mk.write_to_file(&matches.opt_str("o").unwrap())
+    let master_key = keys::Key::MasterKeyV1(keys::MasterKey::gen());
+    master_key.write_to_file(&matches.opt_str("o").unwrap())
 }
 
-fn new_client_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt("m", "master-key", "master key to derive key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
     match k {
-        keys::Key::MasterKeyV1(mk) => {
-            let ck = keys::Key::ClientKeyV1(keys::ClientKey::gen(&mk));
-            ck.write_to_file(&matches.opt_str("o").unwrap())
+        keys::Key::MasterKeyV1(master_key) => {
+            let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&master_key));
+            send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => failure::bail!("key specified is not a master key"),
     }
@@ -90,7 +90,7 @@ fn main() {
 
     let result = match subcommand.as_str() {
         "new-master-key" => new_master_key_main(args),
-        "new-client-key" => new_client_key_main(args),
+        "new-send-key" => new_send_key_main(args),
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();
             help_main(args)

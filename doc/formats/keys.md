@@ -9,7 +9,7 @@ The master key can be used recompute this ephemeral key at decryption time.
 Each master/send key pair also combine to form a unique hash key,
 which can the be used to create a unique secret hash function that allows content addressed based deduplication.
 The secret nature of this combined key while prevents attackers from doing hash based lookups, and also prevents
-malicious clients keys from poisoning other client's deduplication space with deliberately corrupt data.
+malicious clients from poisoning other client's deduplication space with deliberately corrupt data.
 The secret hash function is also be used at decryption time as a cryptographically secure integrity check.
 
 Encryption and decryption keys are saved on disk using a simple json encoding, the encoding is as follows:

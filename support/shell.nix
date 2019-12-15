@@ -6,7 +6,7 @@ in
       
       LIBCLANG_PATH="${pkgs.llvmPackages.libclang}/lib";
 
-      buildInputs =  with pkgs; [ clang llvm sqlite ];
+      buildInputs =  with pkgs; [ clang llvm ];
 
       hardeningDisable = ["all"];
   }

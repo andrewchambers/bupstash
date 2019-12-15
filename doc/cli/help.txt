@@ -4,7 +4,7 @@ Subcommands:
 
 'init'           - Initialize a backup database.
 'new-master-key' - Create a master key used for reading encrypted data.
-'new-client-key' - Create a client key used for writing encrypted data.
+'new-send-key'   - Create a send key used for writing encrypted data.
 'help'           - Print this message.
 
 For subcommand specific help, run 'archivist SUBCMD --help'
