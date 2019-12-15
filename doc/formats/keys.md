@@ -1,17 +1,16 @@
 # Keys
 
 There are currently two types of key, master keys, and derived send keys. Master keys can be used to encrypt and decrypt
-data, while send keys are derived from master keys, and can only encrypt data, and never decrypt data.
+data, while send keys can only be used to encrypt data, and never decrypt data.
 
-Send keys can be used to generate ephemeral session keys addressed tomaster keys public key
-and send data encrypted with that ephemeral key. The master key can be used recompute this ephemeral key at decryption time.  
-The sender discards the ephemeral keys once encryption has finished to preserve data secrecy if a send key is eventually compromised.
+Send keys can be used to generate ephemeral session keys addressed to master key, which are then used to encrypt data.
+The master key can be used recompute this ephemeral key at decryption time.  
 
-Each master/send key pair also has a unique hash key, created by combining two secret hash key parts,
-which are used to create a unique secret hash function that allows content addressed based deduplication, while
-preventing attackers from doing hash lookups, and prevents client keys from poisoning each others deduplication space
-with deliberately corrupt data. The hash function is also be used at decryption time
-as a cryptographically secure integrity check.
+Each master/send key pair also combine to form a unique hash key,
+which can the be used to create a unique secret hash function that allows content addressed based deduplication.
+The secret nature of this combined key while prevents attackers from doing hash based lookups, and also prevents
+malicious clients keys from poisoning other client's deduplication space with deliberately corrupt data.
+The secret hash function is also be used at decryption time as a cryptographically secure integrity check.
 
 Encryption and decryption keys are saved on disk using a simple json encoding, the encoding is as follows:
 
