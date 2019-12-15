@@ -9,9 +9,9 @@ key using per session metadata, a preshared key and it's own secret key, and use
 The sender discards the ephemeral keys once encryption has finished to preserve data secrecy if a send key is eventually compromised.
 
 Each master/send key pair also has a unique hash key, which creates a unique secret hash function that masks encrypted data
-from a dictionary based hash lookup. This secret combined hash key also allows content addressed based deduplication, while
-preventing client keys from corrupting each others deduplication space with bad data. The hash function can also be used at
-decryption time as a cryptographically secure integrity check.
+from dictionary based hash lookup. This secret combined hash key also allows content addressed based deduplication, while
+preventing client keys from corrupting each others deduplication space with deliberately corrupt data.
+The hash function can also be used at decryption time as a cryptographically secure integrity check.
 
 Encryption and decryption keys are saved on disk using a simple json encoding, the encoding is as follows:
 
