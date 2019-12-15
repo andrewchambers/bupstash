@@ -1,7 +1,7 @@
 # Keys
 
 There are currently two types of key, a master key, and derived send keys. Master keys can be used to encrypt and decrypt
-data, while send keys are derived from master keys, and can only encrypt data, but not decrypt data.
+data, while send keys are derived from master keys, and can only encrypt data, and never decrypt data.
 
 The top level overview is that send keys generate ephemeral session keys using the master keys public key,
 and send data encrypted with the ephemeral key. The master key can at a later time,  recompute this ephemeral
