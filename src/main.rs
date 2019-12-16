@@ -7,6 +7,7 @@ pub mod hydrogen;
 pub mod keys;
 pub mod rollsum;
 pub mod store;
+pub mod tquery;
 
 use getopts::{Matches, Options};
 

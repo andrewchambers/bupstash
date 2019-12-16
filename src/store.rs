@@ -1,5 +1,7 @@
 use super::address::*;
+use super::hex;
 use super::htree;
+use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
 use rand::Rng;
@@ -78,6 +80,12 @@ pub struct ChangeStoreHandle<'a> {
     _gc_lock: FileLock,
     store: &'a DataStore,
     conn: rusqlite::Connection,
+}
+
+fn new_gc_generation() -> String {
+    let mut gen: [u8; 32] = [0; 32];
+    hydrogen::random_buf(&mut gen);
+    hex::easy_encode_to_string(&gen)
 }
 
 // Does NOT sync the directory. A sync of the directory still needs to be
@@ -241,6 +249,10 @@ impl DataStore {
         tx.execute(
             "insert into ArchivistMeta(Key, Value) values(?, ?);",
             rusqlite::params!["schema-version", 0],
+        )?;
+        tx.execute(
+            "insert into ArchivistMeta(Key, Value) values(?, ?);",
+            rusqlite::params!["gc-generation", new_gc_generation()],
         )?;
         tx.commit()?;
         path_buf.pop();
