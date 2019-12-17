@@ -1,12 +1,12 @@
 use super::address::*;
+use super::chunk_storage;
+use super::fsutil;
 use super::hex;
 use super::htree;
 use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
-use rand::Rng;
 use std::fs;
-use std::io::prelude::*;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Fail)]
@@ -37,9 +37,8 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
-pub struct DataStore {
+pub struct Store {
     store_path: PathBuf,
-    data_dir_path: PathBuf,
 }
 
 struct FileLock {
@@ -67,18 +66,16 @@ impl Drop for FileLock {
 }
 
 // This handle gets a shared gc.lock
-// It allows data append and read.
-pub struct ChunkHandle<'a> {
+// It allows data append and read access.
+pub struct StorageHandle {
     _gc_lock: FileLock,
-    scratch_chunk_path: PathBuf,
-    store: &'a DataStore,
+    engine: Box<dyn chunk_storage::Engine>,
 }
 
 // This handle gets a shared gc.lock
 // It allows updating the metadata db.
-pub struct ChangeStoreHandle<'a> {
+pub struct ChangeStoreHandle {
     _gc_lock: FileLock,
-    store: &'a DataStore,
     conn: rusqlite::Connection,
 }
 
@@ -86,46 +83,6 @@ fn new_gc_generation() -> String {
     let mut gen: [u8; 32] = [0; 32];
     hydrogen::random_buf(&mut gen);
     hex::easy_encode_to_string(&gen)
-}
-
-// Does NOT sync the directory. A sync of the directory still needs to be
-// done to ensure the atomic rename is persisted.
-// That sync can be done once at the end of an 'upload session'.
-fn atomic_add_file_no_parent_sync(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
-    let temp_path = p
-        .to_string_lossy()
-        .chars()
-        .chain(
-            std::iter::repeat(())
-                .map(|()| rand::thread_rng().sample(rand::distributions::Alphanumeric))
-                .take(8),
-        )
-        .chain(".tmp".chars())
-        .collect::<String>();
-
-    let mut tmp_file = fs::File::create(&temp_path)?;
-    tmp_file.write_all(contents)?;
-    tmp_file.sync_all()?;
-    std::fs::rename(temp_path, p)?;
-    Ok(())
-}
-
-fn sync_dir(p: &Path) -> Result<(), std::io::Error> {
-    let dir = fs::File::open(p)?;
-    dir.sync_all()?;
-    Ok(())
-}
-
-fn atomic_add_file_with_parent_sync(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
-    atomic_add_file_no_parent_sync(p, contents)?;
-    sync_dir(p.parent().unwrap())?;
-    Ok(())
-}
-
-fn atomic_add_dir_with_parent_sync(p: &Path) -> Result<(), std::io::Error> {
-    fs::DirBuilder::new().create(p)?;
-    sync_dir(p.parent().unwrap())?;
-    Ok(())
 }
 
 fn open_archivist_db(path: &Path) -> rusqlite::Result<rusqlite::Connection> {
@@ -136,7 +93,7 @@ fn open_archivist_db(path: &Path) -> rusqlite::Result<rusqlite::Connection> {
     Ok(conn)
 }
 
-impl DataStore {
+impl Store {
     fn ensure_store_check_file_exists(p: &Path) -> Result<(), StoreError> {
         if p.exists() {
             Ok(())
@@ -151,25 +108,8 @@ impl DataStore {
         open_archivist_db(&db_path)
     }
 
-    pub fn count_chunks(&self) -> Result<usize, StoreError> {
-        let paths = fs::read_dir(self.data_dir_path.as_path())?;
-        Ok(paths
-            .filter(|e| {
-                if let Ok(d) = e {
-                    if let Some(oss) = d.path().extension() {
-                        oss != "tmp"
-                    } else {
-                        true
-                    }
-                } else {
-                    false
-                }
-            })
-            .count())
-    }
-
-    pub fn open(store_path: &Path) -> Result<DataStore, StoreError> {
-        DataStore::check_store_sane(&store_path)?;
+    pub fn open(store_path: &Path) -> Result<Store, StoreError> {
+        Store::check_store_sane(&store_path)?;
         let mut data_dir_path = store_path.to_path_buf();
         data_dir_path.push("data");
 
@@ -185,9 +125,8 @@ impl DataStore {
             return Err(StoreError::UnsupportedSchemaVersion);
         }
 
-        Ok(DataStore {
+        Ok(Store {
             store_path: store_path.to_path_buf(),
-            data_dir_path,
         })
     }
 
@@ -197,15 +136,15 @@ impl DataStore {
         }
         let mut path_buf = PathBuf::from(store_path);
         path_buf.push("data");
-        DataStore::ensure_store_check_file_exists(&path_buf.as_path())?;
+        Store::ensure_store_check_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         path_buf.push("archivist.db");
-        DataStore::ensure_store_check_file_exists(&path_buf.as_path())?;
+        Store::ensure_store_check_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         Ok(())
     }
 
-    pub fn init(store_path: &Path) -> Result<DataStore, StoreError> {
+    pub fn init(store_path: &Path) -> Result<Store, StoreError> {
         let parent = if store_path.is_absolute() {
             store_path.parent().unwrap().to_owned()
         } else {
@@ -230,12 +169,12 @@ impl DataStore {
                 path: path_buf.to_string_lossy().to_string(),
             });
         }
-        atomic_add_dir_with_parent_sync(path_buf.as_path())?;
+        fsutil::atomic_add_dir_with_parent_sync(path_buf.as_path())?;
         path_buf.push("data");
-        atomic_add_dir_with_parent_sync(path_buf.as_path())?;
+        fsutil::atomic_add_dir_with_parent_sync(path_buf.as_path())?;
         path_buf.pop();
         path_buf.push("gc.lock");
-        atomic_add_file_with_parent_sync(path_buf.as_path(), &mut [])?;
+        fsutil::atomic_add_file_with_parent_sync(path_buf.as_path(), &mut [])?;
         path_buf.pop();
 
         path_buf.push("archivist.db");
@@ -258,7 +197,7 @@ impl DataStore {
         path_buf.pop();
 
         std::fs::rename(&path_buf, store_path)?;
-        DataStore::open(store_path)
+        Store::open(store_path)
     }
 
     fn get_lock_path(&self, name: &str) -> PathBuf {
@@ -267,61 +206,48 @@ impl DataStore {
         lock_path
     }
 
-    pub fn chunk_handle<'a>(&'a self) -> Result<ChunkHandle<'a>, StoreError> {
-        Ok(ChunkHandle {
+    pub fn storage_handle(&self) -> Result<StorageHandle, StoreError> {
+        let mut data_dir = self.store_path.clone();
+        data_dir.push("data");
+        let engine = chunk_storage::LocalStorage::new(&data_dir);
+        Ok(StorageHandle {
             _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
-            scratch_chunk_path: self.data_dir_path.clone(),
-            store: &self,
+            engine: Box::new(engine),
         })
     }
 
-    pub fn change_store_handle<'a>(&'a self) -> Result<ChangeStoreHandle<'a>, StoreError> {
+    pub fn change_store_handle<'a>(&'a self) -> Result<ChangeStoreHandle, StoreError> {
         let conn = self.open_db()?;
         Ok(ChangeStoreHandle {
             _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
-            store: &self,
             conn,
         })
     }
 }
 
-impl<'a> ChunkHandle<'a> {
+impl StorageHandle {
     pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        self.scratch_chunk_path.push(addr.as_hex_addr().as_str());
-        if !self.scratch_chunk_path.exists() {
-            let result = atomic_add_file_no_parent_sync(self.scratch_chunk_path.as_path(), &buf);
-            self.scratch_chunk_path.pop();
-            Ok(result?)
-        } else {
-            self.scratch_chunk_path.pop();
-            Ok(())
-        }
+        self.engine.add_chunk(addr, buf)
     }
 
-    pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, std::io::Error> {
-        let mut chunk_path = self.store.data_dir_path.clone();
-        chunk_path.push(addr.as_hex_addr().as_str());
-        Ok(fs::read(chunk_path.as_path())?)
+    pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+        self.engine.get_chunk(addr)
     }
 
-    pub fn sync(&mut self) -> Result<(), StoreError> {
-        sync_dir(self.store.data_dir_path.as_path())?;
-        Ok(())
+    pub fn sync(&mut self) -> Result<(), failure::Error> {
+        self.engine.sync()
     }
 }
 
-impl<'a> htree::Sink for ChunkHandle<'a> {
+impl htree::Sink for StorageHandle {
     fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.add_chunk(addr, data)
     }
 }
 
-impl<'a> htree::Source for ChunkHandle<'a> {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, htree::HTreeError> {
-        match self.get_chunk(addr) {
-            Ok(v) => Ok(v),
-            Err(e) => Err(htree::HTreeError::from(e)),
-        }
+impl htree::Source for StorageHandle {
+    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+        self.get_chunk(addr)
     }
 }
 
@@ -334,8 +260,8 @@ mod tests {
         let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
-        let store = DataStore::init(path_buf.as_path()).unwrap();
-        let mut h = store.chunk_handle().unwrap();
+        let store = Store::init(path_buf.as_path()).unwrap();
+        let mut h = store.storage_handle().unwrap();
         let addr = Address::default();
         h.add_chunk(addr, vec![1]).unwrap();
         h.add_chunk(addr, vec![2]).unwrap();
@@ -344,6 +270,5 @@ mod tests {
         let v = h.get_chunk(addr).unwrap();
 
         assert_eq!(v, vec![1]);
-        assert_eq!(store.count_chunks().unwrap(), 1);
     }
 }

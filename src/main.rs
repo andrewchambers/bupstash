@@ -1,6 +1,8 @@
 pub mod address;
+pub mod chunk_storage;
 pub mod chunker;
 pub mod crypto;
+pub mod fsutil;
 pub mod hex;
 pub mod htree;
 pub mod hydrogen;

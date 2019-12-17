@@ -1,8 +1,7 @@
 use super::address::*;
 use super::hydrogen;
 use super::rollsum;
-use failure;
-use std::fmt;
+use failure::Fail;
 
 // XXX consider making 1 byte once we have real data.
 const HDR_SZ: usize = 2;
@@ -11,12 +10,20 @@ const HDR_SZ: usize = 2;
 pub const MINIMUM_ADDR_CHUNK_SIZE: usize = HDR_SZ + 2 * ADDRESS_SZ;
 pub const SENSIBLE_ADDR_MAX_CHUNK_SIZE: usize = HDR_SZ + 30000 * ADDRESS_SZ;
 
+#[derive(Debug, Fail)]
+pub enum HTreeError {
+    #[fail(display = "htree has corrupt or tampered data")]
+    CorruptOrTamperedDataError,
+    #[fail(display = "htree is missing data")]
+    DataMissing,
+}
+
 pub trait Sink {
     fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error>;
 }
 
 pub trait Source {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, HTreeError>;
+    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error>;
 }
 
 pub struct TreeWriter<'a> {
@@ -140,45 +147,6 @@ impl<'a> TreeWriter<'a> {
     }
 }
 
-// FIXME: use the failure module.
-#[derive(Debug)]
-pub enum HTreeError {
-    CorruptOrTamperedDataError,
-    // This is not an option because it should not really happen.
-    DataMissing,
-    IOError(std::io::Error),
-}
-
-impl fmt::Display for HTreeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            HTreeError::CorruptOrTamperedDataError => write!(
-                f,
-                "The 'htree' data structure input data is not in the expected format or corrupt."
-            ),
-            HTreeError::DataMissing => {
-                write!(f, "The data store does not contain the requested data.")
-            }
-            HTreeError::IOError(ref e) => e.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for HTreeError {
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        match *self {
-            HTreeError::IOError(ref e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<std::io::Error> for HTreeError {
-    fn from(err: std::io::Error) -> HTreeError {
-        HTreeError::IOError(err)
-    }
-}
-
 pub struct TreeReader<'a> {
     source: &'a mut dyn Source,
     /* for debug only */
@@ -202,19 +170,19 @@ impl<'a> TreeReader<'a> {
         }
     }
 
-    fn next_be_16(&mut self) -> Result<u16, HTreeError> {
+    fn next_be_16(&mut self) -> Result<u16, failure::Error> {
         let data = self.tree_blocks.last().unwrap();
         let read_offset = self.read_offsets.last_mut().unwrap();
         let remaining = &data[*read_offset..];
         if remaining.len() < 2 {
-            return Err(HTreeError::CorruptOrTamperedDataError);
+            return Err(HTreeError::CorruptOrTamperedDataError.into());
         }
         let v = be_bytes_to_u16(remaining[0], remaining[1]);
         *read_offset += 2;
         Ok(v)
     }
 
-    pub fn push_addr(&mut self, addr: Address) -> Result<(), HTreeError> {
+    pub fn push_addr(&mut self, addr: Address) -> Result<(), failure::Error> {
         let data = self.source.get_chunk(addr)?;
         self.tree_block_address.push(addr);
         self.tree_blocks.push(data);
@@ -232,7 +200,7 @@ impl<'a> TreeReader<'a> {
     }
 
     // Returns (Address, is_leaf)
-    pub fn next_addr(&mut self) -> Result<Option<(Address, bool)>, HTreeError> {
+    pub fn next_addr(&mut self) -> Result<Option<(Address, bool)>, failure::Error> {
         loop {
             if self.tree_blocks.is_empty() {
                 return Ok(None);
@@ -250,7 +218,7 @@ impl<'a> TreeReader<'a> {
             }
 
             if remaining.len() < ADDRESS_SZ {
-                return Err(HTreeError::CorruptOrTamperedDataError);
+                return Err(HTreeError::CorruptOrTamperedDataError.into());
             }
 
             let mut result = Address::default();
@@ -261,7 +229,7 @@ impl<'a> TreeReader<'a> {
         }
     }
 
-    pub fn next_chunk(&mut self) -> Result<Option<(Address, Vec<u8>)>, HTreeError> {
+    pub fn next_chunk(&mut self) -> Result<Option<(Address, Vec<u8>)>, failure::Error> {
         loop {
             match self.next_addr()? {
                 Some((a, is_leaf)) => {
@@ -278,7 +246,7 @@ impl<'a> TreeReader<'a> {
         }
     }
 
-    pub fn get_chunk(&mut self, a: &Address) -> Result<Vec<u8>, HTreeError> {
+    pub fn get_chunk(&mut self, a: &Address) -> Result<Vec<u8>, failure::Error> {
         self.source.get_chunk(*a)
     }
 }
@@ -293,11 +261,11 @@ impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
 }
 
 impl<S: ::std::hash::BuildHasher> Source for HashMap<Address, Vec<u8>, S> {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, HTreeError> {
+    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
         if let Some(v) = self.get(&addr) {
             Ok(v.clone())
         } else {
-            Err(HTreeError::DataMissing)
+            Err(HTreeError::DataMissing.into())
         }
     }
 }
