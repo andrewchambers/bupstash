@@ -1,8 +1,6 @@
 use super::address::*;
 use super::fsutil;
-use rand::Rng;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub trait Engine {
     fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error>;
@@ -37,30 +35,6 @@ impl Drop for LocalStorage {
     }
 }
 
-// Does NOT sync the directory. A sync of the directory still needs to be
-// done to ensure the atomic rename is persisted.
-fn atomic_add_file(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
-    let temp_path = p
-        .to_string_lossy()
-        .chars()
-        .chain(
-            std::iter::repeat(())
-                .map(|()| rand::thread_rng().sample(rand::distributions::Alphanumeric))
-                .take(8),
-        )
-        .chain(".tmp".chars())
-        .collect::<String>();
-
-    let mut tmp_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)?;
-    tmp_file.write_all(contents)?;
-    tmp_file.sync_all()?;
-    std::fs::rename(temp_path, p)?;
-    Ok(())
-}
-
 // FIXME: How many workers do we want?
 const NWORKERS: usize = 3;
 
@@ -85,7 +59,7 @@ impl LocalStorage {
                         Ok(WorkerMsg::AddChunk((addr, buf))) => {
                             worker_data_dir.push(addr.as_hex_addr().as_str());
                             let result = if !worker_data_dir.exists() {
-                                atomic_add_file(worker_data_dir.as_path(), &buf)
+                                fsutil::atomic_add_file(worker_data_dir.as_path(), &buf)
                             } else {
                                 Ok(())
                             };
@@ -136,7 +110,9 @@ impl LocalStorage {
 
 impl Engine for LocalStorage {
     fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        self.dispatch.send(WorkerMsg::AddChunk((addr, buf)))?;
+        self.dispatch
+            .send(WorkerMsg::AddChunk((addr, buf)))
+            .unwrap();
         Ok(())
     }
 
@@ -149,7 +125,7 @@ impl Engine for LocalStorage {
 
     fn sync(&mut self) -> Result<(), failure::Error> {
         for _i in 0..self.worker_handles.len() {
-            self.dispatch.send(WorkerMsg::Barrier)?;
+            self.dispatch.send(WorkerMsg::Barrier).unwrap();
         }
         let mut all_ok = true;
         for _i in 0..self.worker_handles.len() {
