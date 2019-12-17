@@ -342,7 +342,7 @@ impl Parser {
 
 pub fn parse(s: &str) -> Result<QueryAST, ParseError> {
     let mut query_chars: Vec<char> = s.chars().collect();
-    // The query always ends with a separator character,
+    // Ensure the query always ends with a separator character,
     // this makes things more consistent.
     query_chars.push('•');
 
