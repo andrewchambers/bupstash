@@ -11,6 +11,8 @@ failure = "0.1.6"
 fs2 = "0.4.3"
 rand = "0.7.2"
 tempdir = "0.3.7"
+codemap = "0.1.2"
+codemap-diagnostic = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 

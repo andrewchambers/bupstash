@@ -75,6 +75,21 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     }
 }
 
+fn search_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.reqopt("m", "master-key", "master key to derive key from.", "PATH");
+    let matches = default_parse_opts(opts, &args[..]);
+    let ast = match tquery::parse(&matches.free.join("•")) {
+        Err(e) => {
+            tquery::report_parse_error(e);
+            std::process::exit(1);
+        }
+        Ok(ast) => ast,
+    };
+    eprintln!("{:?}", ast);
+    Ok(())
+}
+
 fn main() {
     unsafe { hydrogen::init() };
 
@@ -92,6 +107,7 @@ fn main() {
     let result = match subcommand.as_str() {
         "new-master-key" => new_master_key_main(args),
         "new-send-key" => new_send_key_main(args),
+        "search" => search_main(args),
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();
             help_main(args)
