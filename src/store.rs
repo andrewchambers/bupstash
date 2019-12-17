@@ -169,12 +169,12 @@ impl Store {
                 path: path_buf.to_string_lossy().to_string(),
             });
         }
-        fsutil::atomic_add_dir_with_parent_sync(path_buf.as_path())?;
+        fs::DirBuilder::new().create(path_buf.as_path())?;
         path_buf.push("data");
-        fsutil::atomic_add_dir_with_parent_sync(path_buf.as_path())?;
+        fs::DirBuilder::new().create(path_buf.as_path())?;
         path_buf.pop();
         path_buf.push("gc.lock");
-        fsutil::atomic_add_file_with_parent_sync(path_buf.as_path(), &mut [])?;
+        fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
         path_buf.push("archivist.db");
@@ -195,6 +195,8 @@ impl Store {
         )?;
         tx.commit()?;
         path_buf.pop();
+
+        fsutil::sync_dir(&path_buf)?;
 
         std::fs::rename(&path_buf, store_path)?;
         Store::open(store_path)
@@ -264,11 +266,10 @@ mod tests {
         let mut h = store.storage_handle().unwrap();
         let addr = Address::default();
         h.add_chunk(addr, vec![1]).unwrap();
+        h.sync().unwrap();
         h.add_chunk(addr, vec![2]).unwrap();
         h.sync().unwrap();
-
         let v = h.get_chunk(addr).unwrap();
-
         assert_eq!(v, vec![1]);
     }
 }
