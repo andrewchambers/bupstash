@@ -6,7 +6,7 @@ in
       
       LIBCLANG_PATH="${pkgs.llvmPackages.libclang}/lib";
 
-      buildInputs =  with pkgs; [ clang clang-tools llvm pandoc ];
+      buildInputs =  with pkgs; [ clang clang-tools llvm minio pandoc ];
 
       hardeningDisable = ["all"];
   }

@@ -6,6 +6,7 @@ use super::htree;
 use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +36,11 @@ impl From<rusqlite::Error> for StoreError {
     fn from(err: rusqlite::Error) -> StoreError {
         StoreError::SqliteError { err }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum StorageEngineSpec {
+    Local,
 }
 
 pub struct Store {
@@ -144,7 +150,7 @@ impl Store {
         Ok(())
     }
 
-    pub fn init(store_path: &Path) -> Result<Store, StoreError> {
+    pub fn init(store_path: &Path, engine: StorageEngineSpec) -> Result<(), failure::Error> {
         let parent = if store_path.is_absolute() {
             store_path.parent().unwrap().to_owned()
         } else {
@@ -156,7 +162,8 @@ impl Store {
         if store_path.exists() {
             return Err(StoreError::AlreadyExists {
                 path: store_path.to_string_lossy().to_string(),
-            });
+            }
+            .into());
         }
         let mut tmpname = store_path
             .file_name()
@@ -167,7 +174,8 @@ impl Store {
         if path_buf.exists() {
             return Err(StoreError::AlreadyExists {
                 path: path_buf.to_string_lossy().to_string(),
-            });
+            }
+            .into());
         }
         fs::DirBuilder::new().create(path_buf.as_path())?;
         path_buf.push("data");
@@ -193,13 +201,19 @@ impl Store {
             "insert into ArchivistMeta(Key, Value) values(?, ?);",
             rusqlite::params!["gc-generation", new_gc_generation()],
         )?;
+
+        tx.execute(
+            "insert into ArchivistMeta(Key, Value) values(?, ?);",
+            rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
+        )?;
+
         tx.commit()?;
         path_buf.pop();
 
         fsutil::sync_dir(&path_buf)?;
 
         std::fs::rename(&path_buf, store_path)?;
-        Store::open(store_path)
+        Ok(())
     }
 
     fn get_lock_path(&self, name: &str) -> PathBuf {
@@ -208,14 +222,29 @@ impl Store {
         lock_path
     }
 
-    pub fn storage_handle(&self) -> Result<StorageHandle, StoreError> {
+    pub fn storage_handle(&self) -> Result<StorageHandle, failure::Error> {
         let mut data_dir = self.store_path.clone();
         data_dir.push("data");
-        // XXX fixme, how many workers do we want?
-        let engine = chunk_storage::LocalStorage::new(&data_dir, 4);
+
+        let conn = self.open_db()?;
+        let engine_meta: String = conn.query_row(
+            "select value from ArchivistMeta where Key='storage-engine';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
+        let spec: StorageEngineSpec = serde_json::from_str(&engine_meta)?;
+
+        let engine: Box<dyn chunk_storage::Engine> = match spec {
+            StorageEngineSpec::Local => {
+                // XXX fixme, how many workers do we want?
+                Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
+            }
+        };
+
         Ok(StorageHandle {
             _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
-            engine: Box::new(engine),
+            engine,
         })
     }
 
@@ -263,7 +292,8 @@ mod tests {
         let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
-        let store = Store::init(path_buf.as_path()).unwrap();
+        Store::init(path_buf.as_path(), BackendSpec::Local).unwrap();
+        let store = Store::open(path_buf.as_path()).unwrap();
         let mut h = store.storage_handle().unwrap();
         let addr = Address::default();
         h.add_chunk(addr, vec![1]).unwrap();

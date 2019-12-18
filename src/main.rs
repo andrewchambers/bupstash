@@ -20,6 +20,7 @@ fn die(s: String) -> ! {
 
 fn print_help_and_exit(subcommand: &str, opts: &Options) {
     let brief = match subcommand {
+        "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
         "new-master-key" => include_str!("../doc/cli/new-master-key.txt"),
         "new-send-key" => include_str!("../doc/cli/new-send-key.txt"),
@@ -52,6 +53,31 @@ fn help_main(args: Vec<String>) -> Result<(), failure::Error> {
     let opts = default_cli_opts();
     print_help_and_exit(&args[0], &opts);
     Ok(())
+}
+
+fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.optopt(
+        "s",
+        "storage",
+        "The storage engine specification, default.",
+        "STORAGE",
+    );
+    let matches = default_parse_opts(opts, &args[..]);
+
+    if matches.free.len() != 1 {
+        die("Expected a single path to initialize.".to_string());
+    }
+
+    let backend: store::StorageEngineSpec;
+
+    if !matches.opt_present("storage") {
+        backend = store::StorageEngineSpec::Local;
+    } else {
+        panic!("TODO")
+    }
+
+    store::Store::init(std::path::Path::new(&matches.free[0]), backend)
 }
 
 fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {
@@ -107,6 +133,7 @@ fn main() {
     let subcommand = args[0].clone();
 
     let result = match subcommand.as_str() {
+        "init" => init_main(args),
         "new-master-key" => new_master_key_main(args),
         "new-send-key" => new_send_key_main(args),
         "search" => search_main(args),

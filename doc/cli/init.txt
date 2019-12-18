@@ -1,0 +1,14 @@
+Archivist init: Initialize an archivist data store.
+
+Description:
+  Init creates an archivist data repository at a specified
+  local path.
+
+  For more information on the repository format see TODO.
+
+  For more information on supported storage backends see TODO.
+
+Quick examples:
+
+  $ archivist init ./backups
+  $ archivist init --storage '{"s3" : ...}' ./backups

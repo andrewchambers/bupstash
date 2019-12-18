@@ -5,6 +5,7 @@ authors = ["Andrew Chambers <ac@acha.ninja>"]
 edition = "2018"
 
 [dependencies]
+
 crossbeam = "0.7"
 libc = "0.2"
 rusqlite = { version = "0.21.0", features = ["bundled"] }
