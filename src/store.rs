@@ -148,8 +148,8 @@ impl Store {
         let parent = if store_path.is_absolute() {
             store_path.parent().unwrap().to_owned()
         } else {
-            let abs = std::env::current_dir()?.join(store_path).clone();
-            let parent = abs.parent().unwrap().clone();
+            let abs = std::env::current_dir()?.join(store_path);
+            let parent = abs.parent().unwrap();
             parent.to_owned()
         };
         let mut path_buf = PathBuf::from(&parent);

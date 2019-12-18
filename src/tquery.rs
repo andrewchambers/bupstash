@@ -131,7 +131,7 @@ impl Parser {
     }
 
     fn is_eof(&self) -> bool {
-        return self.offset == self.query_chars.len();
+        self.offset == self.query_chars.len()
     }
 
     fn skip_insignificant(&mut self) {
@@ -174,7 +174,7 @@ impl Parser {
             return false;
         }
         match self.query_chars.get(self.offset + op.len()) {
-            Some(c) => return is_ws(*c) || is_sep(*c),
+            Some(c) => is_ws(*c) || is_sep(*c),
             _ => false,
         }
     }
@@ -295,7 +295,6 @@ impl Parser {
                 (c, _) if is_value_char(c) => {
                     self.advance(1);
                     v.push(c);
-                    ()
                 }
                 _ => break,
             }
@@ -331,12 +330,12 @@ impl Parser {
         let value = self.parse_value()?;
         let (_, end_pos) = self.peek();
 
-        return Ok(QueryAST::TagValueAssertion {
+        Ok(QueryAST::TagValueAssertion {
             op,
             tag,
             value,
             span: (tag_pos, end_pos),
-        });
+        })
     }
 }
 
