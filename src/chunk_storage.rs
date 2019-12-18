@@ -3,8 +3,20 @@ use super::fsutil;
 use std::path::PathBuf;
 
 pub trait Engine {
+    // Get a chunk from the storage engine.
     fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error>;
+
+    // Get a chunk from the storage engine using the worker pool.
+    fn get_chunk_async(
+        &mut self,
+        addr: Address,
+    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>>;
+
+    // Add a chunk, potentially asynchronously. Does not overwrite existing
+    // chunks with the same name. The write is not guaranteed to be completed until
+    // after a call to Engine::sync completes without error.
     fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error>;
+
     // A write barrier, any previously added chunks are only guaranteed to be
     // in stable storage after a call to sync has returned. A backend
     // can use this to implement concurrent background writes.
@@ -13,6 +25,12 @@ pub trait Engine {
 
 enum WorkerMsg {
     AddChunk((Address, Vec<u8>)),
+    GetChunk(
+        (
+            Address,
+            crossbeam::channel::Sender<Result<Vec<u8>, failure::Error>>,
+        ),
+    ),
     Barrier,
     Exit,
 }
@@ -35,50 +53,64 @@ impl Drop for LocalStorage {
     }
 }
 
-// FIXME: How many workers do we want?
-const NWORKERS: usize = 3;
-
 impl LocalStorage {
-    pub fn new(path: &std::path::Path) -> Self {
+    pub fn new(path: &std::path::Path, mut nworkers: usize) -> Self {
+        if nworkers == 0 {
+            nworkers = 1
+        }
         let mut worker_handles = Vec::new();
 
         let (dispatch, rx) = crossbeam::channel::bounded(0);
         let (ack_barrier, rendezvous) = crossbeam::channel::bounded(0);
 
-        for _i in 0..NWORKERS {
+        for _i in 0..nworkers {
+            // Quite a small stack for these workers.
+            let builder = std::thread::Builder::new().stack_size(256 * 1024);
             let mut worker_data_dir = path.to_path_buf();
 
             let worker_rx = rx.clone();
             let worker_ack_barrier = ack_barrier.clone();
 
-            let worker = std::thread::spawn(move || {
-                // FIXME: TODO: send actual io error.
-                let mut is_ok = true;
-                loop {
-                    match worker_rx.recv() {
-                        Ok(WorkerMsg::AddChunk((addr, buf))) => {
-                            worker_data_dir.push(addr.as_hex_addr().as_str());
-                            let result = if !worker_data_dir.exists() {
-                                fsutil::atomic_add_file(worker_data_dir.as_path(), &buf)
-                            } else {
-                                Ok(())
-                            };
-                            worker_data_dir.pop();
-                            match result {
-                                Ok(_) => (),
-                                Err(_) => is_ok = false,
+            let worker = builder
+                .spawn(move || {
+                    // FIXME: TODO: send actual io error.
+                    let mut is_ok = true;
+                    loop {
+                        match worker_rx.recv() {
+                            Ok(WorkerMsg::GetChunk((addr, tx))) => {
+                                worker_data_dir.push(addr.as_hex_addr().as_str());
+                                let result = std::fs::read(worker_data_dir.as_path());
+                                worker_data_dir.pop();
+                                let result = match result {
+                                    Ok(data) => Ok(data),
+                                    Err(err) => Err(err.into()),
+                                };
+                                let _ = tx.send(result);
                             }
+                            Ok(WorkerMsg::AddChunk((addr, buf))) => {
+                                worker_data_dir.push(addr.as_hex_addr().as_str());
+                                let result = if !worker_data_dir.exists() {
+                                    fsutil::atomic_add_file(worker_data_dir.as_path(), &buf)
+                                } else {
+                                    Ok(())
+                                };
+                                worker_data_dir.pop();
+                                match result {
+                                    Ok(_) => (),
+                                    Err(_) => is_ok = false,
+                                }
+                            }
+                            Ok(WorkerMsg::Barrier) => {
+                                worker_ack_barrier.send(is_ok).unwrap();
+                            }
+                            Ok(WorkerMsg::Exit) => {
+                                return;
+                            }
+                            Err(_) => return,
                         }
-                        Ok(WorkerMsg::Barrier) => {
-                            worker_ack_barrier.send(is_ok).unwrap();
-                        }
-                        Ok(WorkerMsg::Exit) => {
-                            return;
-                        }
-                        Err(_) => return,
                     }
-                }
-            });
+                })
+                .unwrap();
             worker_handles.push(worker);
         }
 
@@ -123,6 +155,15 @@ impl Engine for LocalStorage {
         Ok(p?)
     }
 
+    fn get_chunk_async(
+        &mut self,
+        addr: Address,
+    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
+        let (tx, rx) = crossbeam::channel::bounded(1);
+        self.dispatch.send(WorkerMsg::GetChunk((addr, tx))).unwrap();
+        rx
+    }
+
     fn sync(&mut self) -> Result<(), failure::Error> {
         for _i in 0..self.worker_handles.len() {
             self.dispatch.send(WorkerMsg::Barrier).unwrap();
@@ -151,13 +192,15 @@ mod tests {
     fn local_storage_add_get_chunk() {
         let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
         let path_buf = PathBuf::from(tmp_dir.path());
-        let mut local_storage = LocalStorage::new(&path_buf);
+        let mut local_storage = LocalStorage::new(&path_buf, 5);
         let addr = Address::default();
         local_storage.add_chunk(addr, vec![1]).unwrap();
         local_storage.sync().unwrap();
         local_storage.add_chunk(addr, vec![2]).unwrap();
         local_storage.sync().unwrap();
         let v = local_storage.get_chunk(addr).unwrap();
+        assert_eq!(v, vec![1]);
+        let v = local_storage.get_chunk_async(addr).recv().unwrap().unwrap();
         assert_eq!(v, vec![1]);
     }
 }

@@ -211,7 +211,8 @@ impl Store {
     pub fn storage_handle(&self) -> Result<StorageHandle, StoreError> {
         let mut data_dir = self.store_path.clone();
         data_dir.push("data");
-        let engine = chunk_storage::LocalStorage::new(&data_dir);
+        // XXX fixme, how many workers do we want?
+        let engine = chunk_storage::LocalStorage::new(&data_dir, 4);
         Ok(StorageHandle {
             _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
             engine: Box::new(engine),
