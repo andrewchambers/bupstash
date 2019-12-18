@@ -8,5 +8,7 @@ Description:
   data sent using send keys derived from the master key.
 
 Quick examples:
-
   $ archivist new-master-key -o ./backups-master.key
+
+Usage:
+  archivist new-master-key [OPTIONS]

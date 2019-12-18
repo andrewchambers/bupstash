@@ -1,7 +1,6 @@
 Archivist new-send-key: Create a new send key.
 
 Description:
-
   Creates a new send key and writes it to disk with permissions
   by the creating user. The send key is derived from a master key,
   the master will be able to decrypt data written by the generated key.
@@ -15,6 +14,8 @@ Description:
   future data streams (They will still not be able to corrupt previously archived data). 
 
 Quick examples:
-
   $ archivist new-master-key -o ./backups-master.key
   $ archivist new-send-key -m ./backups-master.key -o ./backups-server1.key
+
+Usage:
+  archivist new-send-key [OPTIONS]

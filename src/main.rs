@@ -32,7 +32,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
 
 fn default_cli_opts() -> Options {
     let mut opts = Options::new();
-    opts.optflag("h", "help", "print this help menu");
+    opts.optflag("h", "help", "print this help menu.");
     opts
 }
 
@@ -60,7 +60,7 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "s",
         "storage",
-        "The storage engine specification, default.",
+        "The storage engine specification.",
         "STORAGE",
     );
     let matches = default_parse_opts(opts, &args[..]);

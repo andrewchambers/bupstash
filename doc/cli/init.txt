@@ -9,6 +9,8 @@ Description:
   For more information on supported storage backends see TODO.
 
 Quick examples:
-
   $ archivist init ./backups
   $ archivist init --storage '{"s3" : ...}' ./backups
+
+Usage:
+  archivist init [FLAGS] PATH
