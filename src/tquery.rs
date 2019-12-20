@@ -257,7 +257,7 @@ impl Parser {
                 (_, '\0') => {
                     return Err(ParseError::SyntaxError {
                         query: self.query_chars.iter().collect(),
-                        msg: format!("unexpected end of input"),
+                        msg: "unexpected end of input".to_string(),
                         span: (start_pos, pos),
                     })
                 }
@@ -282,7 +282,7 @@ impl Parser {
         if !is_value_char(c) {
             return Err(ParseError::SyntaxError {
                 query: self.query_chars.iter().collect(),
-                msg: format!("expected a value literal start character"),
+                msg: "expected a value literal start character".to_string(),
                 span: (pos, pos),
             });
         }

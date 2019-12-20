@@ -167,7 +167,7 @@ impl Store {
         }
         let mut tmpname = store_path
             .file_name()
-            .unwrap_or(std::ffi::OsStr::new(""))
+            .unwrap_or_else(|| std::ffi::OsStr::new(""))
             .to_os_string();
         tmpname.push(".archivist-store-init-tmp");
         path_buf.push(&tmpname);
@@ -248,7 +248,7 @@ impl Store {
         })
     }
 
-    pub fn change_store_handle<'a>(&'a self) -> Result<ChangeStoreHandle, StoreError> {
+    pub fn change_store_handle(&self) -> Result<ChangeStoreHandle, StoreError> {
         let conn = self.open_db()?;
         Ok(ChangeStoreHandle {
             _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
@@ -292,7 +292,7 @@ mod tests {
         let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
-        Store::init(path_buf.as_path(), BackendSpec::Local).unwrap();
+        Store::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
         let store = Store::open(path_buf.as_path()).unwrap();
         let mut h = store.storage_handle().unwrap();
         let addr = Address::default();

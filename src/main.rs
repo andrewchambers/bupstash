@@ -7,6 +7,7 @@ pub mod hex;
 pub mod htree;
 pub mod hydrogen;
 pub mod keys;
+pub mod protocol;
 pub mod rollsum;
 pub mod store;
 pub mod tquery;
