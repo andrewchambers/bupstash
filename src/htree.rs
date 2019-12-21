@@ -19,7 +19,7 @@ pub enum HTreeError {
 }
 
 pub trait Sink {
-    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error>;
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error>;
 }
 
 pub trait Source {
@@ -73,7 +73,7 @@ impl<'a> TreeWriter<'a> {
         std::mem::swap(&mut block, &mut self.tree_blocks[level]);
         self.write_header(level);
         let block_address = Address::from_bytes(&hydrogen::hash(&block, *b"_htree_\0"));
-        self.sink.send_chunk(block_address, block)?;
+        self.sink.add_chunk(block_address, block)?;
         self.add_addr(level + 1, block_address)?;
         self.rollsums[level].reset();
         Ok(())
@@ -107,7 +107,7 @@ impl<'a> TreeWriter<'a> {
     }
 
     pub fn add(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
-        self.sink.send_chunk(addr, data)?;
+        self.sink.add_chunk(addr, data)?;
         self.add_addr(0, addr)?;
         Ok(())
     }
@@ -254,7 +254,7 @@ impl<'a> TreeReader<'a> {
 use std::collections::HashMap;
 
 impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
-    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.insert(addr, data);
         Ok(())
     }

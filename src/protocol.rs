@@ -6,27 +6,27 @@ use std::convert::TryInto;
 const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug)]
-struct ServerInfo {
-    protocol_version: String,
+pub struct ServerInfo {
+    pub protocol_version: String,
 }
 
-struct Chunk<'a> {
-    address: Address,
-    data: &'a [u8],
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct AckSend {
-    gc_generation: String,
+pub struct Chunk {
+    pub address: Address,
+    pub data: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct CommitSend {
-    header: crypto::EncryptionHeader,
-    root: Address,
+pub struct AckSend {
+    pub gc_generation: String,
 }
 
-enum PacketKind {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CommitSend {
+    pub header: crypto::EncryptionHeader,
+    pub root: Address,
+}
+
+pub enum PacketKind {
     ServerInfo,
     BeginSend,
     AckSend,
@@ -52,7 +52,7 @@ impl PacketKind {
     }
 }
 
-fn read_packet(r: &mut dyn std::io::Read) -> Result<(PacketKind, Vec<u8>), failure::Error> {
+pub fn read_packet(r: &mut dyn std::io::Read) -> Result<(PacketKind, Vec<u8>), failure::Error> {
     let mut hdr: [u8; 6] = [0; 6];
     r.read_exact(&mut hdr[..])?;
     let sz = (hdr[0] as usize) << 24
@@ -99,47 +99,50 @@ fn send_packet(w: &mut dyn std::io::Write, kind: u16, data: &[u8]) -> Result<(),
     Ok(())
 }
 
-fn send_server_info(w: &mut dyn std::io::Write, info: &ServerInfo) -> Result<(), failure::Error> {
+pub fn send_server_info(
+    w: &mut dyn std::io::Write,
+    info: &ServerInfo,
+) -> Result<(), failure::Error> {
     let j = serde_json::to_string(&info)?;
     send_packet(w, PACKET_KIND_SERVER_INFO, j.as_bytes())
 }
 
-fn send_begin_send(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+pub fn send_begin_send(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
     send_packet(w, PACKET_KIND_BEGIN_SEND, &[])
 }
 
-fn send_ack_send(w: &mut dyn std::io::Write, ack: &AckSend) -> Result<(), failure::Error> {
+pub fn send_ack_send(w: &mut dyn std::io::Write, ack: &AckSend) -> Result<(), failure::Error> {
     let j = serde_json::to_string(&ack)?;
     send_packet(w, PACKET_KIND_ACK_SEND, j.as_bytes())
 }
 
-fn send_chunk(w: &mut dyn std::io::Write, chunk: &Chunk) -> Result<(), failure::Error> {
+pub fn send_chunk(w: &mut dyn std::io::Write, chunk: &Chunk) -> Result<(), failure::Error> {
     send_hdr(
         w,
         PACKET_KIND_CHUNK,
         (ADDRESS_SZ + chunk.data.len()).try_into()?,
     )?;
-    w.write_all(&chunk.address.bytes[..])?;
     w.write_all(&chunk.data)?;
+    w.write_all(&chunk.address.bytes[..])?;
     Ok(())
 }
 
-fn send_commit(w: &mut dyn std::io::Write, e: &CommitSend) -> Result<(), failure::Error> {
+pub fn send_commit(w: &mut dyn std::io::Write, e: &CommitSend) -> Result<(), failure::Error> {
     let j = serde_json::to_string(&e)?;
     send_packet(w, PACKET_KIND_COMMIT_SEND, j.as_bytes())
 }
 
-fn decode_server_info(buf: &[u8]) -> Result<ServerInfo, failure::Error> {
-    let info: ServerInfo = serde_json::from_slice(buf)?;
+pub fn decode_server_info(buf: Vec<u8>) -> Result<ServerInfo, failure::Error> {
+    let info: ServerInfo = serde_json::from_slice(&buf)?;
     Ok(info)
 }
 
-fn decode_ack_send(buf: &[u8]) -> Result<AckSend, failure::Error> {
-    let ack: AckSend = serde_json::from_slice(buf)?;
+pub fn decode_ack_send(buf: Vec<u8>) -> Result<AckSend, failure::Error> {
+    let ack: AckSend = serde_json::from_slice(&buf)?;
     Ok(ack)
 }
 
-fn decode_chunk(buf: &[u8]) -> Result<Chunk, failure::Error> {
+pub fn decode_chunk(mut buf: Vec<u8>) -> Result<Chunk, failure::Error> {
     if buf.len() < ADDRESS_SZ {
         return Err(failure::format_err!(
             "protocol error, chunk smaller than address"
@@ -148,10 +151,8 @@ fn decode_chunk(buf: &[u8]) -> Result<Chunk, failure::Error> {
 
     let mut address = Address { bytes: [0; 32] };
 
-    address.bytes[..].clone_from_slice(&buf[..ADDRESS_SZ]);
+    address.bytes[..].clone_from_slice(&buf[buf.len() - ADDRESS_SZ..]);
+    buf.truncate(buf.len() - ADDRESS_SZ);
 
-    Ok(Chunk {
-        address,
-        data: &buf[ADDRESS_SZ..],
-    })
+    Ok(Chunk { address, data: buf })
 }

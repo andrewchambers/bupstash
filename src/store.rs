@@ -18,24 +18,10 @@ pub enum StoreError {
     NotInitializedProperly,
     #[fail(display = "the store was does not exist")]
     StoreDoesNotExist,
-    #[fail(display = "io error while accessing store: {}", err)]
-    IOError { err: std::io::Error },
     #[fail(display = "sqlite error while manipulating the database: {}", err)]
     SqliteError { err: rusqlite::Error },
     #[fail(display = "archivist database at unsupported version")]
     UnsupportedSchemaVersion,
-}
-
-impl From<std::io::Error> for StoreError {
-    fn from(err: std::io::Error) -> StoreError {
-        StoreError::IOError { err }
-    }
-}
-
-impl From<rusqlite::Error> for StoreError {
-    fn from(err: rusqlite::Error) -> StoreError {
-        StoreError::SqliteError { err }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -44,7 +30,10 @@ pub enum StorageEngineSpec {
 }
 
 pub struct Store {
-    store_path: PathBuf,
+    _store_path: PathBuf,
+    _gc_lock: FileLock,
+    storage_engine: Box<dyn chunk_storage::Engine>,
+    pub gc_generation: String,
 }
 
 struct FileLock {
@@ -71,81 +60,31 @@ impl Drop for FileLock {
     }
 }
 
-// This handle gets a shared gc.lock
-// It allows data append and read access.
-pub struct StorageHandle {
-    _gc_lock: FileLock,
-    engine: Box<dyn chunk_storage::Engine>,
-}
-
-// This handle gets a shared gc.lock
-// It allows updating the metadata db.
-pub struct ChangeStoreHandle {
-    _gc_lock: FileLock,
-    conn: rusqlite::Connection,
-}
-
 fn new_gc_generation() -> String {
     let mut gen: [u8; 32] = [0; 32];
     hydrogen::random_buf(&mut gen);
     hex::easy_encode_to_string(&gen)
 }
 
-fn open_archivist_db(path: &Path) -> rusqlite::Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(path)?;
-    conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-        Ok(())
-    })?;
-    Ok(conn)
-}
-
 impl Store {
-    fn ensure_store_check_file_exists(p: &Path) -> Result<(), StoreError> {
+    fn ensure_file_exists(p: &Path) -> Result<(), failure::Error> {
         if p.exists() {
             Ok(())
         } else {
-            Err(StoreError::NotInitializedProperly)
+            Err(StoreError::NotInitializedProperly.into())
         }
     }
 
-    pub fn open_db(&self) -> rusqlite::Result<rusqlite::Connection> {
-        let mut db_path = self.store_path.clone();
-        db_path.push("archivist.db");
-        open_archivist_db(&db_path)
-    }
-
-    pub fn open(store_path: &Path) -> Result<Store, StoreError> {
-        Store::check_store_sane(&store_path)?;
-        let mut data_dir_path = store_path.to_path_buf();
-        data_dir_path.push("data");
-
-        let mut db_path = store_path.to_path_buf();
-        db_path.push("archivist.db");
-        let conn = open_archivist_db(&db_path)?;
-        let v: i32 = conn.query_row(
-            "select value from ArchivistMeta where Key='schema-version';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-        if v != 0 {
-            return Err(StoreError::UnsupportedSchemaVersion);
-        }
-
-        Ok(Store {
-            store_path: store_path.to_path_buf(),
-        })
-    }
-
-    fn check_store_sane(store_path: &Path) -> Result<(), StoreError> {
+    fn check_store_sane(store_path: &Path) -> Result<(), failure::Error> {
         if !store_path.exists() {
-            return Err(StoreError::StoreDoesNotExist);
+            return Err(StoreError::StoreDoesNotExist.into());
         }
         let mut path_buf = PathBuf::from(store_path);
         path_buf.push("data");
-        Store::ensure_store_check_file_exists(&path_buf.as_path())?;
+        Store::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         path_buf.push("archivist.db");
-        Store::ensure_store_check_file_exists(&path_buf.as_path())?;
+        Store::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         Ok(())
     }
@@ -158,6 +97,7 @@ impl Store {
             let parent = abs.parent().unwrap();
             parent.to_owned()
         };
+
         let mut path_buf = PathBuf::from(&parent);
         if store_path.exists() {
             return Err(StoreError::AlreadyExists {
@@ -181,14 +121,17 @@ impl Store {
         path_buf.push("data");
         fs::DirBuilder::new().create(path_buf.as_path())?;
         path_buf.pop();
+
         path_buf.push("gc.lock");
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        path_buf.push("archivist.db");
-        let mut conn = open_archivist_db(&path_buf)?;
+        eprintln!("{:?}", path_buf);
+        let mut conn = Store::open_db(&path_buf)?;
+
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
         let tx = conn.transaction()?;
+
         tx.execute(
             "create table ArchivistMeta(Key, Value, UNIQUE(key, value));",
             rusqlite::NO_PARAMS,
@@ -201,83 +144,102 @@ impl Store {
             "insert into ArchivistMeta(Key, Value) values(?, ?);",
             rusqlite::params!["gc-generation", new_gc_generation()],
         )?;
-
         tx.execute(
             "insert into ArchivistMeta(Key, Value) values(?, ?);",
             rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
         )?;
 
         tx.commit()?;
-        path_buf.pop();
+        drop(conn);
 
         fsutil::sync_dir(&path_buf)?;
-
         std::fs::rename(&path_buf, store_path)?;
         Ok(())
     }
 
-    fn get_lock_path(&self, name: &str) -> PathBuf {
-        let mut lock_path = self.store_path.clone();
-        lock_path.push(name);
+    fn gc_lock_path(store_path: &Path) -> PathBuf {
+        let mut lock_path = store_path.to_path_buf();
+        lock_path.push("gc.lock");
         lock_path
     }
 
-    pub fn storage_handle(&self) -> Result<StorageHandle, failure::Error> {
-        let mut data_dir = self.store_path.clone();
-        data_dir.push("data");
+    fn open_db(store_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+        let mut db_path = store_path.to_path_buf();
+        db_path.push("archivist.db");
+        let conn = rusqlite::Connection::open(db_path)?;
+        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
+        Ok(conn)
+    }
 
-        let conn = self.open_db()?;
+    pub fn open(store_path: &Path) -> Result<Store, failure::Error> {
+        Store::check_store_sane(&store_path)?;
+
+        let gc_lock = FileLock::get_shared(&Store::gc_lock_path(&store_path))?;
+
+        let conn = Store::open_db(store_path)?;
+        let v: i32 = conn.query_row(
+            "select value from ArchivistMeta where Key='schema-version';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+        if v != 0 {
+            return Err(StoreError::UnsupportedSchemaVersion.into());
+        }
+
         let engine_meta: String = conn.query_row(
             "select value from ArchivistMeta where Key='storage-engine';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
 
+        let gc_generation: String = conn.query_row(
+            "select value from ArchivistMeta where Key='gc-generation';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
         let spec: StorageEngineSpec = serde_json::from_str(&engine_meta)?;
 
-        let engine: Box<dyn chunk_storage::Engine> = match spec {
+        let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::Local => {
+                let mut data_dir = store_path.to_path_buf();
+                data_dir.push("data");
+
                 // XXX fixme, how many workers do we want?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
             }
         };
 
-        Ok(StorageHandle {
-            _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
-            engine,
+        Ok(Store {
+            _store_path: store_path.to_path_buf(),
+            _gc_lock: gc_lock,
+            gc_generation,
+            storage_engine,
         })
     }
 
-    pub fn change_store_handle(&self) -> Result<ChangeStoreHandle, StoreError> {
-        let conn = self.open_db()?;
-        Ok(ChangeStoreHandle {
-            _gc_lock: FileLock::get_shared(&self.get_lock_path("gc.lock"))?,
-            conn,
-        })
-    }
-}
-
-impl StorageHandle {
     pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        self.engine.add_chunk(addr, buf)
+        self.storage_engine.add_chunk(addr, buf)
     }
 
     pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
-        self.engine.get_chunk(addr)
+        self.storage_engine.get_chunk(addr)
     }
 
     pub fn sync(&mut self) -> Result<(), failure::Error> {
-        self.engine.sync()
+        self.storage_engine.sync()
     }
 }
 
-impl htree::Sink for StorageHandle {
-    fn send_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
+impl htree::Sink for Store {
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.add_chunk(addr, data)
     }
 }
 
-impl htree::Source for StorageHandle {
+impl htree::Source for Store {
     fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
         self.get_chunk(addr)
     }
@@ -293,14 +255,13 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
         Store::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let store = Store::open(path_buf.as_path()).unwrap();
-        let mut h = store.storage_handle().unwrap();
+        let mut store = Store::open(path_buf.as_path()).unwrap();
         let addr = Address::default();
-        h.add_chunk(addr, vec![1]).unwrap();
-        h.sync().unwrap();
-        h.add_chunk(addr, vec![2]).unwrap();
-        h.sync().unwrap();
-        let v = h.get_chunk(addr).unwrap();
+        store.add_chunk(addr, vec![1]).unwrap();
+        store.sync().unwrap();
+        store.add_chunk(addr, vec![2]).unwrap();
+        store.sync().unwrap();
+        let v = store.get_chunk(addr).unwrap();
         assert_eq!(v, vec![1]);
     }
 }

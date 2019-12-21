@@ -9,6 +9,7 @@ pub mod hydrogen;
 pub mod keys;
 pub mod protocol;
 pub mod rollsum;
+pub mod server;
 pub mod store;
 pub mod tquery;
 
