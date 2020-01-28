@@ -23,6 +23,14 @@ pub enum VersionedEncryptionHeader {
     V1(EncryptionHeader),
 }
 
+impl VersionedEncryptionHeader {
+    pub fn master_key_id(&self) -> [u8; keys::KEYID_SZ] {
+        match self {
+            VersionedEncryptionHeader::V1(hdr) => hdr.master_key_id,
+        }
+    }
+}
+
 fn combined_hashkey(
     k1: &[u8; hydrogen::HASH_KEYBYTES],
     k2: &[u8; hydrogen::HASH_KEYBYTES],

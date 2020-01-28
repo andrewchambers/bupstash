@@ -2,7 +2,7 @@ use super::protocol::*;
 use super::store;
 
 pub struct ServerConfig {
-    store_path: std::path::PathBuf,
+    pub store_path: std::path::PathBuf,
 }
 
 pub fn serve(
@@ -45,8 +45,10 @@ fn recv(
             Packet::Chunk(chunk) => {
                 store.add_chunk(chunk.address, chunk.data)?;
             }
-            Packet::CommitSend(_commit) => {
+            Packet::CommitSend(commit) => {
                 store.sync()?;
+                store.add_item(commit.root, commit.header)?;
+                write_packet(w, &Packet::AckCommit(AckCommit {}))?;
                 break;
             }
             _ => {

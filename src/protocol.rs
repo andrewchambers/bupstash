@@ -30,6 +30,9 @@ pub struct CommitSend {
     pub root: Address,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AckCommit {}
+
 #[derive(Debug, PartialEq)]
 pub enum Packet {
     ServerInfo(ServerInfo),
@@ -37,6 +40,7 @@ pub enum Packet {
     AckSend(AckSend),
     Chunk(Chunk),
     CommitSend(CommitSend),
+    AckCommit(AckCommit),
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
@@ -44,6 +48,7 @@ const PACKET_KIND_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_ACK_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
 const PACKET_KIND_COMMIT_SEND: u8 = 4;
+const PACKET_KIND_ACK_COMMIT: u8 = 5;
 
 pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> {
     let mut hdr: [u8; 5] = [0; 5];
@@ -84,6 +89,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
             Packet::Chunk(Chunk { address, data: buf })
         }
         PACKET_KIND_COMMIT_SEND => Packet::CommitSend(serde_json::from_slice(&buf)?),
+        PACKET_KIND_ACK_COMMIT => Packet::AckCommit(serde_json::from_slice(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -133,6 +139,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_COMMIT_SEND, b.len().try_into()?)?;
+            w.write_all(b)?;
+        }
+        Packet::AckCommit(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_ACK_COMMIT, b.len().try_into()?)?;
             w.write_all(b)?;
         }
     }

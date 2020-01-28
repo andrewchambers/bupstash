@@ -1,5 +1,6 @@
 use super::address::*;
 use super::chunk_storage;
+use super::crypto;
 use super::fsutil;
 use super::hex;
 use super::htree;
@@ -126,7 +127,6 @@ impl Store {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        eprintln!("{:?}", path_buf);
         let mut conn = Store::open_db(&path_buf)?;
 
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
@@ -147,6 +147,10 @@ impl Store {
         tx.execute(
             "insert into ArchivistMeta(Key, Value) values(?, ?);",
             rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
+        )?;
+        tx.execute(
+            "create table Items(Address, MasterKeyID, EncryptionHeader);",
+            rusqlite::NO_PARAMS,
         )?;
 
         tx.commit()?;
@@ -208,6 +212,7 @@ impl Store {
                 data_dir.push("data");
 
                 // XXX fixme, how many workers do we want?
+                // configurable?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
             }
         };
@@ -218,6 +223,28 @@ impl Store {
             gc_generation,
             storage_engine,
         })
+    }
+
+    pub fn add_item(
+        &mut self,
+        addr: Address,
+        hdr: crypto::VersionedEncryptionHeader,
+    ) -> Result<(), failure::Error> {
+        let mut conn = Store::open_db(&self._store_path)?;
+        let tx = conn.transaction()?;
+
+        tx.execute(
+            "insert into Items(Address, MasterKeyID, EncryptionHeader) values(?, ?, ?);",
+            &[
+                format!("{}", addr),
+                hex::easy_encode_to_string(&hdr.master_key_id()),
+                serde_json::to_string(&hdr)?,
+            ],
+        )?;
+
+        tx.commit()?;
+        drop(conn);
+        Ok(())
     }
 
     pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {

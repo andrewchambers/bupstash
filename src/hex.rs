@@ -29,7 +29,6 @@ pub fn decode(from: &[u8], to: &mut [u8]) -> Result<(), HexError> {
         let hi = from[2 * i];
         let lo = from[2 * i + 1];
         to[i] = from_hex_byte(hi)? << 4 | from_hex_byte(lo)?;
-        println!("{}({}) {}({}) = {}", hi, hi as char, lo, lo as char, to[i]);
     }
     Ok(())
 }
