@@ -10,7 +10,7 @@ pub struct EncryptContext {
     pub hash_key: [u8; hydrogen::HASH_KEYBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct EncryptionHeader {
     pub master_key_id: [u8; keys::KEYID_SZ],
     pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
@@ -18,7 +18,7 @@ pub struct EncryptionHeader {
     pub packet1: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum VersionedEncryptionHeader {
     V1(EncryptionHeader),
 }

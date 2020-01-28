@@ -5,55 +5,48 @@ use std::convert::TryInto;
 
 const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ServerInfo {
-    pub protocol_version: String,
+    pub protocol: String,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Chunk {
     pub address: Address,
     pub data: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct BeginSend {}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckSend {
     pub gc_generation: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CommitSend {
-    pub header: crypto::EncryptionHeader,
+    pub header: crypto::VersionedEncryptionHeader,
     pub root: Address,
 }
 
-pub enum PacketKind {
-    ServerInfo,
-    BeginSend,
-    AckSend,
-    Chunk,
-    CommitSend,
+#[derive(Debug, PartialEq)]
+pub enum Packet {
+    ServerInfo(ServerInfo),
+    BeginSend(BeginSend),
+    AckSend(AckSend),
+    Chunk(Chunk),
+    CommitSend(CommitSend),
 }
 
-const PACKET_KIND_SERVER_INFO: u16 = 0;
-const PACKET_KIND_BEGIN_SEND: u16 = 1;
-const PACKET_KIND_ACK_SEND: u16 = 2;
-const PACKET_KIND_CHUNK: u16 = 3;
-const PACKET_KIND_COMMIT_SEND: u16 = 4;
+const PACKET_KIND_SERVER_INFO: u8 = 0;
+const PACKET_KIND_BEGIN_SEND: u8 = 1;
+const PACKET_KIND_ACK_SEND: u8 = 2;
+const PACKET_KIND_CHUNK: u8 = 3;
+const PACKET_KIND_COMMIT_SEND: u8 = 4;
 
-impl PacketKind {
-    fn header_kind_byte(&self) -> u8 {
-        match self {
-            PacketKind::ServerInfo => 0,
-            PacketKind::BeginSend => 1,
-            PacketKind::AckSend => 2,
-            PacketKind::Chunk => 3,
-            PacketKind::CommitSend => 4,
-        }
-    }
-}
-
-pub fn read_packet(r: &mut dyn std::io::Read) -> Result<(PacketKind, Vec<u8>), failure::Error> {
-    let mut hdr: [u8; 6] = [0; 6];
+pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> {
+    let mut hdr: [u8; 5] = [0; 5];
     r.read_exact(&mut hdr[..])?;
     let sz = (hdr[0] as usize) << 24
         | (hdr[1] as usize) << 16
@@ -64,7 +57,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<(PacketKind, Vec<u8>), f
         return Err(failure::format_err!("packet too large"));
     }
 
-    let kind = (hdr[4] as u16) << 8 | (hdr[5] as u16);
+    let kind = hdr[4];
 
     let mut buf: Vec<u8> = Vec::with_capacity(sz);
     // We just created buf with capacity sz and u8 is a primitive type.
@@ -73,86 +66,116 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<(PacketKind, Vec<u8>), f
         buf.set_len(sz);
     };
     r.read_exact(&mut buf)?;
-    let kind = match kind {
-        0 => PacketKind::ServerInfo,
+    let packet = match kind {
+        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_json::from_slice(&buf)?),
+        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(serde_json::from_slice(&buf)?),
+        PACKET_KIND_ACK_SEND => Packet::AckSend(serde_json::from_slice(&buf)?),
+        PACKET_KIND_CHUNK => {
+            if buf.len() < ADDRESS_SZ {
+                return Err(failure::format_err!(
+                    "protocol error, chunk smaller than address"
+                ));
+            }
+
+            let mut address = Address { bytes: [0; 32] };
+
+            address.bytes[..].clone_from_slice(&buf[buf.len() - ADDRESS_SZ..]);
+            buf.truncate(buf.len() - ADDRESS_SZ);
+            Packet::Chunk(Chunk { address, data: buf })
+        }
+        PACKET_KIND_COMMIT_SEND => Packet::CommitSend(serde_json::from_slice(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
-    Ok((kind, buf))
+    Ok(packet)
 }
 
-fn send_hdr(w: &mut dyn std::io::Write, kind: u16, sz: u32) -> Result<(), failure::Error> {
-    let mut hdr: [u8; 6] = [0; 6];
+fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure::Error> {
+    let mut hdr: [u8; 5] = [0; 5];
     hdr[0] = ((sz & 0xff00_0000) >> 24) as u8;
     hdr[1] = ((sz & 0x00ff_0000) >> 16) as u8;
     hdr[2] = ((sz & 0x0000_ff00) >> 8) as u8;
     hdr[3] = (sz & 0x0000_00ff) as u8;
-    hdr[4] = ((kind & 0xff00) >> 8) as u8;
-    hdr[5] = (kind & 0xff) as u8;
+    hdr[4] = kind;
     w.write_all(&hdr[..])?;
     Ok(())
 }
 
-fn send_packet(w: &mut dyn std::io::Write, kind: u16, data: &[u8]) -> Result<(), failure::Error> {
-    let sz: u32 = data.len().try_into()?;
-    send_hdr(w, kind, sz)?;
-    w.write_all(data)?;
-    Ok(())
-}
-
-pub fn send_server_info(
-    w: &mut dyn std::io::Write,
-    info: &ServerInfo,
-) -> Result<(), failure::Error> {
-    let j = serde_json::to_string(&info)?;
-    send_packet(w, PACKET_KIND_SERVER_INFO, j.as_bytes())
-}
-
-pub fn send_begin_send(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    send_packet(w, PACKET_KIND_BEGIN_SEND, &[])
-}
-
-pub fn send_ack_send(w: &mut dyn std::io::Write, ack: &AckSend) -> Result<(), failure::Error> {
-    let j = serde_json::to_string(&ack)?;
-    send_packet(w, PACKET_KIND_ACK_SEND, j.as_bytes())
-}
-
-pub fn send_chunk(w: &mut dyn std::io::Write, chunk: &Chunk) -> Result<(), failure::Error> {
-    send_hdr(
-        w,
-        PACKET_KIND_CHUNK,
-        (ADDRESS_SZ + chunk.data.len()).try_into()?,
-    )?;
-    w.write_all(&chunk.data)?;
-    w.write_all(&chunk.address.bytes[..])?;
-    Ok(())
-}
-
-pub fn send_commit(w: &mut dyn std::io::Write, e: &CommitSend) -> Result<(), failure::Error> {
-    let j = serde_json::to_string(&e)?;
-    send_packet(w, PACKET_KIND_COMMIT_SEND, j.as_bytes())
-}
-
-pub fn decode_server_info(buf: Vec<u8>) -> Result<ServerInfo, failure::Error> {
-    let info: ServerInfo = serde_json::from_slice(&buf)?;
-    Ok(info)
-}
-
-pub fn decode_ack_send(buf: Vec<u8>) -> Result<AckSend, failure::Error> {
-    let ack: AckSend = serde_json::from_slice(&buf)?;
-    Ok(ack)
-}
-
-pub fn decode_chunk(mut buf: Vec<u8>) -> Result<Chunk, failure::Error> {
-    if buf.len() < ADDRESS_SZ {
-        return Err(failure::format_err!(
-            "protocol error, chunk smaller than address"
-        ));
+pub fn write_packet(w: &mut dyn std::io::Write, p: &Packet) -> Result<(), failure::Error> {
+    match p {
+        Packet::ServerInfo(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
+            w.write(b)?;
+        }
+        Packet::BeginSend(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_BEGIN_SEND, b.len().try_into()?)?;
+            w.write(b)?;
+        }
+        Packet::AckSend(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
+            w.write(b)?;
+        }
+        Packet::Chunk(ref v) => {
+            send_hdr(
+                w,
+                PACKET_KIND_CHUNK,
+                (v.data.len() + ADDRESS_SZ).try_into()?,
+            )?;
+            w.write(&v.data)?;
+            w.write(&v.address.bytes)?;
+        }
+        Packet::CommitSend(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_COMMIT_SEND, b.len().try_into()?)?;
+            w.write(b)?;
+        }
     }
+    Ok(())
+}
 
-    let mut address = Address { bytes: [0; 32] };
+#[cfg(test)]
+mod tests {
+    use super::super::crypto;
+    use super::super::keys;
+    use super::*;
 
-    address.bytes[..].clone_from_slice(&buf[buf.len() - ADDRESS_SZ..]);
-    buf.truncate(buf.len() - ADDRESS_SZ);
+    #[test]
+    fn send_recv() {
+        let packets = vec![
+            Packet::ServerInfo(ServerInfo {
+                protocol: "foobar".to_owned(),
+            }),
+            Packet::BeginSend(BeginSend {}),
+            Packet::AckSend(AckSend {
+                gc_generation: "blah".to_owned(),
+            }),
+            Packet::CommitSend(CommitSend {
+                root: Address::default(),
+                header: {
+                    let master_key = keys::MasterKey::gen();
+                    let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
+                    ectx.encryption_header()
+                },
+            }),
+            Packet::Chunk(Chunk {
+                address: Address::default(),
+                data: vec![1, 2, 3],
+            }),
+        ];
 
-    Ok(Chunk { address, data: buf })
+        for p1 in packets.iter() {
+            let mut c1 = std::io::Cursor::new(Vec::new());
+            write_packet(&mut c1, p1).unwrap();
+            let b = c1.into_inner();
+            let mut c2 = std::io::Cursor::new(b);
+            let p2 = read_packet(&mut c2).unwrap();
+            assert!(p1 == &p2);
+        }
+    }
 }

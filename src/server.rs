@@ -1,3 +1,4 @@
+/*
 use super::protocol;
 use super::store;
 
@@ -63,3 +64,5 @@ fn recv(
 
     Ok(())
 }
+
+*/
