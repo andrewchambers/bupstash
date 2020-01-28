@@ -1,5 +1,4 @@
-/*
-use super::protocol;
+use super::protocol::*;
 use super::store;
 
 pub struct ServerConfig {
@@ -11,18 +10,17 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    protocol::send_server_info(
+    write_packet(
         w,
-        &protocol::ServerInfo {
-            protocol_version: "0".to_string(),
-        },
+        &Packet::ServerInfo(ServerInfo {
+            protocol: "0".to_string(),
+        }),
     )?;
 
-    match protocol::read_packet(r)? {
-        (protocol::PacketKind::BeginSend, buf) => {
-            drop(buf);
+    match read_packet(r)? {
+        Packet::BeginSend(_) => {
             let mut store = store::Store::open(&cfg.store_path)?;
-            recv(cfg, &mut store, r, w)
+            recv(&mut store, r, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -31,28 +29,25 @@ pub fn serve(
 }
 
 fn recv(
-    cfg: ServerConfig,
     store: &mut store::Store,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    protocol::send_ack_send(
+    write_packet(
         w,
-        &protocol::AckSend {
+        &Packet::AckSend(AckSend {
             gc_generation: store.gc_generation.clone(),
-        },
+        }),
     )?;
 
     loop {
-        match protocol::read_packet(r)? {
-            (protocol::PacketKind::Chunk, buf) => {
-                let chunk = protocol::decode_chunk(buf)?;
+        match read_packet(r)? {
+            Packet::Chunk(chunk) => {
                 store.add_chunk(chunk.address, chunk.data)?;
-                panic!("TODO");
             }
-            (protocol::PacketKind::CommitSend, _buf) => {
+            Packet::CommitSend(_commit) => {
                 store.sync()?;
-                panic!("TODO");
+                break;
             }
             _ => {
                 return Err(failure::format_err!(
@@ -64,5 +59,3 @@ fn recv(
 
     Ok(())
 }
-
-*/

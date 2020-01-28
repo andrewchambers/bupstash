@@ -100,25 +100,25 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure
     Ok(())
 }
 
-pub fn write_packet(w: &mut dyn std::io::Write, p: &Packet) -> Result<(), failure::Error> {
-    match p {
+pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), failure::Error> {
+    match pkt {
         Packet::ServerInfo(ref v) => {
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
-            w.write(b)?;
+            w.write_all(b)?;
         }
         Packet::BeginSend(ref v) => {
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_BEGIN_SEND, b.len().try_into()?)?;
-            w.write(b)?;
+            w.write_all(b)?;
         }
         Packet::AckSend(ref v) => {
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
-            w.write(b)?;
+            w.write_all(b)?;
         }
         Packet::Chunk(ref v) => {
             send_hdr(
@@ -126,14 +126,14 @@ pub fn write_packet(w: &mut dyn std::io::Write, p: &Packet) -> Result<(), failur
                 PACKET_KIND_CHUNK,
                 (v.data.len() + ADDRESS_SZ).try_into()?,
             )?;
-            w.write(&v.data)?;
-            w.write(&v.address.bytes)?;
+            w.write_all(&v.data)?;
+            w.write_all(&v.address.bytes)?;
         }
         Packet::CommitSend(ref v) => {
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_COMMIT_SEND, b.len().try_into()?)?;
-            w.write(b)?;
+            w.write_all(b)?;
         }
     }
     Ok(())
