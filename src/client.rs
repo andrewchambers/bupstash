@@ -5,6 +5,7 @@ use super::htree;
 use super::keys;
 use super::protocol::*;
 use super::rollsum;
+use super::store;
 
 fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
     match read_packet(r)? {
@@ -51,6 +52,7 @@ pub fn send(
 
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
 
+    let tree_height: usize;
     let root_address: address::Address;
 
     loop {
@@ -60,12 +62,17 @@ pub fn send(
                 let addr = ctx.keyed_content_address(&chunk_data);
                 let encrypted_chunk_data = ctx.encrypt_chunk(&chunk_data);
                 tw.add(addr, encrypted_chunk_data)?;
-                root_address = tw.finish()?;
+                let (height, address) = tw.finish()?;
+                tree_height = height;
+                root_address = address;
                 write_packet(
                     w,
                     &Packet::CommitSend(CommitSend {
-                        root: root_address,
-                        header: ctx.encryption_header(),
+                        address: root_address,
+                        metadata: store::ItemMetadata {
+                            tree_height,
+                            encrypt_header: ctx.encryption_header(),
+                        },
                     }),
                 )?;
                 break;
@@ -112,32 +119,31 @@ impl<'a> htree::Source for StreamVerifier<'a> {
 
 pub fn request_data_stream(
     key: &keys::MasterKey,
-    address: address::Address,
+    root_address: address::Address,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     handle_server_info(r)?;
 
-    write_packet(w, &Packet::RequestData(RequestData { root: address }))?;
+    write_packet(w, &Packet::RequestData(RequestData { root: root_address }))?;
 
-    let header = match read_packet(r)? {
-        Packet::AckRequestData(req) => match req.header {
-            Some(header) => header,
+    let metadata = match read_packet(r)? {
+        Packet::AckRequestData(req) => match req.metadata {
+            Some(metadata) => metadata,
             None => failure::bail!("no stored items with the requested address"),
         },
         _ => failure::bail!("protocol error, expected ack request packet"),
     };
 
-    if key.id != header.master_key_id() {
+    if key.id != metadata.encrypt_header.master_key_id() {
         failure::bail!("decryption key does not match master key used for encryption");
     }
 
-    let ctx = crypto::DecryptContext::open(key, &header)?;
+    let ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
 
     let mut sv = StreamVerifier { r: r };
-    let mut tr = htree::TreeReader::new(&mut sv);
-    tr.push_addr(address)?;
+    let mut tr = htree::TreeReader::new(&mut sv, metadata.tree_height, root_address);
 
     loop {
         match tr.next_chunk()? {

@@ -53,7 +53,7 @@ fn recv(
             }
             Packet::CommitSend(commit) => {
                 store.sync()?;
-                store.add_item(commit.root, commit.header)?;
+                store.add_item(commit.address, commit.metadata)?;
                 write_packet(w, &Packet::AckCommit(AckCommit {}))?;
                 break;
             }
@@ -73,28 +73,38 @@ fn send(
     address: address::Address,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    match store.lookup_item_by_address(address)? {
-        Some(hdr) => write_packet(
-            w,
-            &Packet::AckRequestData(AckRequestData { header: Some(hdr) }),
-        )?,
+    let metadata = match store.lookup_item_by_address(address)? {
+        Some(metadata) => {
+            write_packet(
+                w,
+                &Packet::AckRequestData(AckRequestData {
+                    metadata: Some(metadata.clone()),
+                }),
+            )?;
+            metadata
+        }
         None => {
-            write_packet(w, &Packet::AckRequestData(AckRequestData { header: None }))?;
+            let no_metadata: Option<store::ItemMetadata> = None;
+            write_packet(
+                w,
+                &Packet::AckRequestData(AckRequestData {
+                    metadata: no_metadata,
+                }),
+            )?;
             return Ok(());
         }
     };
 
-    let mut tr = htree::TreeReader::new(store);
-    tr.push_addr(address)?;
+    let mut tr = htree::TreeReader::new(store, metadata.tree_height, address);
 
     loop {
         match tr.next_addr()? {
-            Some((addr, _)) => {
-                let chunk_data = tr.get_chunk(&addr)?;
+            Some((_, chunk_address)) => {
+                let chunk_data = tr.get_chunk(&chunk_address)?;
                 write_packet(
                     w,
                     &Packet::Chunk(Chunk {
-                        address: addr,
+                        address: chunk_address,
                         data: chunk_data,
                     }),
                 )?;

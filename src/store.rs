@@ -17,7 +17,7 @@ pub enum StoreError {
     AlreadyExists { path: String },
     #[fail(display = "the store was not initialized properly")]
     NotInitializedProperly,
-    #[fail(display = "the store was does not exist")]
+    #[fail(display = "the store does not exist")]
     StoreDoesNotExist,
     #[fail(display = "sqlite error while manipulating the database: {}", err)]
     SqliteError { err: rusqlite::Error },
@@ -35,6 +35,12 @@ pub struct Store {
     _gc_lock: FileLock,
     storage_engine: Box<dyn chunk_storage::Engine>,
     pub gc_generation: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct ItemMetadata {
+    pub tree_height: usize,
+    pub encrypt_header: crypto::VersionedEncryptionHeader,
 }
 
 struct FileLock {
@@ -149,7 +155,7 @@ impl Store {
             rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
         )?;
         tx.execute(
-            "create table Items(Address, EncryptionHeader);",
+            "create table Items(Address, Metadata);",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -228,14 +234,14 @@ impl Store {
     pub fn add_item(
         &mut self,
         addr: Address,
-        hdr: crypto::VersionedEncryptionHeader,
+        metadata: ItemMetadata,
     ) -> Result<(), failure::Error> {
         let mut conn = Store::open_db(&self._store_path)?;
         let tx = conn.transaction()?;
 
         tx.execute(
-            "insert into Items(Address, EncryptionHeader) values(?, ?);",
-            &[format!("{}", addr), serde_json::to_string(&hdr)?],
+            "insert into Items(Address, Metadata) values(?, ?);",
+            &[format!("{}", addr), serde_json::to_string(&metadata)?],
         )?;
 
         tx.commit()?;
@@ -246,18 +252,18 @@ impl Store {
     pub fn lookup_item_by_address(
         &mut self,
         addr: Address,
-    ) -> Result<Option<crypto::VersionedEncryptionHeader>, failure::Error> {
+    ) -> Result<Option<ItemMetadata>, failure::Error> {
         let conn = Store::open_db(&self._store_path)?;
-        let hdr_json: String = match conn.query_row(
-            "select EncryptionHeader from Items where Address = ?;",
+        let md_json: String = match conn.query_row(
+            "select Metadata from Items where Address = ?;",
             &[format!("{}", addr)],
             |row| row.get(0),
         ) {
-            Ok(hdr_json) => hdr_json,
+            Ok(md_json) => md_json,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let hdr = serde_json::from_str(&hdr_json)?;
+        let hdr = serde_json::from_str(&md_json)?;
         Ok(hdr)
     }
 

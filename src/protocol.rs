@@ -1,5 +1,6 @@
 use super::address::*;
 use super::crypto;
+use super::store;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
@@ -26,9 +27,8 @@ pub struct AckSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CommitSend {
-    pub header: crypto::VersionedEncryptionHeader,
-    pub root: Address,
-    // TODO signature.
+    pub address: Address,
+    pub metadata: store::ItemMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -41,7 +41,7 @@ pub struct RequestData {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckRequestData {
-    pub header: Option<crypto::VersionedEncryptionHeader>,
+    pub metadata: Option<store::ItemMetadata>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -198,11 +198,14 @@ mod tests {
                 gc_generation: "blah".to_owned(),
             }),
             Packet::CommitSend(CommitSend {
-                root: Address::default(),
-                header: {
-                    let master_key = keys::MasterKey::gen();
-                    let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    ectx.encryption_header()
+                address: Address::default(),
+                metadata: store::ItemMetadata {
+                    tree_height: 3,
+                    encrypt_header: {
+                        let master_key = keys::MasterKey::gen();
+                        let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
+                        ectx.encryption_header()
+                    },
                 },
             }),
             Packet::Chunk(Chunk {
@@ -213,10 +216,13 @@ mod tests {
                 root: Address::default(),
             }),
             Packet::AckRequestData(AckRequestData {
-                header: {
+                metadata: {
                     let master_key = keys::MasterKey::gen();
                     let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    Some(ectx.encryption_header())
+                    Some(store::ItemMetadata {
+                        tree_height: 1234,
+                        encrypt_header: ectx.encryption_header(),
+                    })
                 },
             }),
         ];
