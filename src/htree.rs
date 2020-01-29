@@ -3,7 +3,7 @@ use super::hydrogen;
 use super::rollsum;
 use failure::Fail;
 
-// XXX consider making 1 byte once we have real data.
+// XXX consider making 1 byte once we have real data on tree heights.
 const HDR_SZ: usize = 2;
 
 // The minimum chunk size is enough for 2 addresses and a header.
@@ -248,6 +248,15 @@ impl<'a> TreeReader<'a> {
 
     pub fn get_chunk(&mut self, a: &Address) -> Result<Vec<u8>, failure::Error> {
         self.source.get_chunk(*a)
+    }
+}
+
+impl<F> Sink for F
+where
+    F: FnMut(Address, Vec<u8>) -> Result<(), failure::Error>,
+{
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
+        self(addr, data)
     }
 }
 

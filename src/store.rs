@@ -3,7 +3,6 @@ use super::chunk_storage;
 use super::crypto;
 use super::fsutil;
 use super::hex;
-use super::htree;
 use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
@@ -257,18 +256,6 @@ impl Store {
 
     pub fn sync(&mut self) -> Result<(), failure::Error> {
         self.storage_engine.sync()
-    }
-}
-
-impl htree::Sink for Store {
-    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
-        self.add_chunk(addr, data)
-    }
-}
-
-impl htree::Source for Store {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
-        self.get_chunk(addr)
     }
 }
 

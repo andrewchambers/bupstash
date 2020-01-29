@@ -1,3 +1,4 @@
+use super::address;
 use super::hydrogen;
 use super::keys;
 use failure::bail;
@@ -60,6 +61,11 @@ impl EncryptContext {
     #[inline(always)]
     pub fn encrypt_chunk(&self, pt: &[u8], ct: &mut [u8]) {
         hydrogen::secretbox_encrypt(ct, pt, 0, *b"_chunk_\0", &self.session_tx_key)
+    }
+
+    #[inline(always)]
+    pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
+        address::Address::from_bytes(&hydrogen::hash_with_key(pt, *b"_address", &self.hash_key))
     }
 
     pub fn encryption_header(&self) -> VersionedEncryptionHeader {
