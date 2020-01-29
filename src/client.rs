@@ -1,3 +1,4 @@
+use super::address;
 use super::chunker;
 use super::crypto;
 use super::htree;
@@ -9,7 +10,7 @@ pub fn send(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     data: &mut dyn std::io::Read,
-) -> Result<(), failure::Error> {
+) -> Result<address::Address, failure::Error> {
     match read_packet(r)? {
         Packet::ServerInfo(info) => {
             if info.protocol != "0" {
@@ -45,10 +46,12 @@ pub fn send(
 
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
 
+    let root_address: address::Address;
+
     loop {
         match data.read(&mut buf) {
             Ok(0) => {
-                let root_address = tw.finish()?;
+                root_address = tw.finish()?;
                 write_packet(
                     w,
                     &Packet::CommitSend(CommitSend {
@@ -77,7 +80,7 @@ pub fn send(
     }
 
     match read_packet(r)? {
-        Packet::AckCommit(_) => Ok(()),
+        Packet::AckCommit(_) => Ok(root_address),
         _ => failure::bail!("protocol error, expected begin ack packet"),
     }
 }

@@ -149,7 +149,15 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         failure::bail!("please set --to or the env var ARCHIVIST_SEND_TO_URI");
     };
 
-    let _encrypt_ctx = crypto::EncryptContext::new(&key);
+    let mut data = if matches.opt_present("file") {
+        let f = matches.opt_str("file").unwrap();
+        let f = std::fs::File::open(f)?;
+        f
+    } else {
+        failure::bail!("please set --file to the data you are sending.")
+    };
+
+    let encrypt_ctx = crypto::EncryptContext::new(&key);
 
     let mut serve_cmd_args = if to.starts_with('/') {
         vec!["archivist".to_owned(), "serve".to_owned(), to]
@@ -192,8 +200,12 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         Err(err) => return Err(err.context("error spawning remote serve command").into()),
     };
 
-    let _serve_out = serve_proc.stdout.as_mut();
-    let _serve_in = serve_proc.stdin.as_mut();
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    let addr = client::send(&encrypt_ctx, &mut serve_out, &mut serve_in, &mut data)?;
+
+    println!("{}", addr);
 
     Ok(())
 }
