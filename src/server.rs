@@ -1,3 +1,5 @@
+use super::address;
+use super::htree;
 use super::protocol::*;
 use super::store;
 
@@ -21,6 +23,10 @@ pub fn serve(
         Packet::BeginSend(_) => {
             let mut store = store::Store::open(&cfg.store_path)?;
             recv(&mut store, r, w)
+        }
+        Packet::RequestData(req) => {
+            let mut store = store::Store::open(&cfg.store_path)?;
+            send(&mut store, req.root, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -56,6 +62,44 @@ fn recv(
                     "protocol error, unexpected packet kind"
                 ))
             }
+        }
+    }
+
+    Ok(())
+}
+
+fn send(
+    store: &mut store::Store,
+    address: address::Address,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    match store.lookup_item_by_address(address)? {
+        Some(hdr) => write_packet(
+            w,
+            &Packet::AckRequestData(AckRequestData { header: Some(hdr) }),
+        )?,
+        None => {
+            write_packet(w, &Packet::AckRequestData(AckRequestData { header: None }))?;
+            return Ok(());
+        }
+    };
+
+    let mut tr = htree::TreeReader::new(store);
+    tr.push_addr(address)?;
+
+    loop {
+        match tr.next_addr()? {
+            Some((addr, _)) => {
+                let chunk_data = tr.get_chunk(&addr)?;
+                write_packet(
+                    w,
+                    &Packet::Chunk(Chunk {
+                        address: addr,
+                        data: chunk_data,
+                    }),
+                )?;
+            }
+            None => break,
         }
     }
 

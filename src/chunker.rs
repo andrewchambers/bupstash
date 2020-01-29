@@ -38,19 +38,22 @@ impl RollsumChunker {
     }
 
     pub fn add_bytes(&mut self, buf: &[u8]) -> (usize, Option<Vec<u8>>) {
+        debug_assert!(self.cur_vec.len() < self.max_sz);
+
         let mut n_bytes = buf.len();
+
         if (n_bytes + self.cur_vec.len()) > self.max_sz {
             let overshoot = (n_bytes + self.cur_vec.len()) - self.max_sz;
             n_bytes -= overshoot;
             debug_assert!(self.cur_vec.len() + n_bytes <= self.max_sz);
         }
-        if self.spare_capacity() < buf.len() {
+        if self.spare_capacity() < n_bytes {
             let mut growth = self.max_sz / 3;
             if self.cur_vec.capacity() + growth > self.max_sz {
                 growth = self.max_sz - self.cur_vec.capacity();
             }
             self.cur_vec.reserve(growth);
-            debug_assert!(self.cur_vec.capacity() + growth <= self.max_sz);
+            debug_assert!(self.cur_vec.capacity() <= self.max_sz);
         }
         let mut n_added = 0;
         for b in buf[0..n_bytes].iter() {
@@ -65,12 +68,8 @@ impl RollsumChunker {
         (n_added, None)
     }
 
-    pub fn finish(self) -> Option<Vec<u8>> {
-        if self.cur_vec.is_empty() {
-            None
-        } else {
-            Some(self.cur_vec)
-        }
+    pub fn finish(self) -> Vec<u8> {
+        self.cur_vec
     }
 }
 
@@ -94,8 +93,5 @@ fn test_add_bytes() {
         v => panic!("{:?}", v),
     }
 
-    match ch.finish() {
-        Some(v) => assert_eq!(v, b"c"),
-        v => panic!("{:?}", v),
-    }
+    assert_eq!(ch.finish(), b"c");
 }

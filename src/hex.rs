@@ -38,10 +38,11 @@ pub fn decode_string(from: &str, to: &mut [u8]) -> Result<(), HexError> {
 }
 
 pub fn easy_decode_string(from: &str) -> Result<Vec<u8>, HexError> {
-    let mut v = Vec::<u8>::with_capacity(from.len() / 2);
+    let n = from.len() / 2;
+    let mut v = Vec::<u8>::with_capacity(n);
     // Safe because <u8> is a primitive type.
     // and v definitely has capacity for it's own capacity.
-    unsafe { v.set_len(v.capacity()) };
+    unsafe { v.set_len(n) };
     match decode_string(&from, &mut v) {
         Ok(()) => Ok(v),
         Err(e) => Err(e),

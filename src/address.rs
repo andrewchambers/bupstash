@@ -20,6 +20,15 @@ impl Address {
         Address { bytes: *bytes }
     }
 
+    pub fn from_str(s: &str) -> Result<Address, failure::Error> {
+        if s.len() != ADDRESS_SZ * 2 {
+            failure::bail!("invalid address '{}', length is not {} ", s, ADDRESS_SZ * 2);
+        }
+        let mut a = Address::default();
+        hex::decode_string(s, &mut a.bytes)?;
+        Ok(a)
+    }
+
     pub fn as_hex_addr(&self) -> HexAddress {
         let mut result = HexAddress::default();
         hex::encode(&self.bytes, &mut result.bytes);

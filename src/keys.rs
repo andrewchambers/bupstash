@@ -59,6 +59,13 @@ impl Key {
         let k: Key = serde_json::from_str(&contents)?;
         Ok(k)
     }
+
+    pub fn master_key_id(&self) -> [u8; KEYID_SZ] {
+        match self {
+            Key::MasterKeyV1(k) => k.id,
+            Key::SendKeyV1(k) => k.master_key_id,
+        }
+    }
 }
 
 fn keyid_gen() -> [u8; KEYID_SZ] {

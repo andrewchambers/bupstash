@@ -12,9 +12,9 @@ pub const SENSIBLE_ADDR_MAX_CHUNK_SIZE: usize = HDR_SZ + 30000 * ADDRESS_SZ;
 
 #[derive(Debug, Fail)]
 pub enum HTreeError {
-    #[fail(display = "htree has corrupt or tampered data")]
+    #[fail(display = "corrupt or tampered data")]
     CorruptOrTamperedDataError,
-    #[fail(display = "htree is missing data")]
+    #[fail(display = "missing data")]
     DataMissing,
 }
 
@@ -24,6 +24,34 @@ pub trait Sink {
 
 pub trait Source {
     fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error>;
+}
+
+impl<F> Sink for F
+where
+    F: FnMut(Address, Vec<u8>) -> Result<(), failure::Error>,
+{
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
+        self(addr, data)
+    }
+}
+
+use std::collections::HashMap;
+
+impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
+    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
+        self.insert(addr, data);
+        Ok(())
+    }
+}
+
+impl<S: ::std::hash::BuildHasher> Source for HashMap<Address, Vec<u8>, S> {
+    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+        if let Some(v) = self.get(&addr) {
+            Ok(v.clone())
+        } else {
+            Err(HTreeError::DataMissing.into())
+        }
+    }
 }
 
 pub struct TreeWriter<'a> {
@@ -142,7 +170,11 @@ impl<'a> TreeWriter<'a> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
-        assert!(self.tree_blocks.len() > 1 || self.tree_blocks[0].len() >= HDR_SZ + ADDRESS_SZ);
+        assert!(
+            self.tree_blocks.len() > 1
+                || ((self.tree_blocks.len() == 1)
+                    && self.tree_blocks[0].len() >= HDR_SZ + ADDRESS_SZ)
+        );
         Ok(self.finish_level(0)?)
     }
 }
@@ -189,6 +221,19 @@ impl<'a> TreeReader<'a> {
         self.read_offsets.push(0);
         let height = self.next_be_16()?;
         self.tree_heights.push(height);
+        // We can verify the hash of nodes that are not encrypted here as
+        // the address does not have a key. You need the decryption key
+        // in order to
+        if height != 0 {
+            if addr
+                != Address::from_bytes(&hydrogen::hash(
+                    &self.tree_blocks[self.tree_blocks.len() - 1],
+                    *b"_htree_\0",
+                ))
+            {
+                return Err(HTreeError::CorruptOrTamperedDataError.into());
+            }
+        }
         Ok(())
     }
 
@@ -248,34 +293,6 @@ impl<'a> TreeReader<'a> {
 
     pub fn get_chunk(&mut self, a: &Address) -> Result<Vec<u8>, failure::Error> {
         self.source.get_chunk(*a)
-    }
-}
-
-impl<F> Sink for F
-where
-    F: FnMut(Address, Vec<u8>) -> Result<(), failure::Error>,
-{
-    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
-        self(addr, data)
-    }
-}
-
-use std::collections::HashMap;
-
-impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
-    fn add_chunk(&mut self, addr: Address, data: Vec<u8>) -> Result<(), failure::Error> {
-        self.insert(addr, data);
-        Ok(())
-    }
-}
-
-impl<S: ::std::hash::BuildHasher> Source for HashMap<Address, Vec<u8>, S> {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
-        if let Some(v) = self.get(&addr) {
-            Ok(v.clone())
-        } else {
-            Err(HTreeError::DataMissing.into())
-        }
     }
 }
 

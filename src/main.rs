@@ -122,47 +122,11 @@ fn search_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
-    let mut opts = default_cli_opts();
-
-    opts.optopt("k", "key", "Encryption key.", "PATH");
-    opts.optopt("", "to", "URI of repository to save data info.", "URI");
-    opts.optopt("f", "file", "Save a file.", "PATH");
-
-    let matches = default_parse_opts(opts, &args[..]);
-
-    let key = if matches.opt_present("to") {
-        matches.opt_str("to").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
-    };
-
-    let key = keys::Key::load_from_file(&key)?;
-
-    let to = if matches.opt_present("to") {
-        matches.opt_str("to").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_TO_URI") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --to or the env var ARCHIVIST_SEND_TO_URI");
-    };
-
-    let mut data = if matches.opt_present("file") {
-        let f = matches.opt_str("file").unwrap();
-        let f = std::fs::File::open(f)?;
-        f
-    } else {
-        failure::bail!("please set --file to the data you are sending.")
-    };
-
-    let encrypt_ctx = crypto::EncryptContext::new(&key);
-
-    let mut serve_cmd_args = if to.starts_with('/') {
-        vec!["archivist".to_owned(), "serve".to_owned(), to]
-    } else if to.starts_with("ssh://") {
-        let u = url::Url::parse(&to)?;
+fn uri_to_serve_cmd_args(u: &str) -> Result<Vec<String>, failure::Error> {
+    let serve_cmd_args = if u.starts_with('/') {
+        vec!["archivist".to_owned(), "serve".to_owned(), u.to_string()]
+    } else if u.starts_with("ssh://") {
+        let u = url::Url::parse(&u)?;
 
         let mut args = vec!["ssh".to_owned()];
 
@@ -176,7 +140,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         };
         match u.host() {
             Some(h) => args.push(h.to_string()),
-            None => failure::bail!("'to' ssh uri does not have a valid host"),
+            None => failure::bail!("ssh uri does not have a valid host"),
         };
 
         args.push("--".to_owned());
@@ -185,15 +149,57 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         args.push(u.path().to_owned());
         args
     } else {
-        failure::bail!("don't understand 'to' respository uri: {:?}", to);
+        failure::bail!("don't understand respository uri: {:?}", u);
     };
+
+    Ok(serve_cmd_args)
+}
+
+fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+
+    opts.optopt("k", "key", "Encryption key.", "PATH");
+    opts.optopt("", "to", "URI of repository to save data info.", "URI");
+    opts.optopt("f", "file", "Save a file.", "PATH");
+
+    let matches = default_parse_opts(opts, &args[..]);
+
+    let key = if matches.opt_present("key") {
+        matches.opt_str("key").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
+    };
+
+    let key = keys::Key::load_from_file(&key)?;
+
+    let to = if matches.opt_present("to") {
+        matches.opt_str("to").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_REMOTE_URI") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --to or the env var ARCHIVIST_REMOTE_URI");
+    };
+
+    let mut data = if matches.opt_present("file") {
+        let f = matches.opt_str("file").unwrap();
+        let f = std::fs::File::open(f)?;
+        f
+    } else {
+        failure::bail!("please set --file to the data you are sending.")
+    };
+
+    let encrypt_ctx = crypto::EncryptContext::new(&key);
+
+    let mut serve_cmd_args = uri_to_serve_cmd_args(&to)?;
 
     let bin = serve_cmd_args.remove(0);
     let mut serve_proc = match std::process::Command::new(bin)
         .args(serve_cmd_args)
         .stderr(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
@@ -206,6 +212,76 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let addr = client::send(&encrypt_ctx, &mut serve_out, &mut serve_in, &mut data)?;
 
     println!("{}", addr);
+
+    Ok(())
+}
+
+fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+
+    opts.optopt("k", "key", "Decryption key.", "PATH");
+    opts.optopt("", "from", "URI of repository to save data info.", "URI");
+    opts.optopt("a", "address", "Address of data to fetch.", "HASH");
+
+    let matches = default_parse_opts(opts, &args[..]);
+
+    let key = if matches.opt_present("key") {
+        matches.opt_str("key").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
+    };
+
+    let key = keys::Key::load_from_file(&key)?;
+
+    let key = match key {
+        keys::Key::MasterKeyV1(mk) => mk,
+        _ => failure::bail!("the provided key is a not a master decryption key"),
+    };
+
+    let to = if matches.opt_present("from") {
+        matches.opt_str("from").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_REMOTE_URI") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --from or the env var ARCHIVIST_REMOTE_URI");
+    };
+
+    let address = if matches.opt_present("address") {
+        let addr_str = matches.opt_str("address").unwrap();
+        match address::Address::from_str(&addr_str) {
+            Ok(addr) => addr,
+            Err(err) => return Err(err.context("--address invalid").into()),
+        }
+    } else {
+        failure::bail!("please set --address or --id.")
+    };
+
+    let mut serve_cmd_args = uri_to_serve_cmd_args(&to)?;
+
+    let bin = serve_cmd_args.remove(0);
+    let mut serve_proc = match std::process::Command::new(bin)
+        .args(serve_cmd_args)
+        .stderr(std::process::Stdio::inherit())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(err) => return Err(err.context("error spawning remote serve command").into()),
+    };
+
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::request_data_stream(
+        &key,
+        address,
+        &mut serve_out,
+        &mut serve_in,
+        &mut std::io::stdout(),
+    )?;
 
     Ok(())
 }
@@ -249,6 +325,7 @@ fn main() {
         "new-send-key" => new_send_key_main(args),
         "search" => search_main(args),
         "send" => send_main(args),
+        "get" => get_main(args),
         "serve" => serve_main(args),
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();

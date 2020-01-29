@@ -176,7 +176,7 @@ impl Engine for LocalStorage {
             }
         }
         if !all_ok {
-            // FIXME: real io error.
+            // FIXME: get real io error context/info.
             return Err(failure::format_err!("io error syncing data"));
         }
         fsutil::sync_dir(&self.data_dir)?;

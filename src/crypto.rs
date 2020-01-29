@@ -59,8 +59,13 @@ impl EncryptContext {
     }
 
     #[inline(always)]
-    pub fn encrypt_chunk(&self, pt: &[u8], ct: &mut [u8]) {
-        hydrogen::secretbox_encrypt(ct, pt, 0, *b"_chunk_\0", &self.session_tx_key)
+    pub fn encrypt_chunk(&self, pt: &[u8]) -> Vec<u8> {
+        let n = pt.len() + hydrogen::SECRETBOX_HEADERBYTES;
+        let mut ct = Vec::with_capacity(n);
+        // This is safe as u8 is primitive, and capacity is valid by definition.
+        unsafe { ct.set_len(n) };
+        hydrogen::secretbox_encrypt(&mut ct, pt, 0, *b"_chunk_\0", &self.session_tx_key);
+        ct
     }
 
     #[inline(always)]
@@ -119,8 +124,21 @@ impl DecryptContext {
     }
 
     #[inline(always)]
-    pub fn decrypt_chunk(&self, ct: &[u8], pt: &mut [u8]) -> bool {
-        hydrogen::secretbox_decrypt(pt, ct, 0, *b"_chunk_\0", &self.session_rx_key)
+    pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
+        address::Address::from_bytes(&hydrogen::hash_with_key(pt, *b"_address", &self.hash_key))
+    }
+
+    #[inline(always)]
+    pub fn decrypt_chunk(&self, ct: &[u8]) -> Option<Vec<u8>> {
+        let n = ct.len() - hydrogen::SECRETBOX_HEADERBYTES;
+        let mut pt = Vec::with_capacity(n);
+        // This us safe ai u8 is primitive, and capacity is valid by definition.
+        unsafe { pt.set_len(n) };
+        if hydrogen::secretbox_decrypt(&mut pt, ct, 0, *b"_chunk_\0", &self.session_rx_key) {
+            Some(pt)
+        } else {
+            None
+        }
     }
 }
 
@@ -134,11 +152,10 @@ mod tests {
         let ectx = EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
-        let mut pt = [1, 2, 3];
-        let mut ct = [0; hydrogen::SECRETBOX_HEADERBYTES + 3];
-        ectx.encrypt_chunk(&pt, &mut ct);
-        assert!(dctx.decrypt_chunk(&ct, &mut pt));
-        assert_eq!(pt, [1, 2, 3]);
+        let pt = [1, 2, 3];
+        let ct = ectx.encrypt_chunk(&pt);
+        let pt2 = dctx.decrypt_chunk(&ct).unwrap();
+        assert_eq!(pt2, [1, 2, 3]);
     }
 
     #[test]
@@ -148,10 +165,9 @@ mod tests {
         let ectx = EncryptContext::new(&keys::Key::SendKeyV1(send_key));
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
-        let mut pt = [1, 2, 3];
-        let mut ct = [0; hydrogen::SECRETBOX_HEADERBYTES + 3];
-        ectx.encrypt_chunk(&pt, &mut ct);
-        assert!(dctx.decrypt_chunk(&ct, &mut pt));
-        assert_eq!(pt, [1, 2, 3]);
+        let pt = [1, 2, 3];
+        let ct = ectx.encrypt_chunk(&pt);
+        let pt2 = dctx.decrypt_chunk(&ct).unwrap();
+        assert_eq!(pt2, [1, 2, 3]);
     }
 }

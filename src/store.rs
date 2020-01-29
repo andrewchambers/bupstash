@@ -3,6 +3,7 @@ use super::chunk_storage;
 use super::crypto;
 use super::fsutil;
 use super::hex;
+use super::htree;
 use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
@@ -148,7 +149,7 @@ impl Store {
             rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
         )?;
         tx.execute(
-            "create table Items(Address, MasterKeyID, EncryptionHeader);",
+            "create table Items(Address, EncryptionHeader);",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -233,12 +234,8 @@ impl Store {
         let tx = conn.transaction()?;
 
         tx.execute(
-            "insert into Items(Address, MasterKeyID, EncryptionHeader) values(?, ?, ?);",
-            &[
-                format!("{}", addr),
-                hex::easy_encode_to_string(&hdr.master_key_id()),
-                serde_json::to_string(&hdr)?,
-            ],
+            "insert into Items(Address, EncryptionHeader) values(?, ?);",
+            &[format!("{}", addr), serde_json::to_string(&hdr)?],
         )?;
 
         tx.commit()?;
@@ -246,16 +243,40 @@ impl Store {
         Ok(())
     }
 
-    pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        self.storage_engine.add_chunk(addr, buf)
+    pub fn lookup_item_by_address(
+        &mut self,
+        addr: Address,
+    ) -> Result<Option<crypto::VersionedEncryptionHeader>, failure::Error> {
+        let conn = Store::open_db(&self._store_path)?;
+        let hdr_json: String = match conn.query_row(
+            "select EncryptionHeader from Items where Address = ?;",
+            &[format!("{}", addr)],
+            |row| row.get(0),
+        ) {
+            Ok(hdr_json) => hdr_json,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let hdr = serde_json::from_str(&hdr_json)?;
+        Ok(hdr)
     }
 
     pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
         self.storage_engine.get_chunk(addr)
     }
 
+    pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+        self.storage_engine.add_chunk(addr, buf)
+    }
+
     pub fn sync(&mut self) -> Result<(), failure::Error> {
         self.storage_engine.sync()
+    }
+}
+
+impl htree::Source for Store {
+    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+        self.get_chunk(addr)
     }
 }
 
