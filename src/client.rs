@@ -5,6 +5,7 @@ use super::htree;
 use super::keys;
 use super::protocol::*;
 use super::rollsum;
+use super::sendlog;
 use super::store;
 
 fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
@@ -21,6 +22,7 @@ fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
 
 pub fn send(
     ctx: &crypto::EncryptContext,
+    send_log: Option<String>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     data: &mut dyn std::io::Read,
@@ -28,14 +30,16 @@ pub fn send(
     handle_server_info(r)?;
     write_packet(w, &Packet::BeginSend(BeginSend {}))?;
 
-    match read_packet(r)? {
-        Packet::AckSend(_) => {
-            // XXX TODO check gc generation matches.
-            // abort send if the gc generation does not match.
-            // We must restart transmission after resetting our send log.
-        }
+    let send_log = match read_packet(r)? {
+        Packet::AckSend(ack) => match send_log {
+            Some(send_log) => Some(sendlog::SendLog::open(
+                &std::path::PathBuf::from(send_log),
+                &ack.gc_generation,
+            )?),
+            None => None,
+        },
         _ => failure::bail!("protocol error, expected begin ack packet"),
-    }
+    };
 
     let mut sendfn = |address, data| -> std::result::Result<(), failure::Error> {
         write_packet(w, &Packet::Chunk(Chunk { address, data }))?;

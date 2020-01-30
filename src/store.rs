@@ -333,6 +333,8 @@ impl Store {
             }
         }
         tx.commit()?;
+        // We MUST commit the new gc generation before we start
+        // deleting any chunks.
 
         let stats = self.storage_engine.gc(&|addr| reachable.contains(&addr))?;
         Ok(stats)

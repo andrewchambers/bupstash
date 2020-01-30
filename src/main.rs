@@ -10,6 +10,7 @@ pub mod hydrogen;
 pub mod keys;
 pub mod protocol;
 pub mod rollsum;
+pub mod sendlog;
 pub mod server;
 pub mod store;
 pub mod tquery;
@@ -190,6 +191,12 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     opts.optopt("f", "file", "Save a file.", "PATH");
+    opts.optopt(
+        "",
+        "send-log",
+        "Use send log to avoid resending data that was sent previously.",
+        "PATH",
+    );
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -217,7 +224,13 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    let addr = client::send(&encrypt_ctx, &mut serve_out, &mut serve_in, &mut data)?;
+    let addr = client::send(
+        &encrypt_ctx,
+        matches.opt_str("send-log"),
+        &mut serve_out,
+        &mut serve_in,
+        &mut data,
+    )?;
 
     println!("{}", addr);
 
