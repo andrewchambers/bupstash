@@ -1,5 +1,6 @@
 use super::address::*;
 use super::fsutil;
+use super::store;
 use std::path::PathBuf;
 
 pub trait Engine {
@@ -15,7 +16,10 @@ pub trait Engine {
     // Call should_keep on each item in chunk storage.
     // if it returns false, delete the data associated with the address.
     // Returns the number of chunks removed.
-    fn gc(&mut self, should_keep: &dyn Fn(Address) -> bool) -> Result<usize, failure::Error>;
+    fn gc(
+        &mut self,
+        should_keep: &dyn Fn(Address) -> bool,
+    ) -> Result<store::GCStats, failure::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name. The write is not guaranteed to be completed until
@@ -160,15 +164,29 @@ impl Engine for LocalStorage {
         Ok(p?)
     }
 
-    fn gc(&mut self, should_keep: &dyn Fn(Address) -> bool) -> Result<usize, failure::Error> {
-        let mut n_removed = 0;
+    fn gc(
+        &mut self,
+        should_keep: &dyn Fn(Address) -> bool,
+    ) -> Result<store::GCStats, failure::Error> {
+        let mut stats = store::GCStats {
+            chunks_deleted: 0,
+            bytes_freed: 0,
+            bytes_remaining: 0,
+        };
         for e in std::fs::read_dir(&self.data_dir)? {
             let e = e?;
             match Address::from_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
                     if !should_keep(addr) {
+                        if let Ok(md) = e.metadata() {
+                            stats.bytes_freed += md.len() as usize
+                        }
                         std::fs::remove_file(e.path())?;
-                        n_removed += 1;
+                        stats.chunks_deleted += 1;
+                    } else {
+                        if let Ok(md) = e.metadata() {
+                            stats.bytes_remaining += md.len() as usize
+                        }
                     }
                 }
                 Err(_) => {
@@ -177,7 +195,7 @@ impl Engine for LocalStorage {
                 }
             }
         }
-        Ok(n_removed)
+        Ok(stats)
     }
 
     fn get_chunk_async(

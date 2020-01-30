@@ -167,11 +167,14 @@ pub fn request_data_stream(
     Ok(())
 }
 
-pub fn gc(r: &mut dyn std::io::Read, w: &mut dyn std::io::Write) -> Result<usize, failure::Error> {
+pub fn gc(
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<store::GCStats, failure::Error> {
     handle_server_info(r)?;
     write_packet(w, &Packet::StartGC(StartGC {}))?;
     match read_packet(r)? {
-        Packet::GCComplete(gccomplete) => Ok(gccomplete.n_chunks_deleted),
+        Packet::GCComplete(gccomplete) => Ok(gccomplete.stats),
         _ => failure::bail!("protocol error, expected gc complete packet"),
     }
 }

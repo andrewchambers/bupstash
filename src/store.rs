@@ -50,6 +50,13 @@ pub struct ItemMetadata {
     pub encrypt_header: crypto::VersionedEncryptionHeader,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct GCStats {
+    pub chunks_deleted: usize,
+    pub bytes_freed: usize,
+    pub bytes_remaining: usize,
+}
+
 struct FileLock {
     f: fs::File,
 }
@@ -288,7 +295,7 @@ impl Store {
         self.storage_engine.sync()
     }
 
-    pub fn gc(&mut self) -> Result<usize, failure::Error> {
+    pub fn gc(&mut self) -> Result<GCStats, failure::Error> {
         match self.open_mode {
             OpenMode::Exclusive => (),
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
@@ -327,8 +334,8 @@ impl Store {
         }
         tx.commit()?;
 
-        let n_chunks_deleted = self.storage_engine.gc(&|addr| reachable.contains(&addr))?;
-        Ok(n_chunks_deleted)
+        let stats = self.storage_engine.gc(&|addr| reachable.contains(&addr))?;
+        Ok(stats)
     }
 }
 

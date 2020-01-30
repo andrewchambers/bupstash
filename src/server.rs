@@ -124,8 +124,7 @@ fn send(
 }
 
 fn gc(store: &mut store::Store, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    let n_chunks_deleted = store.gc()?;
-
-    write_packet(w, &Packet::GCComplete(GCComplete { n_chunks_deleted }))?;
+    let stats = store.gc()?;
+    write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
     Ok(())
 }

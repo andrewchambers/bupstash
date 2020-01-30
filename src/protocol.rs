@@ -49,7 +49,7 @@ pub struct StartGC {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct GCComplete {
-    pub n_chunks_deleted: usize,
+    pub stats: store::GCStats,
 }
 
 #[derive(Debug, PartialEq)]
@@ -260,7 +260,11 @@ mod tests {
             }),
             Packet::StartGC(StartGC {}),
             Packet::GCComplete(GCComplete {
-                n_chunks_deleted: 123,
+                stats: store::GCStats {
+                    chunks_deleted: 123,
+                    bytes_freed: 345,
+                    bytes_remaining: 678,
+                },
             }),
         ];
 

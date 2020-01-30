@@ -290,14 +290,13 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-
     // XXX TODO more gc stats.
     // Especially interested in repository size and also
     // how much space was freed.
-    let num_chunks_deleted = client::gc(&mut serve_out, &mut serve_in)?;
-
-    println!("deleted {:?} chunk(s)", num_chunks_deleted);
-
+    let stats = client::gc(&mut serve_out, &mut serve_in)?;
+    println!("{:?} chunks deleted", stats.chunks_deleted);
+    println!("{:?} bytes freed", stats.bytes_freed);
+    println!("{:?} bytes remaining", stats.bytes_remaining);
     Ok(())
 }
 
