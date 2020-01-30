@@ -202,7 +202,7 @@ impl Store {
 
         let gc_lock = match open_mode {
             OpenMode::Shared => FileLock::get_shared(&Store::gc_lock_path(&store_path))?,
-            OpenMode::Exclusive => FileLock::get_shared(&Store::gc_lock_path(&store_path))?,
+            OpenMode::Exclusive => FileLock::get_exclusive(&Store::gc_lock_path(&store_path))?,
         };
 
         let conn = Store::open_db(store_path)?;
