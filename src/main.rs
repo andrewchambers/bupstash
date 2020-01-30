@@ -122,11 +122,23 @@ fn search_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn uri_to_serve_cmd_args(u: &str) -> Result<Vec<String>, failure::Error> {
-    let serve_cmd_args = if u.starts_with('/') {
-        vec!["archivist".to_owned(), "serve".to_owned(), u.to_string()]
-    } else if u.starts_with("ssh://") {
-        let u = url::Url::parse(&u)?;
+fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
+    let store = if matches.opt_present("repository") {
+        matches.opt_str("repository").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_REPOSITORY") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
+    };
+
+    let mut serve_cmd_args = if store.starts_with('/') {
+        vec![
+            "archivist".to_owned(),
+            "serve".to_owned(),
+            store.to_string(),
+        ]
+    } else if store.starts_with("ssh://") {
+        let u = url::Url::parse(&store)?;
 
         let mut args = vec!["ssh".to_owned()];
 
@@ -149,17 +161,34 @@ fn uri_to_serve_cmd_args(u: &str) -> Result<Vec<String>, failure::Error> {
         args.push(u.path().to_owned());
         args
     } else {
-        failure::bail!("don't understand respository uri: {:?}", u);
+        failure::bail!("don't understand respository uri: {:?}", store);
     };
 
-    Ok(serve_cmd_args)
+    let bin = serve_cmd_args.remove(0);
+    let serve_proc = match std::process::Command::new(bin)
+        .args(serve_cmd_args)
+        .stderr(std::process::Stdio::inherit())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(err) => return Err(err.context("error spawning serve command").into()),
+    };
+
+    Ok(serve_proc)
 }
 
 fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
     opts.optopt("k", "key", "Encryption key.", "PATH");
-    opts.optopt("", "to", "URI of repository to save data info.", "URI");
+    opts.optopt(
+        "r",
+        "repository",
+        "URI of repository to save data info.",
+        "REPO",
+    );
     opts.optopt("f", "file", "Save a file.", "PATH");
 
     let matches = default_parse_opts(opts, &args[..]);
@@ -174,14 +203,6 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = keys::Key::load_from_file(&key)?;
 
-    let to = if matches.opt_present("to") {
-        matches.opt_str("to").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_REMOTE_URI") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --to or the env var ARCHIVIST_REMOTE_URI");
-    };
-
     let mut data = if matches.opt_present("file") {
         let f = matches.opt_str("file").unwrap();
         let f = std::fs::File::open(f)?;
@@ -192,20 +213,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let encrypt_ctx = crypto::EncryptContext::new(&key);
 
-    let mut serve_cmd_args = uri_to_serve_cmd_args(&to)?;
-
-    let bin = serve_cmd_args.remove(0);
-    let mut serve_proc = match std::process::Command::new(bin)
-        .args(serve_cmd_args)
-        .stderr(std::process::Stdio::inherit())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(err) => return Err(err.context("error spawning remote serve command").into()),
-    };
-
+    let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
@@ -220,7 +228,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
     opts.optopt("k", "key", "Decryption key.", "PATH");
-    opts.optopt("", "from", "URI of repository to save data info.", "URI");
+    opts.optopt(
+        "r",
+        "repository",
+        "URI of repository to fetch data from.",
+        "REPO",
+    );
     opts.optopt("a", "address", "Address of data to fetch.", "HASH");
 
     let matches = default_parse_opts(opts, &args[..]);
@@ -240,14 +253,6 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("the provided key is a not a master decryption key"),
     };
 
-    let to = if matches.opt_present("from") {
-        matches.opt_str("from").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_REMOTE_URI") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --from or the env var ARCHIVIST_REMOTE_URI");
-    };
-
     let address = if matches.opt_present("address") {
         let addr_str = matches.opt_str("address").unwrap();
         match address::Address::from_str(&addr_str) {
@@ -258,20 +263,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         failure::bail!("please set --address or --id.")
     };
 
-    let mut serve_cmd_args = uri_to_serve_cmd_args(&to)?;
-
-    let bin = serve_cmd_args.remove(0);
-    let mut serve_proc = match std::process::Command::new(bin)
-        .args(serve_cmd_args)
-        .stderr(std::process::Stdio::inherit())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(err) => return Err(err.context("error spawning remote serve command").into()),
-    };
-
+    let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
@@ -282,6 +274,29 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut serve_in,
         &mut std::io::stdout(),
     )?;
+
+    Ok(())
+}
+fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.optopt(
+        "r",
+        "repository",
+        "URI of repository to run the garbage collector upon.",
+        "REPO",
+    );
+    let matches = default_parse_opts(opts, &args[..]);
+
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    // XXX TODO more gc stats.
+    // Especially interested in repository size and also
+    // how much space was freed.
+    let num_chunks_deleted = client::gc(&mut serve_out, &mut serve_in)?;
+
+    println!("deleted {:?} chunk(s)", num_chunks_deleted);
 
     Ok(())
 }
@@ -326,6 +341,7 @@ fn main() {
         "search" => search_main(args),
         "send" => send_main(args),
         "get" => get_main(args),
+        "gc" => gc_main(args),
         "serve" => serve_main(args),
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();

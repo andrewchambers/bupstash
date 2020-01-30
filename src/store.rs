@@ -8,6 +8,7 @@ use super::hydrogen;
 use failure::Fail;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,13 @@ pub enum StorageEngineSpec {
     Local,
 }
 
+pub enum OpenMode {
+    Shared,
+    Exclusive,
+}
+
 pub struct Store {
+    open_mode: OpenMode,
     _store_path: PathBuf,
     _gc_lock: FileLock,
     storage_engine: Box<dyn chunk_storage::Engine>,
@@ -183,10 +190,13 @@ impl Store {
         Ok(conn)
     }
 
-    pub fn open(store_path: &Path) -> Result<Store, failure::Error> {
+    pub fn open(store_path: &Path, open_mode: OpenMode) -> Result<Store, failure::Error> {
         Store::check_store_sane(&store_path)?;
 
-        let gc_lock = FileLock::get_shared(&Store::gc_lock_path(&store_path))?;
+        let gc_lock = match open_mode {
+            OpenMode::Shared => FileLock::get_shared(&Store::gc_lock_path(&store_path))?,
+            OpenMode::Exclusive => FileLock::get_shared(&Store::gc_lock_path(&store_path))?,
+        };
 
         let conn = Store::open_db(store_path)?;
         let v: i32 = conn.query_row(
@@ -216,7 +226,6 @@ impl Store {
             StorageEngineSpec::Local => {
                 let mut data_dir = store_path.to_path_buf();
                 data_dir.push("data");
-
                 // XXX fixme, how many workers do we want?
                 // configurable?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
@@ -224,6 +233,7 @@ impl Store {
         };
 
         Ok(Store {
+            open_mode,
             _store_path: store_path.to_path_buf(),
             _gc_lock: gc_lock,
             gc_generation,
@@ -238,7 +248,6 @@ impl Store {
     ) -> Result<(), failure::Error> {
         let mut conn = Store::open_db(&self._store_path)?;
         let tx = conn.transaction()?;
-
         tx.execute(
             "insert into Items(Address, Metadata) values(?, ?);",
             &[format!("{}", addr), serde_json::to_string(&metadata)?],
@@ -263,8 +272,8 @@ impl Store {
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let hdr = serde_json::from_str(&md_json)?;
-        Ok(hdr)
+        let metadata: ItemMetadata = serde_json::from_str(&md_json)?;
+        Ok(Some(metadata))
     }
 
     pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
@@ -277,6 +286,49 @@ impl Store {
 
     pub fn sync(&mut self) -> Result<(), failure::Error> {
         self.storage_engine.sync()
+    }
+
+    pub fn gc(&mut self) -> Result<usize, failure::Error> {
+        match self.open_mode {
+            OpenMode::Exclusive => (),
+            _ => failure::bail!("unable to collect garbage without an exclusive lock"),
+        }
+
+        let mut reachable: HashSet<Address> = std::collections::HashSet::new();
+        let mut conn = Store::open_db(&self._store_path)?;
+        let tx = conn.transaction()?;
+        {
+            tx.execute(
+                "update ArchivistMeta set value = ? where key = 'gc_generation';",
+                rusqlite::params![new_gc_generation()],
+            )?;
+            let mut stmt = tx.prepare("select Address, Metadata from Items;")?;
+            let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+
+            while let Some(row) = rows.next()? {
+                let addr: String = row.get(0)?;
+                let addr = Address::from_str(&addr)?;
+                let metadata: String = row.get(1)?;
+                let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
+                {
+                    if !reachable.contains(&addr) {
+                        let mut tr = htree::TreeReader::new(self, metadata.tree_height, addr);
+                        while let Some((height, addr)) = tr.next_addr()? {
+                            if !reachable.contains(&addr) {
+                                reachable.insert(addr);
+                                if height != 0 {
+                                    tr.push_addr(height - 1, addr)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+
+        let n_chunks_deleted = self.storage_engine.gc(&|addr| reachable.contains(&addr))?;
+        Ok(n_chunks_deleted)
     }
 }
 
@@ -296,7 +348,7 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
         Store::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let mut store = Store::open(path_buf.as_path()).unwrap();
+        let mut store = Store::open(path_buf.as_path(), OpenMode::Shared).unwrap();
         let addr = Address::default();
         store.add_chunk(addr, vec![1]).unwrap();
         store.sync().unwrap();

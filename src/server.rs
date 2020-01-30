@@ -21,12 +21,16 @@ pub fn serve(
 
     match read_packet(r)? {
         Packet::BeginSend(_) => {
-            let mut store = store::Store::open(&cfg.store_path)?;
+            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Shared)?;
             recv(&mut store, r, w)
         }
         Packet::RequestData(req) => {
-            let mut store = store::Store::open(&cfg.store_path)?;
+            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Shared)?;
             send(&mut store, req.root, w)
+        }
+        Packet::StartGC(_) => {
+            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Exclusive)?;
+            gc(&mut store, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -99,7 +103,10 @@ fn send(
 
     loop {
         match tr.next_addr()? {
-            Some((_, chunk_address)) => {
+            Some((height, chunk_address)) => {
+                if height != 0 {
+                    tr.push_addr(height - 1, chunk_address)?;
+                }
                 let chunk_data = tr.get_chunk(&chunk_address)?;
                 write_packet(
                     w,
@@ -113,5 +120,12 @@ fn send(
         }
     }
 
+    Ok(())
+}
+
+fn gc(store: &mut store::Store, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+    let n_chunks_deleted = store.gc()?;
+
+    write_packet(w, &Packet::GCComplete(GCComplete { n_chunks_deleted }))?;
     Ok(())
 }

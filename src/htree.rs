@@ -176,7 +176,7 @@ impl<'a> TreeReader<'a> {
         tr
     }
 
-    fn push_addr(&mut self, level: usize, addr: Address) -> Result<(), failure::Error> {
+    pub fn push_addr(&mut self, level: usize, addr: Address) -> Result<(), failure::Error> {
         let data = self.source.get_chunk(addr)?;
         if level > 0 && addr != Address::from_bytes(&hydrogen::hash(&data, *b"_htree_\0")) {
             return Err(HTreeError::CorruptOrTamperedDataError.into());
@@ -218,10 +218,6 @@ impl<'a> TreeReader<'a> {
             addr.bytes.clone_from_slice(&remaining[0..ADDRESS_SZ]);
             *read_offset += ADDRESS_SZ;
 
-            if height != 0 {
-                self.push_addr(height - 1, addr)?;
-            }
-
             return Ok(Some((height, addr)));
         }
     }
@@ -229,10 +225,14 @@ impl<'a> TreeReader<'a> {
     pub fn next_chunk(&mut self) -> Result<Option<(Address, Vec<u8>)>, failure::Error> {
         loop {
             match self.next_addr()? {
-                Some((height, a)) => {
+                Some((height, addr)) => {
+                    if height != 0 {
+                        self.push_addr(height - 1, addr)?;
+                    }
+
                     if height == 0 {
-                        let data = self.source.get_chunk(a)?;
-                        return Ok(Some((a, data)));
+                        let data = self.source.get_chunk(addr)?;
+                        return Ok(Some((addr, data)));
                     }
                 }
                 None => {
@@ -394,7 +394,11 @@ mod tests {
 
         loop {
             match tr.next_addr().unwrap() {
-                Some((height, _)) => {
+                Some((height, addr)) => {
+                    if height != 0 {
+                        tr.push_addr(height - 1, addr).unwrap();
+                    }
+
                     count += 1;
                     if height == 0 {
                         leaf_count += 1;

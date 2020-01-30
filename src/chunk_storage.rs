@@ -12,6 +12,11 @@ pub trait Engine {
         addr: Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>>;
 
+    // Call should_keep on each item in chunk storage.
+    // if it returns false, delete the data associated with the address.
+    // Returns the number of chunks removed.
+    fn gc(&mut self, should_keep: &dyn Fn(Address) -> bool) -> Result<usize, failure::Error>;
+
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name. The write is not guaranteed to be completed until
     // after a call to Engine::sync completes without error.
@@ -153,6 +158,26 @@ impl Engine for LocalStorage {
         let p = std::fs::read(self.data_dir.as_path());
         self.data_dir.pop();
         Ok(p?)
+    }
+
+    fn gc(&mut self, should_keep: &dyn Fn(Address) -> bool) -> Result<usize, failure::Error> {
+        let mut n_removed = 0;
+        for e in std::fs::read_dir(&self.data_dir)? {
+            let e = e?;
+            match Address::from_str(&e.file_name().to_string_lossy()) {
+                Ok(addr) => {
+                    if !should_keep(addr) {
+                        std::fs::remove_file(e.path())?;
+                        n_removed += 1;
+                    }
+                }
+                Err(_) => {
+                    // This is not a chunk, so don't count it.
+                    std::fs::remove_file(e.path())?;
+                }
+            }
+        }
+        Ok(n_removed)
     }
 
     fn get_chunk_async(

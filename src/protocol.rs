@@ -1,5 +1,5 @@
 use super::address::*;
-use super::crypto;
+
 use super::store;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -44,6 +44,14 @@ pub struct AckRequestData {
     pub metadata: Option<store::ItemMetadata>,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct StartGC {}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct GCComplete {
+    pub n_chunks_deleted: usize,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Packet {
     ServerInfo(ServerInfo),
@@ -54,6 +62,8 @@ pub enum Packet {
     AckCommit(AckCommit),
     RequestData(RequestData),
     AckRequestData(AckRequestData),
+    StartGC(StartGC),
+    GCComplete(GCComplete),
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
@@ -64,17 +74,26 @@ const PACKET_KIND_COMMIT_SEND: u8 = 4;
 const PACKET_KIND_ACK_COMMIT: u8 = 5;
 const PACKET_KIND_REQUEST_DATA: u8 = 6;
 const PACKET_KIND_ACK_REQUEST_DATA: u8 = 7;
+const PACKET_KIND_START_GC: u8 = 8;
+const PACKET_KIND_GC_COMPLETE: u8 = 9;
+
+fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
+    if let Err(_) = r.read_exact(buf) {
+        failure::bail!("repository disconnected");
+    };
+    Ok(())
+}
 
 pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> {
     let mut hdr: [u8; 5] = [0; 5];
-    r.read_exact(&mut hdr[..])?;
+    read_from_remote(r, &mut hdr[..])?;
     let sz = (hdr[0] as usize) << 24
         | (hdr[1] as usize) << 16
         | (hdr[2] as usize) << 8
         | (hdr[3] as usize);
 
     if sz > MAX_PACKET_SIZE {
-        return Err(failure::format_err!("packet too large"));
+        failure::bail!("packet too large");
     }
 
     let kind = hdr[4];
@@ -85,16 +104,14 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
     unsafe {
         buf.set_len(sz);
     };
-    r.read_exact(&mut buf)?;
+    read_from_remote(r, &mut buf)?;
     let packet = match kind {
         PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_json::from_slice(&buf)?),
         PACKET_KIND_BEGIN_SEND => Packet::BeginSend(serde_json::from_slice(&buf)?),
         PACKET_KIND_ACK_SEND => Packet::AckSend(serde_json::from_slice(&buf)?),
         PACKET_KIND_CHUNK => {
             if buf.len() < ADDRESS_SZ {
-                return Err(failure::format_err!(
-                    "protocol error, chunk smaller than address"
-                ));
+                failure::bail!("protocol error, chunk smaller than address");
             }
 
             let mut address = Address { bytes: [0; 32] };
@@ -107,6 +124,8 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_ACK_COMMIT => Packet::AckCommit(serde_json::from_slice(&buf)?),
         PACKET_KIND_REQUEST_DATA => Packet::RequestData(serde_json::from_slice(&buf)?),
         PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(serde_json::from_slice(&buf)?),
+        PACKET_KIND_START_GC => Packet::StartGC(serde_json::from_slice(&buf)?),
+        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(serde_json::from_slice(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -125,6 +144,17 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure
 
 pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), failure::Error> {
     match pkt {
+        Packet::Chunk(ref v) => {
+            send_hdr(
+                w,
+                PACKET_KIND_CHUNK,
+                (v.data.len() + ADDRESS_SZ).try_into()?,
+            )?;
+            w.write_all(&v.data)?;
+            w.write_all(&v.address.bytes)?;
+        }
+        // XXX Refactor somehow. Generic, macro?
+        // Only the chunk packet needs special treatment.
         Packet::ServerInfo(ref v) => {
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
@@ -142,15 +172,6 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
             w.write_all(b)?;
-        }
-        Packet::Chunk(ref v) => {
-            send_hdr(
-                w,
-                PACKET_KIND_CHUNK,
-                (v.data.len() + ADDRESS_SZ).try_into()?,
-            )?;
-            w.write_all(&v.data)?;
-            w.write_all(&v.address.bytes)?;
         }
         Packet::CommitSend(ref v) => {
             let j = serde_json::to_string(&v)?;
@@ -174,6 +195,18 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             let j = serde_json::to_string(&v)?;
             let b = j.as_bytes();
             send_hdr(w, PACKET_KIND_ACK_REQUEST_DATA, b.len().try_into()?)?;
+            w.write_all(b)?;
+        }
+        Packet::StartGC(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_START_GC, b.len().try_into()?)?;
+            w.write_all(b)?;
+        }
+        Packet::GCComplete(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(b)?;
         }
     }
@@ -224,6 +257,10 @@ mod tests {
                         encrypt_header: ectx.encryption_header(),
                     })
                 },
+            }),
+            Packet::StartGC(StartGC {}),
+            Packet::GCComplete(GCComplete {
+                n_chunks_deleted: 123,
             }),
         ];
 

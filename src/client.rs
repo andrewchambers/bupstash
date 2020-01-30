@@ -141,7 +141,6 @@ pub fn request_data_stream(
     }
 
     let ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
-
     let mut sv = StreamVerifier { r: r };
     let mut tr = htree::TreeReader::new(&mut sv, metadata.tree_height, root_address);
 
@@ -166,4 +165,13 @@ pub fn request_data_stream(
     out.flush()?;
 
     Ok(())
+}
+
+pub fn gc(r: &mut dyn std::io::Read, w: &mut dyn std::io::Write) -> Result<usize, failure::Error> {
+    handle_server_info(r)?;
+    write_packet(w, &Packet::StartGC(StartGC {}))?;
+    match read_packet(r)? {
+        Packet::GCComplete(gccomplete) => Ok(gccomplete.n_chunks_deleted),
+        _ => failure::bail!("protocol error, expected gc complete packet"),
+    }
 }
