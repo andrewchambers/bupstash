@@ -43,7 +43,7 @@ impl SendLog {
                 if gc_generation != old_generation {
                     tx.execute("delete from sent;", rusqlite::NO_PARAMS)?;
                     tx.execute(
-                        "update LogMeta(Key, Value) set Value = ? where Key = 'gc_generation';",
+                        "update LogMeta set Value = ? where Key = 'gc_generation';",
                         &[&gc_generation],
                     )?;
                 }
@@ -125,8 +125,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gc_generation_change_wipes_log() {
+        let tmp_dir = tempdir::TempDir::new("send_log").unwrap();
+        let log_path = {
+            let mut d = PathBuf::from(tmp_dir.path());
+            d.push("send.log");
+            d
+        };
+        // Commit an address
+        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
+        let addr = Address::default();
+        let mut tx = sendlog.transaction().unwrap();
+        tx.add_address(&addr).unwrap();
+        assert!(tx.has_address(&addr).unwrap());
+        tx.commit().unwrap();
+        drop(sendlog);
+
+        // Ensure address is still present after reopening db.
+        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
+        let addr = Address::default();
+        let mut tx = sendlog.transaction().unwrap();
+        assert!(tx.has_address(&addr).unwrap());
+        // Drop tx to avoid ab cycling
+        drop(tx);
+        drop(sendlog);
+
+        // Since the gc_generation changed, address should not
+        // be there anymore.
+        let mut sendlog = SendLog::open(&log_path, "345").unwrap();
+        let addr = Address::default();
+        let mut tx = sendlog.transaction().unwrap();
+        assert!(!tx.has_address(&addr).unwrap());
+    }
+
+    #[test]
     fn address_cycling() {
-        let mut sendlog = SendLog::open(&PathBuf::from(":memory:"), "123").unwrap();
+        let tmp_dir = tempdir::TempDir::new("send_log").unwrap();
+        let log_path = {
+            let mut d = PathBuf::from(tmp_dir.path());
+            d.push("send.log");
+            d
+        };
+        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
         let addr = Address::default();
         // Commit adding an address
         let mut tx = sendlog.transaction().unwrap();
