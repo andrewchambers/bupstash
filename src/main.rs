@@ -135,27 +135,23 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     let mut serve_cmd_args = if repo.starts_with('/') {
         vec!["archivist".to_owned(), "serve".to_owned(), repo.to_string()]
     } else if repo.starts_with("ssh://") {
-        let u = url::Url::parse(&repo)?;
+        let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
+        let caps = re.captures(&repo).unwrap();
 
         let mut args = vec!["ssh".to_owned()];
 
-        if !u.username().len() != 0 {
+        if let Some(user) = caps.get(1) {
             args.push("-o".to_owned());
-            args.push("User=".to_owned() + &u.username().to_string());
-        };
-        if let Some(p) = u.port() {
-            args.push("-o".to_owned());
-            args.push("Port=".to_owned() + &p.to_string());
-        };
-        match u.host() {
-            Some(h) => args.push(h.to_string()),
-            None => failure::bail!("ssh uri does not have a valid host"),
-        };
-
+            args.push("User=".to_owned() + user.as_str());
+        }
+        args.push(caps[2].to_string());
         args.push("--".to_owned());
         args.push("archivist".to_owned());
         args.push("serve".to_owned());
-        args.push(u.path().to_owned());
+        let repo_path = caps[3].to_string();
+        if repo_path.len() != 0 {
+            args.push(repo_path);
+        }
         args
     } else {
         failure::bail!("don't understand respository uri: {:?}", repo);
