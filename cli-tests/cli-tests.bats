@@ -57,7 +57,7 @@ teardown () {
   done
 }
 
-@test "highly compressable data" {
+@test "highly compressible data" {
   for i in $(echo 0 1024 4096 1000000)
   do
     rm -f "$SCRATCH/rand.dat"
