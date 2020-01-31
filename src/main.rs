@@ -132,9 +132,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
     };
 
-    let mut serve_cmd_args = if repo.starts_with('/') {
-        vec!["archivist".to_owned(), "serve".to_owned(), repo.to_string()]
-    } else if repo.starts_with("ssh://") {
+    let mut serve_cmd_args = if repo.starts_with("ssh://") {
         let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
         let caps = re.captures(&repo).unwrap();
 
@@ -154,7 +152,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         }
         args
     } else {
-        failure::bail!("don't understand respository uri: {:?}", repo);
+        vec!["archivist".to_owned(), "serve".to_owned(), repo.to_string()]
     };
 
     let bin = serve_cmd_args.remove(0);
