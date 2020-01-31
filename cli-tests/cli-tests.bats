@@ -69,7 +69,7 @@ teardown () {
 }
 
 @test "key mismatch" {
-  data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   archivist new-master-key -o "$SCRATCH/wrong.key"
