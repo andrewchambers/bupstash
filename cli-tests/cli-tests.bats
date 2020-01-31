@@ -67,3 +67,27 @@ teardown () {
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
   done
 }
+
+@test "key mismatch" {
+  data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  echo -n "$data" > "$SCRATCH/foo.txt"
+  id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
+  archivist new-master-key -o "$SCRATCH/wrong.key"
+  run archivist get -r "$REPO" -k "$SCRATCH/wrong.key" -a "$id"
+  if test $status = 0
+  then
+    exit 1
+  fi
+}
+
+@test "corruption detected" {
+  data="abc123"
+  echo -n "$data" > "$SCRATCH/foo.txt"
+  id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
+  echo -n x >> "$REPO/data/"*
+  run archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id"
+  if test $status = 0
+  then
+    exit 1
+  fi
+}
