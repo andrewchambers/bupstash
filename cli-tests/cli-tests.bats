@@ -93,3 +93,20 @@ teardown () {
     exit 1
   fi
 }
+
+_concurrent_send_test_worker () {
+  for i in $(seq 100)
+  do
+    id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f <(echo $i))"
+    test "$i" = $(archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id")
+  done
+}
+
+@test "concurrent send" {
+  for i in $(seq 100)
+  do
+    _concurrent_send_test_worker &
+  done
+  wait
+}
+
