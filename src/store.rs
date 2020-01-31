@@ -283,11 +283,11 @@ impl Store {
         Ok(Some(metadata))
     }
 
-    pub fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+    pub fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
         self.storage_engine.get_chunk(addr)
     }
 
-    pub fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+    pub fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         self.storage_engine.add_chunk(addr, buf)
     }
 
@@ -324,7 +324,7 @@ impl Store {
                             if !reachable.contains(&addr) {
                                 reachable.insert(addr);
                                 if height != 0 {
-                                    tr.push_addr(height - 1, addr)?;
+                                    tr.push_addr(height - 1, &addr)?;
                                 }
                             }
                         }
@@ -342,7 +342,7 @@ impl Store {
 }
 
 impl htree::Source for Store {
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
         self.get_chunk(addr)
     }
 }
@@ -359,11 +359,11 @@ mod tests {
         Store::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
         let mut store = Store::open(path_buf.as_path(), OpenMode::Shared).unwrap();
         let addr = Address::default();
-        store.add_chunk(addr, vec![1]).unwrap();
+        store.add_chunk(&addr, vec![1]).unwrap();
         store.sync().unwrap();
-        store.add_chunk(addr, vec![2]).unwrap();
+        store.add_chunk(&addr, vec![2]).unwrap();
         store.sync().unwrap();
-        let v = store.get_chunk(addr).unwrap();
+        let v = store.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
     }
 }

@@ -224,9 +224,14 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
+    let send_log = match matches.opt_str("send-log") {
+        Some(send_log) => Some(std::path::PathBuf::from(send_log)),
+        None => None,
+    };
+
     let addr = client::send(
         &encrypt_ctx,
-        matches.opt_str("send-log"),
+        send_log,
         &mut serve_out,
         &mut serve_in,
         &mut data,

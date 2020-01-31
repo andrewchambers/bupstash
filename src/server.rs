@@ -53,7 +53,7 @@ fn recv(
     loop {
         match read_packet(r)? {
             Packet::Chunk(chunk) => {
-                store.add_chunk(chunk.address, chunk.data)?;
+                store.add_chunk(&chunk.address, chunk.data)?;
             }
             Packet::CommitSend(commit) => {
                 store.sync()?;
@@ -105,7 +105,7 @@ fn send(
         match tr.next_addr()? {
             Some((height, chunk_address)) => {
                 if height != 0 {
-                    tr.push_addr(height - 1, chunk_address)?;
+                    tr.push_addr(height - 1, &chunk_address)?;
                 }
                 let chunk_data = tr.get_chunk(&chunk_address)?;
                 write_packet(

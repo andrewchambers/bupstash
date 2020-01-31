@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 pub trait Engine {
     // Get a chunk from the storage engine.
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error>;
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error>;
 
     // Get a chunk from the storage engine using the worker pool.
     fn get_chunk_async(
@@ -24,7 +24,7 @@ pub trait Engine {
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name. The write is not guaranteed to be completed until
     // after a call to Engine::sync completes without error.
-    fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error>;
+    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error>;
 
     // A write barrier, any previously added chunks are only guaranteed to be
     // in stable storage after a call to sync has returned. A backend
@@ -150,14 +150,14 @@ impl LocalStorage {
 }
 
 impl Engine for LocalStorage {
-    fn add_chunk(&mut self, addr: Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         self.dispatch
-            .send(WorkerMsg::AddChunk((addr, buf)))
+            .send(WorkerMsg::AddChunk((*addr, buf)))
             .unwrap();
         Ok(())
     }
 
-    fn get_chunk(&mut self, addr: Address) -> Result<Vec<u8>, failure::Error> {
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
         self.data_dir.push(addr.as_hex_addr().as_str());
         let p = std::fs::read(self.data_dir.as_path());
         self.data_dir.pop();
@@ -237,11 +237,11 @@ mod tests {
         let path_buf = PathBuf::from(tmp_dir.path());
         let mut local_storage = LocalStorage::new(&path_buf, 5);
         let addr = Address::default();
-        local_storage.add_chunk(addr, vec![1]).unwrap();
+        local_storage.add_chunk(&addr, vec![1]).unwrap();
         local_storage.sync().unwrap();
-        local_storage.add_chunk(addr, vec![2]).unwrap();
+        local_storage.add_chunk(&addr, vec![2]).unwrap();
         local_storage.sync().unwrap();
-        let v = local_storage.get_chunk(addr).unwrap();
+        let v = local_storage.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
         let v = local_storage.get_chunk_async(addr).recv().unwrap().unwrap();
         assert_eq!(v, vec![1]);
