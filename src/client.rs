@@ -8,6 +8,9 @@ use super::rollsum;
 use super::sendlog;
 use super::store;
 
+const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
+const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
+
 fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
     match read_packet(r)? {
         Packet::ServerInfo(info) => {
@@ -46,7 +49,13 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct SendOptions {
+    pub compression: bool,
+}
+
 pub fn send(
+    opts: SendOptions,
     ctx: &crypto::EncryptContext,
     send_log: Option<std::path::PathBuf>,
     r: &mut dyn std::io::Read,
@@ -78,7 +87,7 @@ pub fn send(
             // We divide send up into two parts to make the
             // lifetime easier to deal. Theres a good chance
             // it can be factored better, but this works for now.
-            send_result = send2(ctx, r, &mut filtered_conn, data);
+            send_result = send2(opts, ctx, r, &mut filtered_conn, data);
         }
 
         match send_result {
@@ -91,7 +100,42 @@ pub fn send(
     }
 }
 
+fn compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
+    // Our max chunk size means this should never happen.
+    assert!(data.len() <= 0xffffffff);
+    let mut compressed_data = zstd::block::compress(&data, 0).unwrap();
+    if (compressed_data.len() + 4) >= data.len() {
+        data.push(CHUNK_FOOTER_NO_COMPRESSION);
+        data
+    } else {
+        compressed_data.reserve(5);
+        let sz = data.len() as u32;
+        compressed_data.push(((sz & 0xff000000) >> 24) as u8);
+        compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
+        compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
+        compressed_data.push((sz & 0x000000ff) as u8);
+        compressed_data.push(CHUNK_FOOTER_ZSTD_COMPRESSED);
+        compressed_data
+    }
+}
+
+fn encrypt_chunk(
+    opts: SendOptions,
+    ctx: &crypto::EncryptContext,
+    mut data: Vec<u8>,
+) -> Result<Vec<u8>, failure::Error> {
+    let to_encrypt = if opts.compression {
+        compress_chunk(data)
+    } else {
+        data.push(CHUNK_FOOTER_NO_COMPRESSION);
+        data
+    };
+
+    Ok(ctx.encrypt_chunk(&to_encrypt))
+}
+
 fn send2(
+    opts: SendOptions,
     ctx: &crypto::EncryptContext,
     r: &mut dyn std::io::Read,
     filtered_conn: &mut FilteredConnection,
@@ -115,8 +159,7 @@ fn send2(
             Ok(0) => {
                 let chunk_data = chunker.finish();
                 let addr = ctx.keyed_content_address(&chunk_data);
-                let encrypted_chunk_data = ctx.encrypt_chunk(&chunk_data);
-                tw.add(&addr, encrypted_chunk_data)?;
+                tw.add(&addr, encrypt_chunk(opts, ctx, chunk_data)?)?;
                 let (height, address) = tw.finish()?;
                 tree_height = height;
                 root_address = address;
@@ -129,8 +172,7 @@ fn send2(
                     n_chunked += n;
                     if let Some(chunk_data) = c {
                         let addr = ctx.keyed_content_address(&chunk_data);
-                        let encrypted_chunk_data = ctx.encrypt_chunk(&chunk_data);
-                        tw.add(&addr, encrypted_chunk_data)?;
+                        tw.add(&addr, encrypt_chunk(opts, ctx, chunk_data)?)?;
                     }
                 }
             }
@@ -205,16 +247,51 @@ pub fn request_data_stream(
     loop {
         match tr.next_chunk()? {
             Some((addr, encrypted_chunk_data)) => {
-                let decrypted_chunk_data = match ctx.decrypt_chunk(&encrypted_chunk_data) {
-                    Some(decrypted_chunk_data) => {
-                        if addr != ctx.keyed_content_address(&decrypted_chunk_data) {
+                match ctx.decrypt_chunk(&encrypted_chunk_data) {
+                    Some(mut decrypted_chunk_data) => {
+                        if decrypted_chunk_data.is_empty() {
                             return Err(htree::HTreeError::CorruptOrTamperedDataError.into());
                         }
-                        decrypted_chunk_data
+                        match decrypted_chunk_data[decrypted_chunk_data.len() - 1] {
+                            footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
+                                decrypted_chunk_data.pop();
+                                if addr != ctx.keyed_content_address(&decrypted_chunk_data) {
+                                    return Err(
+                                        htree::HTreeError::CorruptOrTamperedDataError.into()
+                                    );
+                                }
+                                out.write_all(&decrypted_chunk_data)?;
+                            }
+                            footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
+                                decrypted_chunk_data.pop();
+                                if decrypted_chunk_data.len() < 4 {
+                                    return Err(
+                                        htree::HTreeError::CorruptOrTamperedDataError.into()
+                                    );
+                                }
+                                let dlen = decrypted_chunk_data.len();
+                                let decompressed_sz = ((decrypted_chunk_data[dlen - 4] as u32)
+                                    << 24)
+                                    | ((decrypted_chunk_data[dlen - 3] as u32) << 16)
+                                    | ((decrypted_chunk_data[dlen - 2] as u32) << 8)
+                                    | (decrypted_chunk_data[dlen - 1] as u32);
+                                decrypted_chunk_data.truncate(decrypted_chunk_data.len() - 4);
+                                let decompressed_chunk_data = zstd::block::decompress(
+                                    &decrypted_chunk_data,
+                                    decompressed_sz as usize,
+                                )?;
+                                if addr != ctx.keyed_content_address(&decompressed_chunk_data) {
+                                    return Err(
+                                        htree::HTreeError::CorruptOrTamperedDataError.into()
+                                    );
+                                }
+                                out.write_all(&decompressed_chunk_data)?;
+                            }
+                            _ => return Err(htree::HTreeError::CorruptOrTamperedDataError.into()),
+                        };
                     }
                     None => return Err(htree::HTreeError::CorruptOrTamperedDataError.into()),
                 };
-                out.write_all(&decrypted_chunk_data)?
             }
             None => break,
         }

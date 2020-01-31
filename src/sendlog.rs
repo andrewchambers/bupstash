@@ -89,6 +89,7 @@ impl SendLog {
 impl<'a> SendLogTx<'a> {
     pub fn add_address(self: &mut Self, addr: &Address) -> Result<(), failure::Error> {
         // Store raw bytes as this is performance sensitive and it is pointless converting.
+        // XXX FIXME precompile query.
         self.tx.execute(
             "insert or replace into Sent(Addr, AB) values(?, ?); ",
             rusqlite::params![&addr.bytes[..], self.ab],
@@ -98,6 +99,7 @@ impl<'a> SendLogTx<'a> {
 
     pub fn has_address(self: &mut Self, addr: &Address) -> Result<bool, failure::Error> {
         // Store raw bytes as this is performance sensitive and it is pointless converting.
+        // XXX FIXME precompile query.
         match self.tx.query_row(
             "select 1 from Sent where Addr=?;",
             &[&addr.bytes[..]],

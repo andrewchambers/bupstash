@@ -191,6 +191,11 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     opts.optopt("f", "file", "Save a file.", "PATH");
+    opts.optflag(
+        "",
+        "no-compression",
+        "Disable compression (Use for for already compressed/encrypted data).",
+    );
     opts.optopt(
         "",
         "send-log",
@@ -230,6 +235,9 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     let addr = client::send(
+        client::SendOptions {
+            compression: !matches.opt_present("no-compression"),
+        },
         &encrypt_ctx,
         send_log,
         &mut serve_out,
