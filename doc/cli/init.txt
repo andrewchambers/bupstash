@@ -1,4 +1,4 @@
-Archivist init: Initialize an archivist data store.
+Archivist init: Initialize an archivist repository.
 
 Description:
   Init creates an archivist data repository at a specified

@@ -4,7 +4,7 @@ use super::protocol::*;
 use super::repository;
 
 pub struct ServerConfig {
-    pub store_path: std::path::PathBuf,
+    pub repo_path: std::path::PathBuf,
 }
 
 pub fn serve(
@@ -21,17 +21,16 @@ pub fn serve(
 
     match read_packet(r)? {
         Packet::BeginSend(_) => {
-            let mut store = repository::Repo::open(&cfg.store_path, repository::OpenMode::Shared)?;
-            recv(&mut store, r, w)
+            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
+            recv(&mut repo, r, w)
         }
         Packet::RequestData(req) => {
-            let mut store = repository::Repo::open(&cfg.store_path, repository::OpenMode::Shared)?;
-            send(&mut store, req.root, w)
+            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
+            send(&mut repo, req.root, w)
         }
         Packet::StartGC(_) => {
-            let mut store =
-                repository::Repo::open(&cfg.store_path, repository::OpenMode::Exclusive)?;
-            gc(&mut store, w)
+            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
+            gc(&mut repo, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -40,25 +39,25 @@ pub fn serve(
 }
 
 fn recv(
-    store: &mut repository::Repo,
+    repo: &mut repository::Repo,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     write_packet(
         w,
         &Packet::AckSend(AckSend {
-            gc_generation: store.gc_generation.clone(),
+            gc_generation: repo.gc_generation.clone(),
         }),
     )?;
 
     loop {
         match read_packet(r)? {
             Packet::Chunk(chunk) => {
-                store.add_chunk(&chunk.address, chunk.data)?;
+                repo.add_chunk(&chunk.address, chunk.data)?;
             }
             Packet::CommitSend(commit) => {
-                store.sync()?;
-                store.add_item(commit.address, commit.metadata)?;
+                repo.sync()?;
+                repo.add_item(commit.address, commit.metadata)?;
                 write_packet(w, &Packet::AckCommit(AckCommit {}))?;
                 break;
             }
@@ -74,11 +73,11 @@ fn recv(
 }
 
 fn send(
-    store: &mut repository::Repo,
+    repo: &mut repository::Repo,
     address: address::Address,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let metadata = match store.lookup_item_by_address(address)? {
+    let metadata = match repo.lookup_item_by_address(address)? {
         Some(metadata) => {
             write_packet(
                 w,
@@ -100,7 +99,7 @@ fn send(
         }
     };
 
-    let mut tr = htree::TreeReader::new(store, metadata.tree_height, address);
+    let mut tr = htree::TreeReader::new(repo, metadata.tree_height, address);
 
     loop {
         match tr.next_addr()? {
@@ -124,8 +123,8 @@ fn send(
     Ok(())
 }
 
-fn gc(store: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    let stats = store.gc()?;
+fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+    let stats = repo.gc()?;
     write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
     Ok(())
 }

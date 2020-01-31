@@ -124,7 +124,7 @@ fn search_main(args: Vec<String>) -> Result<(), failure::Error> {
 }
 
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
-    let store = if matches.opt_present("repository") {
+    let repo = if matches.opt_present("repository") {
         matches.opt_str("repository").unwrap()
     } else if let Some(s) = std::env::var_os("ARCHIVIST_REPOSITORY") {
         s.into_string().unwrap()
@@ -132,14 +132,10 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
     };
 
-    let mut serve_cmd_args = if store.starts_with('/') {
-        vec![
-            "archivist".to_owned(),
-            "serve".to_owned(),
-            store.to_string(),
-        ]
-    } else if store.starts_with("ssh://") {
-        let u = url::Url::parse(&store)?;
+    let mut serve_cmd_args = if repo.starts_with('/') {
+        vec!["archivist".to_owned(), "serve".to_owned(), repo.to_string()]
+    } else if repo.starts_with("ssh://") {
+        let u = url::Url::parse(&repo)?;
 
         let mut args = vec!["ssh".to_owned()];
 
@@ -162,7 +158,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         args.push(u.path().to_owned());
         args
     } else {
-        failure::bail!("don't understand respository uri: {:?}", store);
+        failure::bail!("don't understand respository uri: {:?}", repo);
     };
 
     let bin = serve_cmd_args.remove(0);
@@ -336,7 +332,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     server::serve(
         server::ServerConfig {
-            store_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
+            repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut std::io::stdin(),
         &mut std::io::stdout(),

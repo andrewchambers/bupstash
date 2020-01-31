@@ -38,7 +38,7 @@ pub enum OpenMode {
 
 pub struct Repo {
     open_mode: OpenMode,
-    _store_path: PathBuf,
+    _repo_path: PathBuf,
     _gc_lock: FileLock,
     storage_engine: Box<dyn chunk_storage::Engine>,
     pub gc_generation: String,
@@ -96,11 +96,11 @@ impl Repo {
         }
     }
 
-    fn check_store_sane(store_path: &Path) -> Result<(), failure::Error> {
-        if !store_path.exists() {
+    fn check_sane(repo_path: &Path) -> Result<(), failure::Error> {
+        if !repo_path.exists() {
             return Err(RepoError::RepoDoesNotExist.into());
         }
-        let mut path_buf = PathBuf::from(store_path);
+        let mut path_buf = PathBuf::from(repo_path);
         path_buf.push("data");
         Repo::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
@@ -110,27 +110,27 @@ impl Repo {
         Ok(())
     }
 
-    pub fn init(store_path: &Path, engine: StorageEngineSpec) -> Result<(), failure::Error> {
-        let parent = if store_path.is_absolute() {
-            store_path.parent().unwrap().to_owned()
+    pub fn init(repo_path: &Path, engine: StorageEngineSpec) -> Result<(), failure::Error> {
+        let parent = if repo_path.is_absolute() {
+            repo_path.parent().unwrap().to_owned()
         } else {
-            let abs = std::env::current_dir()?.join(store_path);
+            let abs = std::env::current_dir()?.join(repo_path);
             let parent = abs.parent().unwrap();
             parent.to_owned()
         };
 
         let mut path_buf = PathBuf::from(&parent);
-        if store_path.exists() {
+        if repo_path.exists() {
             return Err(RepoError::AlreadyExists {
-                path: store_path.to_string_lossy().to_string(),
+                path: repo_path.to_string_lossy().to_string(),
             }
             .into());
         }
-        let mut tmpname = store_path
+        let mut tmpname = repo_path
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(""))
             .to_os_string();
-        tmpname.push(".archivist-store-init-tmp");
+        tmpname.push(".archivist-repo-init-tmp");
         path_buf.push(&tmpname);
         if path_buf.exists() {
             return Err(RepoError::AlreadyExists {
@@ -177,18 +177,18 @@ impl Repo {
         drop(conn);
 
         fsutil::sync_dir(&path_buf)?;
-        std::fs::rename(&path_buf, store_path)?;
+        std::fs::rename(&path_buf, repo_path)?;
         Ok(())
     }
 
-    fn gc_lock_path(store_path: &Path) -> PathBuf {
-        let mut lock_path = store_path.to_path_buf();
+    fn gc_lock_path(repo_path: &Path) -> PathBuf {
+        let mut lock_path = repo_path.to_path_buf();
         lock_path.push("gc.lock");
         lock_path
     }
 
-    fn open_db(store_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
-        let mut db_path = store_path.to_path_buf();
+    fn open_db(repo_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+        let mut db_path = repo_path.to_path_buf();
         db_path.push("archivist.db");
         let conn = rusqlite::Connection::open(db_path)?;
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
@@ -197,15 +197,15 @@ impl Repo {
         Ok(conn)
     }
 
-    pub fn open(store_path: &Path, open_mode: OpenMode) -> Result<Repo, failure::Error> {
-        Repo::check_store_sane(&store_path)?;
+    pub fn open(repo_path: &Path, open_mode: OpenMode) -> Result<Repo, failure::Error> {
+        Repo::check_sane(&repo_path)?;
 
         let gc_lock = match open_mode {
-            OpenMode::Shared => FileLock::get_shared(&Repo::gc_lock_path(&store_path))?,
-            OpenMode::Exclusive => FileLock::get_exclusive(&Repo::gc_lock_path(&store_path))?,
+            OpenMode::Shared => FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?,
+            OpenMode::Exclusive => FileLock::get_exclusive(&Repo::gc_lock_path(&repo_path))?,
         };
 
-        let conn = Repo::open_db(store_path)?;
+        let conn = Repo::open_db(repo_path)?;
         let v: i32 = conn.query_row(
             "select value from ArchivistMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
@@ -231,7 +231,7 @@ impl Repo {
 
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::Local => {
-                let mut data_dir = store_path.to_path_buf();
+                let mut data_dir = repo_path.to_path_buf();
                 data_dir.push("data");
                 // XXX fixme, how many workers do we want?
                 // configurable?
@@ -241,7 +241,7 @@ impl Repo {
 
         Ok(Repo {
             open_mode,
-            _store_path: store_path.to_path_buf(),
+            _repo_path: repo_path.to_path_buf(),
             _gc_lock: gc_lock,
             gc_generation,
             storage_engine,
@@ -253,13 +253,12 @@ impl Repo {
         addr: Address,
         metadata: ItemMetadata,
     ) -> Result<(), failure::Error> {
-        let mut conn = Repo::open_db(&self._store_path)?;
+        let mut conn = Repo::open_db(&self._repo_path)?;
         let tx = conn.transaction()?;
         tx.execute(
             "insert into Items(Address, Metadata) values(?, ?);",
             &[format!("{}", addr), serde_json::to_string(&metadata)?],
         )?;
-
         tx.commit()?;
         drop(conn);
         Ok(())
@@ -269,7 +268,7 @@ impl Repo {
         &mut self,
         addr: Address,
     ) -> Result<Option<ItemMetadata>, failure::Error> {
-        let conn = Repo::open_db(&self._store_path)?;
+        let conn = Repo::open_db(&self._repo_path)?;
         let md_json: String = match conn.query_row(
             "select Metadata from Items where Address = ?;",
             &[format!("{}", addr)],
@@ -302,7 +301,7 @@ impl Repo {
         }
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
-        let mut conn = Repo::open_db(&self._store_path)?;
+        let mut conn = Repo::open_db(&self._repo_path)?;
         let tx = conn.transaction()?;
         {
             tx.execute(
@@ -353,17 +352,17 @@ mod tests {
 
     #[test]
     fn add_get_chunk() {
-        let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
+        let tmp_dir = tempdir::TempDir::new("test_repo").unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
-        path_buf.push("store");
+        path_buf.push("repo");
         Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let mut store = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
+        let mut repo = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
         let addr = Address::default();
-        store.add_chunk(&addr, vec![1]).unwrap();
-        store.sync().unwrap();
-        store.add_chunk(&addr, vec![2]).unwrap();
-        store.sync().unwrap();
-        let v = store.get_chunk(&addr).unwrap();
+        repo.add_chunk(&addr, vec![1]).unwrap();
+        repo.sync().unwrap();
+        repo.add_chunk(&addr, vec![2]).unwrap();
+        repo.sync().unwrap();
+        let v = repo.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
     }
 }
