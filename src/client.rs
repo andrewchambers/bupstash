@@ -4,9 +4,9 @@ use super::crypto;
 use super::htree;
 use super::keys;
 use super::protocol::*;
+use super::repository;
 use super::rollsum;
 use super::sendlog;
-use super::store;
 
 const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
 const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
@@ -184,7 +184,7 @@ fn send2(
         filtered_conn.w,
         &Packet::CommitSend(CommitSend {
             address: root_address,
-            metadata: store::ItemMetadata {
+            metadata: repository::ItemMetadata {
                 tree_height,
                 encrypt_header: ctx.encryption_header(),
             },
@@ -305,7 +305,7 @@ pub fn request_data_stream(
 pub fn gc(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<store::GCStats, failure::Error> {
+) -> Result<repository::GCStats, failure::Error> {
     handle_server_info(r)?;
     write_packet(w, &Packet::StartGC(StartGC {}))?;
     match read_packet(r)? {

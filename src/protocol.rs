@@ -1,6 +1,6 @@
 use super::address::*;
 
-use super::store;
+use super::repository;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
@@ -28,7 +28,7 @@ pub struct AckSend {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CommitSend {
     pub address: Address,
-    pub metadata: store::ItemMetadata,
+    pub metadata: repository::ItemMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -41,7 +41,7 @@ pub struct RequestData {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckRequestData {
-    pub metadata: Option<store::ItemMetadata>,
+    pub metadata: Option<repository::ItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -49,7 +49,7 @@ pub struct StartGC {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct GCComplete {
-    pub stats: store::GCStats,
+    pub stats: repository::GCStats,
 }
 
 #[derive(Debug, PartialEq)]
@@ -232,7 +232,7 @@ mod tests {
             }),
             Packet::CommitSend(CommitSend {
                 address: Address::default(),
-                metadata: store::ItemMetadata {
+                metadata: repository::ItemMetadata {
                     tree_height: 3,
                     encrypt_header: {
                         let master_key = keys::MasterKey::gen();
@@ -252,7 +252,7 @@ mod tests {
                 metadata: {
                     let master_key = keys::MasterKey::gen();
                     let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    Some(store::ItemMetadata {
+                    Some(repository::ItemMetadata {
                         tree_height: 1234,
                         encrypt_header: ectx.encryption_header(),
                     })
@@ -260,7 +260,7 @@ mod tests {
             }),
             Packet::StartGC(StartGC {}),
             Packet::GCComplete(GCComplete {
-                stats: store::GCStats {
+                stats: repository::GCStats {
                     chunks_deleted: 123,
                     bytes_freed: 345,
                     bytes_remaining: 678,

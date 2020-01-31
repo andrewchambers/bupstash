@@ -1,7 +1,7 @@
 use super::address;
 use super::htree;
 use super::protocol::*;
-use super::store;
+use super::repository;
 
 pub struct ServerConfig {
     pub store_path: std::path::PathBuf,
@@ -21,15 +21,16 @@ pub fn serve(
 
     match read_packet(r)? {
         Packet::BeginSend(_) => {
-            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Shared)?;
+            let mut store = repository::Repo::open(&cfg.store_path, repository::OpenMode::Shared)?;
             recv(&mut store, r, w)
         }
         Packet::RequestData(req) => {
-            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Shared)?;
+            let mut store = repository::Repo::open(&cfg.store_path, repository::OpenMode::Shared)?;
             send(&mut store, req.root, w)
         }
         Packet::StartGC(_) => {
-            let mut store = store::Store::open(&cfg.store_path, store::OpenMode::Exclusive)?;
+            let mut store =
+                repository::Repo::open(&cfg.store_path, repository::OpenMode::Exclusive)?;
             gc(&mut store, w)
         }
         _ => Err(failure::format_err!(
@@ -39,7 +40,7 @@ pub fn serve(
 }
 
 fn recv(
-    store: &mut store::Store,
+    store: &mut repository::Repo,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
@@ -73,7 +74,7 @@ fn recv(
 }
 
 fn send(
-    store: &mut store::Store,
+    store: &mut repository::Repo,
     address: address::Address,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
@@ -88,7 +89,7 @@ fn send(
             metadata
         }
         None => {
-            let no_metadata: Option<store::ItemMetadata> = None;
+            let no_metadata: Option<repository::ItemMetadata> = None;
             write_packet(
                 w,
                 &Packet::AckRequestData(AckRequestData {
@@ -123,7 +124,7 @@ fn send(
     Ok(())
 }
 
-fn gc(store: &mut store::Store, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+fn gc(store: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
     let stats = store.gc()?;
     write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
     Ok(())

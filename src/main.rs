@@ -9,10 +9,10 @@ pub mod htree;
 pub mod hydrogen;
 pub mod keys;
 pub mod protocol;
+pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
-pub mod store;
 pub mod tquery;
 
 use failure::Fail;
@@ -74,15 +74,15 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
         die("Expected a single path to initialize.".to_string());
     }
 
-    let backend: store::StorageEngineSpec;
+    let backend: repository::StorageEngineSpec;
 
     if !matches.opt_present("storage") {
-        backend = store::StorageEngineSpec::Local;
+        backend = repository::StorageEngineSpec::Local;
     } else {
         panic!("TODO")
     }
 
-    store::Store::init(std::path::Path::new(&matches.free[0]), backend)
+    repository::Repo::init(std::path::Path::new(&matches.free[0]), backend)
 }
 
 fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {

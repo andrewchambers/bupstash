@@ -13,16 +13,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Fail)]
-pub enum StoreError {
+pub enum RepoError {
     #[fail(display = "path {} already exists, refusing to overwrite it", path)]
     AlreadyExists { path: String },
-    #[fail(display = "the store was not initialized properly")]
+    #[fail(display = "repository was not initialized properly")]
     NotInitializedProperly,
-    #[fail(display = "the store does not exist")]
-    StoreDoesNotExist,
+    #[fail(display = "repository does not exist")]
+    RepoDoesNotExist,
     #[fail(display = "sqlite error while manipulating the database: {}", err)]
     SqliteError { err: rusqlite::Error },
-    #[fail(display = "archivist database at unsupported version")]
+    #[fail(display = "repository database at unsupported version")]
     UnsupportedSchemaVersion,
 }
 
@@ -36,7 +36,7 @@ pub enum OpenMode {
     Exclusive,
 }
 
-pub struct Store {
+pub struct Repo {
     open_mode: OpenMode,
     _store_path: PathBuf,
     _gc_lock: FileLock,
@@ -87,25 +87,25 @@ fn new_gc_generation() -> String {
     hex::easy_encode_to_string(&gen)
 }
 
-impl Store {
+impl Repo {
     fn ensure_file_exists(p: &Path) -> Result<(), failure::Error> {
         if p.exists() {
             Ok(())
         } else {
-            Err(StoreError::NotInitializedProperly.into())
+            Err(RepoError::NotInitializedProperly.into())
         }
     }
 
     fn check_store_sane(store_path: &Path) -> Result<(), failure::Error> {
         if !store_path.exists() {
-            return Err(StoreError::StoreDoesNotExist.into());
+            return Err(RepoError::RepoDoesNotExist.into());
         }
         let mut path_buf = PathBuf::from(store_path);
         path_buf.push("data");
-        Store::ensure_file_exists(&path_buf.as_path())?;
+        Repo::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         path_buf.push("archivist.db");
-        Store::ensure_file_exists(&path_buf.as_path())?;
+        Repo::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         Ok(())
     }
@@ -121,7 +121,7 @@ impl Store {
 
         let mut path_buf = PathBuf::from(&parent);
         if store_path.exists() {
-            return Err(StoreError::AlreadyExists {
+            return Err(RepoError::AlreadyExists {
                 path: store_path.to_string_lossy().to_string(),
             }
             .into());
@@ -133,7 +133,7 @@ impl Store {
         tmpname.push(".archivist-store-init-tmp");
         path_buf.push(&tmpname);
         if path_buf.exists() {
-            return Err(StoreError::AlreadyExists {
+            return Err(RepoError::AlreadyExists {
                 path: path_buf.to_string_lossy().to_string(),
             }
             .into());
@@ -147,7 +147,7 @@ impl Store {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        let mut conn = Store::open_db(&path_buf)?;
+        let mut conn = Repo::open_db(&path_buf)?;
 
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
         let tx = conn.transaction()?;
@@ -197,22 +197,22 @@ impl Store {
         Ok(conn)
     }
 
-    pub fn open(store_path: &Path, open_mode: OpenMode) -> Result<Store, failure::Error> {
-        Store::check_store_sane(&store_path)?;
+    pub fn open(store_path: &Path, open_mode: OpenMode) -> Result<Repo, failure::Error> {
+        Repo::check_store_sane(&store_path)?;
 
         let gc_lock = match open_mode {
-            OpenMode::Shared => FileLock::get_shared(&Store::gc_lock_path(&store_path))?,
-            OpenMode::Exclusive => FileLock::get_exclusive(&Store::gc_lock_path(&store_path))?,
+            OpenMode::Shared => FileLock::get_shared(&Repo::gc_lock_path(&store_path))?,
+            OpenMode::Exclusive => FileLock::get_exclusive(&Repo::gc_lock_path(&store_path))?,
         };
 
-        let conn = Store::open_db(store_path)?;
+        let conn = Repo::open_db(store_path)?;
         let v: i32 = conn.query_row(
             "select value from ArchivistMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
         if v != 0 {
-            return Err(StoreError::UnsupportedSchemaVersion.into());
+            return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
         let engine_meta: String = conn.query_row(
@@ -239,7 +239,7 @@ impl Store {
             }
         };
 
-        Ok(Store {
+        Ok(Repo {
             open_mode,
             _store_path: store_path.to_path_buf(),
             _gc_lock: gc_lock,
@@ -253,7 +253,7 @@ impl Store {
         addr: Address,
         metadata: ItemMetadata,
     ) -> Result<(), failure::Error> {
-        let mut conn = Store::open_db(&self._store_path)?;
+        let mut conn = Repo::open_db(&self._store_path)?;
         let tx = conn.transaction()?;
         tx.execute(
             "insert into Items(Address, Metadata) values(?, ?);",
@@ -269,7 +269,7 @@ impl Store {
         &mut self,
         addr: Address,
     ) -> Result<Option<ItemMetadata>, failure::Error> {
-        let conn = Store::open_db(&self._store_path)?;
+        let conn = Repo::open_db(&self._store_path)?;
         let md_json: String = match conn.query_row(
             "select Metadata from Items where Address = ?;",
             &[format!("{}", addr)],
@@ -302,7 +302,7 @@ impl Store {
         }
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
-        let mut conn = Store::open_db(&self._store_path)?;
+        let mut conn = Repo::open_db(&self._store_path)?;
         let tx = conn.transaction()?;
         {
             tx.execute(
@@ -341,7 +341,7 @@ impl Store {
     }
 }
 
-impl htree::Source for Store {
+impl htree::Source for Repo {
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
         self.get_chunk(addr)
     }
@@ -356,8 +356,8 @@ mod tests {
         let tmp_dir = tempdir::TempDir::new("store_test_repo").unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("store");
-        Store::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let mut store = Store::open(path_buf.as_path(), OpenMode::Shared).unwrap();
+        Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
+        let mut store = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
         let addr = Address::default();
         store.add_chunk(&addr, vec![1]).unwrap();
         store.sync().unwrap();

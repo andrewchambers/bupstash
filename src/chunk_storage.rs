@@ -1,6 +1,6 @@
 use super::address::*;
 use super::fsutil;
-use super::store;
+use super::repository;
 use std::path::PathBuf;
 
 pub trait Engine {
@@ -19,7 +19,7 @@ pub trait Engine {
     fn gc(
         &mut self,
         should_keep: &dyn Fn(Address) -> bool,
-    ) -> Result<store::GCStats, failure::Error>;
+    ) -> Result<repository::GCStats, failure::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name. The write is not guaranteed to be completed until
@@ -167,8 +167,8 @@ impl Engine for LocalStorage {
     fn gc(
         &mut self,
         should_keep: &dyn Fn(Address) -> bool,
-    ) -> Result<store::GCStats, failure::Error> {
-        let mut stats = store::GCStats {
+    ) -> Result<repository::GCStats, failure::Error> {
+        let mut stats = repository::GCStats {
             chunks_deleted: 0,
             bytes_freed: 0,
             bytes_remaining: 0,
