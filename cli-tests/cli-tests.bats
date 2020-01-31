@@ -74,6 +74,7 @@ teardown () {
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   archivist new-master-key -o "$SCRATCH/wrong.key"
   run archivist get -r "$REPO" -k "$SCRATCH/wrong.key" -a "$id"
+  echo "$output" | grep -q "key does not match"
   if test $status = 0
   then
     exit 1
@@ -86,6 +87,7 @@ teardown () {
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   echo -n x >> "$REPO/data/"*
   run archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id"
+  echo "$output" | grep -q "corrupt or tampered data"
   if test $status = 0
   then
     exit 1
