@@ -1,4 +1,5 @@
 use failure::Fail;
+use std::collections::HashMap;
 
 #[derive(Eq, PartialEq, Debug, Fail)]
 pub enum ParseError {
@@ -17,30 +18,31 @@ pub enum Binop {
 }
 
 #[derive(Eq, PartialEq, Debug)]
-pub enum AssertionOp {
-    Equals,
-    NotEquals,
-    Glob,
-    NotGlob,
+pub enum Unop {
+    Not,
 }
 
 #[derive(Eq, PartialEq, Debug)]
-pub enum QueryAST {
-    TagValueAssertion {
-        op: AssertionOp,
+pub enum Query {
+    ExistsAssertion {
         tag: String,
-        value: String,
         span: (usize, usize),
     },
-    TagExistsAssertion {
+    Glob {
         tag: String,
+        pattern: glob::Pattern,
         span: (usize, usize),
+    },
+    Unop {
+        op: Unop,
+        span: (usize, usize),
+        query: Box<Query>,
     },
     Binop {
         op: Binop,
         span: (usize, usize),
-        left: Box<QueryAST>,
-        right: Box<QueryAST>,
+        left: Box<Query>,
+        right: Box<Query>,
     },
 }
 
@@ -67,9 +69,9 @@ fn is_value_char(c: char) -> bool {
 
 macro_rules! impl_binop {
     ($name:ident, $opi:ident, $ops:literal , $sub:ident) => {
-    fn $name(&mut self) -> Result<QueryAST, ParseError> {
+    fn $name(&mut self) -> Result<Query, ParseError> {
         let op = $ops;
-        let mut l: QueryAST;
+        let mut l: Query;
         self.skip_insignificant();
         let (_, start_pos) = self.peek();
         l = self.$sub()?;
@@ -90,7 +92,7 @@ macro_rules! impl_binop {
           }
           let r = self.$sub()?;
           let (_, end_pos) = self.peek();
-          l = QueryAST::Binop{
+          l = Query::Binop{
             op: Binop::$opi,
             span: (start_pos, end_pos),
             left: Box::new(l),
@@ -192,7 +194,7 @@ impl Parser {
         }
     }
 
-    fn parse(&mut self) -> Result<QueryAST, ParseError> {
+    fn parse(&mut self) -> Result<Query, ParseError> {
         let v = self.parse_expr()?;
 
         self.skip_insignificant();
@@ -208,14 +210,14 @@ impl Parser {
         Ok(v)
     }
 
-    fn parse_expr(&mut self) -> Result<QueryAST, ParseError> {
+    fn parse_expr(&mut self) -> Result<Query, ParseError> {
         self.parse_and()
     }
 
     impl_binop!(parse_and, And, "and", parse_or);
     impl_binop!(parse_or, Or, "or", parse_base);
 
-    fn parse_base(&mut self) -> Result<QueryAST, ParseError> {
+    fn parse_base(&mut self) -> Result<Query, ParseError> {
         self.skip_insignificant();
         let (c, _offset) = self.peek();
         if c == '(' {
@@ -223,8 +225,10 @@ impl Parser {
             let v = self.parse_expr()?;
             self.expect(")")?;
             Ok(v)
+        } else if c == '!' {
+            self.parse_unop()
         } else {
-            self.parse_tag_assert()
+            self.parse_glob()
         }
     }
 
@@ -303,43 +307,80 @@ impl Parser {
         Ok(v)
     }
 
-    fn parse_tag_assert(&mut self) -> Result<QueryAST, ParseError> {
+    fn parse_glob(&mut self) -> Result<Query, ParseError> {
         self.skip_insignificant();
         let (_, tag_pos) = self.peek();
         let tag = self.parse_value()?;
         let (_, tag_end_pos) = self.peek();
         self.skip_insignificant();
 
-        let op: AssertionOp;
+        let escape: bool;
 
-        if self.consume_if_matches_maybe_sep("!==") {
-            op = AssertionOp::NotEquals;
-        } else if self.consume_if_matches_maybe_sep("!=") {
-            op = AssertionOp::NotGlob
-        } else if self.consume_if_matches_maybe_sep("==") {
-            op = AssertionOp::Equals;
+        if self.consume_if_matches_maybe_sep("==") {
+            escape = true;
         } else if self.consume_if_matches_maybe_sep("=") {
-            op = AssertionOp::Glob;
+            escape = false;
         } else {
-            return Ok(QueryAST::TagExistsAssertion {
+            return Ok(Query::ExistsAssertion {
                 tag,
                 span: (tag_pos, tag_end_pos),
             });
         }
 
-        let value = self.parse_value()?;
+        let raw_pattern = self.parse_value()?;
         let (_, end_pos) = self.peek();
 
-        Ok(QueryAST::TagValueAssertion {
-            op,
+        let pattern = if escape {
+            glob::Pattern::escape(&raw_pattern)
+        } else {
+            raw_pattern
+        };
+
+        let pattern = match glob::Pattern::new(&pattern) {
+            Ok(pattern) => pattern,
+            Err(err) => {
+                return Err(ParseError::SyntaxError {
+                    query: self.query_chars.iter().collect(),
+                    msg: format!("invalid glob pattern: {}", err),
+                    span: (tag_pos, end_pos),
+                })
+            }
+        };
+
+        Ok(Query::Glob {
             tag,
-            value,
+            pattern,
             span: (tag_pos, end_pos),
+        })
+    }
+
+    fn parse_unop(&mut self) -> Result<Query, ParseError> {
+        self.skip_insignificant();
+        let (op, op_pos) = self.peek();
+        self.skip_insignificant();
+
+        let op = if self.consume_if_matches_maybe_sep("!") {
+            Unop::Not
+        } else {
+            return Err(ParseError::SyntaxError {
+                query: self.query_chars.iter().collect(),
+                msg: format!("unknown unary operator: {}", op),
+                span: (op_pos, op_pos),
+            });
+        };
+
+        let query = Box::new(self.parse_glob()?);
+        let (_, end_pos) = self.peek();
+
+        Ok(Query::Unop {
+            op,
+            query,
+            span: (op_pos, end_pos),
         })
     }
 }
 
-pub fn parse(s: &str) -> Result<QueryAST, ParseError> {
+pub fn parse(s: &str) -> Result<Query, ParseError> {
     let mut query_chars: Vec<char> = s.chars().collect();
     // Ensure the query always ends with a separator character,
     // this makes things more consistent.
@@ -381,6 +422,29 @@ pub fn report_parse_error(e: ParseError) {
     }
 }
 
+pub fn query_matches(q: &Query, tagset: &HashMap<String, Option<String>>) -> bool {
+    match q {
+        Query::Glob { tag, pattern, .. } => match tagset.get(tag) {
+            Some(Some(v)) => pattern.matches(v),
+            Some(None) => false,
+            None => false,
+        },
+        Query::ExistsAssertion { tag, .. } => match tagset.get(tag) {
+            Some(_) => true,
+            None => false,
+        },
+        Query::Binop {
+            op, left, right, ..
+        } => match op {
+            Binop::And => query_matches(&left, tagset) && query_matches(&right, tagset),
+            Binop::Or => query_matches(&left, tagset) || query_matches(&right, tagset),
+        },
+        Query::Unop { op, query, .. } => match op {
+            Unop::Not => !query_matches(&query, tagset),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +453,7 @@ mod tests {
     fn test_parse_value() {
         assert_eq!(
             parse("foo").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "foo".to_owned(),
                 span: (0, 3),
             }
@@ -397,7 +461,7 @@ mod tests {
 
         assert_eq!(
             parse(" \t foo").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "foo".to_owned(),
                 span: (3, 6),
             }
@@ -405,7 +469,7 @@ mod tests {
 
         assert_eq!(
             parse("\"foo\"").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "foo".to_owned(),
                 span: (0, 5),
             }
@@ -413,7 +477,7 @@ mod tests {
 
         assert_eq!(
             parse("\"f\\\"oo\"").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "f\"oo".to_owned(),
                 span: (0, 7),
             }
@@ -424,7 +488,7 @@ mod tests {
     fn test_parse_paren() {
         assert_eq!(
             parse("(foo)").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "foo".to_owned(),
                 span: (1, 4),
             }
@@ -432,7 +496,7 @@ mod tests {
 
         assert_eq!(
             parse(" ( foo; ) ").unwrap(),
-            QueryAST::TagExistsAssertion {
+            Query::ExistsAssertion {
                 tag: "foo".to_owned(),
                 span: (3, 6),
             }
@@ -440,49 +504,42 @@ mod tests {
     }
 
     #[test]
-    fn test_value_assert() {
-        assert_eq!(
-            parse("foo=123").unwrap(),
-            QueryAST::TagValueAssertion {
-                op: AssertionOp::Glob,
-                tag: "foo".to_owned(),
-                value: "123".to_owned(),
-                span: (0, 7),
-            }
-        );
+    fn test_parse_not() {
+        let q = parse("!foo").unwrap();
 
-        assert_eq!(
-            parse("foo=123").unwrap(),
-            QueryAST::TagValueAssertion {
-                op: AssertionOp::Glob,
-                tag: "foo".to_owned(),
-                value: "123".to_owned(),
-                span: (0, 7),
-            }
-        );
+        match q {
+            Query::Unop {
+                op: Unop::Not,
+                span: (0, 5),
+                ..
+            } => (),
+            _ => panic!(format!("{:?}", q)),
+        }
+    }
 
-        assert_eq!(
-            parse("foo==123").unwrap(),
-            QueryAST::TagValueAssertion {
-                op: AssertionOp::Equals,
-                tag: "foo".to_owned(),
-                value: "123".to_owned(),
-                span: (0, 8),
-            }
-        );
+    #[test]
+    fn test_parse_glob() {
+        match parse("foo==123").unwrap() {
+            Query::Glob { span: (0, 8), .. } => (),
+            v => panic!(format!("{:?}", v)),
+        };
+        match parse("foo=123").unwrap() {
+            Query::Glob { span: (0, 7), .. } => (),
+            v => panic!(format!("{:?}", v)),
+        };
     }
 
     #[test]
     fn test_parse_binop() {
         assert_eq!(
             parse("foo; and bar").unwrap(),
-            QueryAST::Binop {
+            Query::Binop {
                 op: Binop::And,
-                left: Box::new(QueryAST::TagExistsAssertion {
+                left: Box::new(Query::ExistsAssertion {
                     tag: "foo".to_owned(),
                     span: (0, 3),
                 }),
-                right: Box::new(QueryAST::TagExistsAssertion {
+                right: Box::new(Query::ExistsAssertion {
                     tag: "bar".to_owned(),
                     span: (9, 12),
                 }),
@@ -492,23 +549,23 @@ mod tests {
 
         assert_eq!(
             parse("foo; and bar; and baz;").unwrap(),
-            QueryAST::Binop {
+            Query::Binop {
                 op: Binop::And,
 
-                left: Box::new(QueryAST::Binop {
+                left: Box::new(Query::Binop {
                     op: Binop::And,
-                    left: Box::new(QueryAST::TagExistsAssertion {
+                    left: Box::new(Query::ExistsAssertion {
                         tag: "foo".to_owned(),
                         span: (0, 3),
                     }),
-                    right: Box::new(QueryAST::TagExistsAssertion {
+                    right: Box::new(Query::ExistsAssertion {
                         tag: "bar".to_owned(),
                         span: (9, 12),
                     }),
                     span: (0, 14),
                 }),
 
-                right: Box::new(QueryAST::TagExistsAssertion {
+                right: Box::new(Query::ExistsAssertion {
                     tag: "baz".to_owned(),
                     span: (18, 21),
                 }),
@@ -519,21 +576,21 @@ mod tests {
 
         assert_eq!(
             parse("foo; and (bar; or baz)").unwrap(),
-            QueryAST::Binop {
+            Query::Binop {
                 op: Binop::And,
 
-                left: Box::new(QueryAST::TagExistsAssertion {
+                left: Box::new(Query::ExistsAssertion {
                     tag: "foo".to_owned(),
                     span: (0, 3),
                 }),
 
-                right: Box::new(QueryAST::Binop {
+                right: Box::new(Query::Binop {
                     op: Binop::Or,
-                    left: Box::new(QueryAST::TagExistsAssertion {
+                    left: Box::new(Query::ExistsAssertion {
                         tag: "bar".to_owned(),
                         span: (10, 13),
                     }),
-                    right: Box::new(QueryAST::TagExistsAssertion {
+                    right: Box::new(Query::ExistsAssertion {
                         tag: "baz".to_owned(),
                         span: (18, 21),
                     }),
@@ -543,5 +600,23 @@ mod tests {
                 span: (0, 23),
             }
         );
+    }
+
+    #[test]
+    fn test_query_match() {
+        let mut tagset = HashMap::<String, Option<String>>::new();
+        tagset.insert("foo".to_string(), Some("123".to_string()));
+        tagset.insert("bar".to_string(), None);
+
+        assert!(query_matches(&parse("foo;").unwrap(), &tagset));
+        assert!(query_matches(&parse("foo; and bar").unwrap(), &tagset));
+        assert!(query_matches(&parse("bar; or foo").unwrap(), &tagset));
+        assert!(query_matches(&parse("foo=12*").unwrap(), &tagset));
+        assert!(query_matches(&parse("foo=12?").unwrap(), &tagset));
+        assert!(query_matches(&parse("foo=*; and bar").unwrap(), &tagset));
+        assert!(query_matches(&parse("!foo=xxx").unwrap(), &tagset));
+        assert!(query_matches(&parse("foo==123; and bar").unwrap(), &tagset));
+        assert!(!query_matches(&parse("!foo==123").unwrap(), &tagset));
+        assert!(!query_matches(&parse("foo==*;").unwrap(), &tagset));
     }
 }

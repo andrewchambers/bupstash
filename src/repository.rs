@@ -48,6 +48,7 @@ pub struct Repo {
 pub struct ItemMetadata {
     pub tree_height: usize,
     pub encrypt_header: crypto::VersionedEncryptionHeader,
+    // pub encrypted_tags: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
