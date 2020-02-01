@@ -114,9 +114,9 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
     };
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_json::from_slice(&buf)?),
-        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(serde_json::from_slice(&buf)?),
-        PACKET_KIND_ACK_SEND => Packet::AckSend(serde_json::from_slice(&buf)?),
+        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(bincode::deserialize(&buf)?),
+        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_SEND => Packet::AckSend(bincode::deserialize(&buf)?),
         PACKET_KIND_CHUNK => {
             if buf.len() < ADDRESS_SZ {
                 failure::bail!("protocol error, chunk smaller than address");
@@ -128,14 +128,14 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
             buf.truncate(buf.len() - ADDRESS_SZ);
             Packet::Chunk(Chunk { address, data: buf })
         }
-        PACKET_KIND_COMMIT_SEND => Packet::CommitSend(serde_json::from_slice(&buf)?),
-        PACKET_KIND_ACK_COMMIT => Packet::AckCommit(serde_json::from_slice(&buf)?),
-        PACKET_KIND_REQUEST_DATA => Packet::RequestData(serde_json::from_slice(&buf)?),
-        PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(serde_json::from_slice(&buf)?),
-        PACKET_KIND_START_GC => Packet::StartGC(serde_json::from_slice(&buf)?),
-        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(serde_json::from_slice(&buf)?),
-        PACKET_KIND_REQUEST_ALL_ITEMS => Packet::RequestAllItems(serde_json::from_slice(&buf)?),
-        PACKET_KIND_ITEMS => Packet::Items(serde_json::from_slice(&buf)?),
+        PACKET_KIND_COMMIT_SEND => Packet::CommitSend(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_COMMIT => Packet::AckCommit(bincode::deserialize(&buf)?),
+        PACKET_KIND_REQUEST_DATA => Packet::RequestData(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(bincode::deserialize(&buf)?),
+        PACKET_KIND_START_GC => Packet::StartGC(bincode::deserialize(&buf)?),
+        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(bincode::deserialize(&buf)?),
+        PACKET_KIND_REQUEST_ALL_ITEMS => Packet::RequestAllItems(bincode::deserialize(&buf)?),
+        PACKET_KIND_ITEMS => Packet::Items(bincode::deserialize(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -166,70 +166,59 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
         // XXX Refactor somehow. Generic, macro?
         // Only the chunk packet needs special treatment.
         Packet::ServerInfo(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::BeginSend(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_BEGIN_SEND, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::AckSend(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::CommitSend(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_COMMIT_SEND, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::AckCommit(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_COMMIT, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::RequestData(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::AckRequestData(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_REQUEST_DATA, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::StartGC(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_START_GC, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::GCComplete(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::RequestAllItems(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_ALL_ITEMS, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
         Packet::Items(ref v) => {
-            let j = serde_json::to_string(&v)?;
-            let b = j.as_bytes();
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_ITEMS, b.len().try_into()?)?;
-            w.write_all(b)?;
+            w.write_all(&b)?;
         }
     }
     w.flush()?;

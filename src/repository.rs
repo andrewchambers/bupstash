@@ -261,7 +261,7 @@ impl Repo {
         let tx = conn.transaction()?;
         tx.execute(
             "insert into Items(Metadata) values(?);",
-            &[serde_json::to_string(&metadata)?],
+            &[bincode::serialize(&metadata)?],
         )?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
@@ -271,15 +271,15 @@ impl Repo {
 
     pub fn lookup_item_by_id(&mut self, id: i64) -> Result<Option<Item>, failure::Error> {
         let conn = Repo::open_db(&self._repo_path)?;
-        let md_json: String =
+        let metadata: Vec<u8> =
             match conn.query_row("select Metadata from Items where Id = ?;", &[id], |row| {
                 row.get(0)
             }) {
-                Ok(md_json) => md_json,
+                Ok(metadata) => metadata,
                 Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
                 Err(e) => return Err(e.into()),
             };
-        let metadata: ItemMetadata = serde_json::from_str(&md_json)?;
+        let metadata: ItemMetadata = bincode::deserialize(&metadata)?;
         Ok(Some(Item { id, metadata }))
     }
 
@@ -346,8 +346,8 @@ impl Repo {
             let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
 
             while let Some(row) = rows.next()? {
-                let metadata: String = row.get(0)?;
-                let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
+                let metadata: Vec<u8> = row.get(0)?;
+                let metadata: ItemMetadata = bincode::deserialize(&metadata)?;
                 let addr = &metadata.address;
                 {
                     if !reachable.contains(&addr) {
