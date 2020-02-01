@@ -4,6 +4,10 @@ use super::repository;
 
 pub struct ServerConfig {
     pub repo_path: std::path::PathBuf,
+    pub allow_gc: bool,
+    pub allow_read: bool,
+    pub allow_add: bool,
+    pub allow_edit: bool,
 }
 
 pub fn serve(
@@ -20,18 +24,30 @@ pub fn serve(
 
     match read_packet(r)? {
         Packet::BeginSend(_) => {
+            if !cfg.allow_add {
+                failure::bail!("server has add writing data for this client")
+            }
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             recv(&mut repo, r, w)
         }
         Packet::RequestData(req) => {
+            if !cfg.allow_read {
+                failure::bail!("server has disabled reading data for this client")
+            }
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             send(&mut repo, req.id, w)
         }
         Packet::StartGC(_) => {
+            if !cfg.allow_gc {
+                failure::bail!("server has disabled garbage collection for this client")
+            }
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
             gc(&mut repo, w)
         }
         Packet::RequestAllItems(_) => {
+            if !cfg.allow_read {
+                failure::bail!("server has disabled query and search for this client")
+            }
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             all_items(&mut repo, w)
         }

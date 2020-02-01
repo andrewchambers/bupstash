@@ -399,15 +399,55 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
 }
 
 fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
-    let opts = default_cli_opts();
+    let mut opts = default_cli_opts();
+    opts.optflag(
+        "",
+        "allow-add",
+        "allow client to add more data to the repository.",
+    );
+    opts.optflag(
+        "",
+        "allow-edit",
+        "allow client to edit and remove repository entries.",
+    );
+    opts.optflag(
+        "",
+        "allow-gc",
+        "allow client to run the repository garbage collector.",
+    );
+    opts.optflag(
+        "",
+        "allow-read",
+        "allow client to read and query the repository.",
+    );
     let matches = default_parse_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {
         die("Expected a single path to initialize.".to_string());
     }
 
+    let mut allow_add = true;
+    let mut allow_edit = true;
+    let mut allow_gc = true;
+    let mut allow_read = true;
+
+    if matches.opt_present("allow-add")
+        || matches.opt_present("allow-edit")
+        || matches.opt_present("allow-gc")
+        || matches.opt_present("allow-read")
+    {
+        allow_add = matches.opt_present("allow-add");
+        allow_edit = matches.opt_present("allow-edit");
+        allow_gc = matches.opt_present("allow-gc");
+        allow_read = matches.opt_present("allow-read");
+    }
+
     server::serve(
         server::ServerConfig {
+            allow_add,
+            allow_edit,
+            allow_gc,
+            allow_read,
             repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut std::io::stdin(),
