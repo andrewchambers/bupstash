@@ -194,7 +194,7 @@ fn send2(
         filtered_conn.w,
         &Packet::CommitSend(CommitSend {
             metadata: repository::ItemMetadata {
-                address: root_address.bytes,
+                address: root_address,
                 tree_height,
                 encrypt_header: ctx.encryption_header(),
                 encrypted_tags: pack_data(
@@ -289,11 +289,7 @@ pub fn request_data_stream(
 
     let ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
     let mut sv = StreamVerifier { r: r };
-    let mut tr = htree::TreeReader::new(
-        &mut sv,
-        metadata.tree_height,
-        Address::from_bytes(&metadata.address),
-    );
+    let mut tr = htree::TreeReader::new(&mut sv, metadata.tree_height, &metadata.address);
 
     loop {
         match tr.next_chunk()? {

@@ -254,7 +254,7 @@ mod tests {
             }),
             Packet::CommitSend(CommitSend {
                 metadata: repository::ItemMetadata {
-                    address: Address::default().bytes,
+                    address: Address::default(),
                     tree_height: 3,
                     encrypt_header: {
                         let master_key = keys::MasterKey::gen();
@@ -276,7 +276,7 @@ mod tests {
                     Some(repository::Item {
                         id: 546546,
                         metadata: repository::ItemMetadata {
-                            address: Address::default().bytes,
+                            address: Address::default(),
                             tree_height: 1234,
                             encrypt_header: ectx.encryption_header(),
                             encrypted_tags: vec![1, 2, 3],
@@ -296,7 +296,7 @@ mod tests {
             Packet::Items(vec![repository::Item {
                 id: 765756,
                 metadata: repository::ItemMetadata {
-                    address: Address::default().bytes,
+                    address: Address::default(),
                     tree_height: 1234,
                     encrypt_header: {
                         let master_key = keys::MasterKey::gen();

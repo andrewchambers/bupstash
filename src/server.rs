@@ -1,4 +1,3 @@
-use super::address;
 use super::htree;
 use super::protocol::*;
 use super::repository;
@@ -98,11 +97,7 @@ fn send(
         }
     };
 
-    let mut tr = htree::TreeReader::new(
-        repo,
-        item.metadata.tree_height,
-        address::Address::from_bytes(&item.metadata.address),
-    );
+    let mut tr = htree::TreeReader::new(repo, item.metadata.tree_height, &item.metadata.address);
 
     loop {
         match tr.next_addr()? {

@@ -152,7 +152,7 @@ pub struct TreeReader<'a> {
 }
 
 impl<'a> TreeReader<'a> {
-    pub fn new(source: &'a mut dyn Source, level: usize, addr: Address) -> TreeReader<'a> {
+    pub fn new(source: &'a mut dyn Source, level: usize, addr: &Address) -> TreeReader<'a> {
         let mut tr = TreeReader {
             source,
             tree_blocks: Vec::new(),
@@ -376,7 +376,7 @@ mod tests {
             addr = result.1;
         }
 
-        let mut tr = TreeReader::new(&mut chunks, height, addr);
+        let mut tr = TreeReader::new(&mut chunks, height, &addr);
 
         // First address is already counted
         let mut count = 0;
@@ -430,7 +430,7 @@ mod tests {
             addr = result.1;
         }
 
-        let mut tr = TreeReader::new(&mut chunks, level, addr);
+        let mut tr = TreeReader::new(&mut chunks, level, &addr);
 
         let (addr, buf) = tr.next_chunk().unwrap().unwrap();
         assert_eq!(Address::from_bytes(&[1; ADDRESS_SZ]), addr);

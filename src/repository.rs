@@ -55,7 +55,7 @@ pub struct ItemMetadata {
     pub tree_height: usize,
     pub encrypt_header: crypto::VersionedEncryptionHeader,
     pub encrypted_tags: Vec<u8>,
-    pub address: [u8; ADDRESS_SZ],
+    pub address: Address,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -348,7 +348,7 @@ impl Repo {
             while let Some(row) = rows.next()? {
                 let metadata: String = row.get(0)?;
                 let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
-                let addr = Address::from_bytes(&metadata.address);
+                let addr = &metadata.address;
                 {
                     if !reachable.contains(&addr) {
                         let mut tr = htree::TreeReader::new(self, metadata.tree_height, addr);
