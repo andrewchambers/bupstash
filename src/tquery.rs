@@ -62,7 +62,7 @@ fn is_value_char(c: char) -> bool {
         return false;
     }
     match c {
-        '!' | '=' | '(' | ')' => false,
+        '~' | '=' | '(' | ')' => false,
         _ => true,
     }
 }
@@ -225,7 +225,7 @@ impl Parser {
             let v = self.parse_expr()?;
             self.expect(")")?;
             Ok(v)
-        } else if c == '!' {
+        } else if c == '~' {
             self.parse_unop()
         } else {
             self.parse_glob()
@@ -359,7 +359,7 @@ impl Parser {
         let (op, op_pos) = self.peek();
         self.skip_insignificant();
 
-        let op = if self.consume_if_matches_maybe_sep("!") {
+        let op = if self.consume_if_matches_maybe_sep("~") {
             Unop::Not
         } else {
             return Err(ParseError::SyntaxError {
@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn test_parse_not() {
-        let q = parse("!foo").unwrap();
+        let q = parse("~foo").unwrap();
 
         match q {
             Query::Unop {
@@ -614,7 +614,7 @@ mod tests {
         assert!(query_matches(&parse("foo=12*").unwrap(), &tagset));
         assert!(query_matches(&parse("foo=12?").unwrap(), &tagset));
         assert!(query_matches(&parse("foo=*; and bar").unwrap(), &tagset));
-        assert!(query_matches(&parse("!foo=xxx").unwrap(), &tagset));
+        assert!(query_matches(&parse("~foo=xxx").unwrap(), &tagset));
         assert!(query_matches(&parse("foo==123; and bar").unwrap(), &tagset));
         assert!(!query_matches(&parse("!foo==123").unwrap(), &tagset));
         assert!(!query_matches(&parse("foo==*;").unwrap(), &tagset));
