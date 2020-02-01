@@ -27,21 +27,22 @@ pub struct AckSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CommitSend {
-    pub address: Address,
     pub metadata: repository::ItemMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct AckCommit {}
+pub struct AckCommit {
+    pub id: i64,
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RequestData {
-    pub root: Address,
+    pub id: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckRequestData {
-    pub metadata: Option<repository::ItemMetadata>,
+    pub item: Option<repository::Item>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -51,6 +52,9 @@ pub struct StartGC {}
 pub struct GCComplete {
     pub stats: repository::GCStats,
 }
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RequestAllItems {}
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -64,6 +68,8 @@ pub enum Packet {
     AckRequestData(AckRequestData),
     StartGC(StartGC),
     GCComplete(GCComplete),
+    RequestAllItems(RequestAllItems),
+    Items(Vec<repository::Item>),
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
@@ -76,6 +82,8 @@ const PACKET_KIND_REQUEST_DATA: u8 = 6;
 const PACKET_KIND_ACK_REQUEST_DATA: u8 = 7;
 const PACKET_KIND_START_GC: u8 = 8;
 const PACKET_KIND_GC_COMPLETE: u8 = 9;
+const PACKET_KIND_REQUEST_ALL_ITEMS: u8 = 10;
+const PACKET_KIND_ITEMS: u8 = 11;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -126,6 +134,8 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(serde_json::from_slice(&buf)?),
         PACKET_KIND_START_GC => Packet::StartGC(serde_json::from_slice(&buf)?),
         PACKET_KIND_GC_COMPLETE => Packet::GCComplete(serde_json::from_slice(&buf)?),
+        PACKET_KIND_REQUEST_ALL_ITEMS => Packet::RequestAllItems(serde_json::from_slice(&buf)?),
+        PACKET_KIND_ITEMS => Packet::Items(serde_json::from_slice(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -209,6 +219,18 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(b)?;
         }
+        Packet::RequestAllItems(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_REQUEST_ALL_ITEMS, b.len().try_into()?)?;
+            w.write_all(b)?;
+        }
+        Packet::Items(ref v) => {
+            let j = serde_json::to_string(&v)?;
+            let b = j.as_bytes();
+            send_hdr(w, PACKET_KIND_ITEMS, b.len().try_into()?)?;
+            w.write_all(b)?;
+        }
     }
     w.flush()?;
     Ok(())
@@ -231,30 +253,34 @@ mod tests {
                 gc_generation: "blah".to_owned(),
             }),
             Packet::CommitSend(CommitSend {
-                address: Address::default(),
                 metadata: repository::ItemMetadata {
+                    address: Address::default().bytes,
                     tree_height: 3,
                     encrypt_header: {
                         let master_key = keys::MasterKey::gen();
                         let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
                         ectx.encryption_header()
                     },
+                    encrypted_tags: vec![1, 2, 3],
                 },
             }),
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
             }),
-            Packet::RequestData(RequestData {
-                root: Address::default(),
-            }),
+            Packet::RequestData(RequestData { id: 153534 }),
             Packet::AckRequestData(AckRequestData {
-                metadata: {
+                item: {
                     let master_key = keys::MasterKey::gen();
                     let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    Some(repository::ItemMetadata {
-                        tree_height: 1234,
-                        encrypt_header: ectx.encryption_header(),
+                    Some(repository::Item {
+                        id: 546546,
+                        metadata: repository::ItemMetadata {
+                            address: Address::default().bytes,
+                            tree_height: 1234,
+                            encrypt_header: ectx.encryption_header(),
+                            encrypted_tags: vec![1, 2, 3],
+                        },
                     })
                 },
             }),
@@ -266,6 +292,21 @@ mod tests {
                     bytes_remaining: 678,
                 },
             }),
+            Packet::RequestAllItems(RequestAllItems {}),
+            Packet::Items(vec![repository::Item {
+                id: 765756,
+                metadata: repository::ItemMetadata {
+                    address: Address::default().bytes,
+                    tree_height: 1234,
+                    encrypt_header: {
+                        let master_key = keys::MasterKey::gen();
+                        let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
+
+                        ectx.encryption_header()
+                    },
+                    encrypted_tags: vec![1, 2, 3],
+                },
+            }]),
         ];
 
         for p1 in packets.iter() {

@@ -17,6 +17,7 @@ pub mod tquery;
 
 use failure::Fail;
 use getopts::{Matches, Options};
+use std::collections::HashMap;
 
 fn die(s: String) -> ! {
     eprintln!("{}", s);
@@ -210,8 +211,25 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         let f = std::fs::File::open(f)?;
         f
     } else {
-        failure::bail!("please set --file to the data you are sending.")
+        failure::bail!("please set --file to the data you are sending")
     };
+
+    let mut tags = HashMap::<String, Option<String>>::new();
+
+    let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
+    for a in &matches.free {
+        match tag_re.captures(&a) {
+            Some(caps) => {
+                let t = &caps[1];
+                let v = caps.get(2);
+                match v {
+                    Some(v) => tags.insert(t.to_string(), Some(v.as_str().to_string())),
+                    None => tags.insert(t.to_string(), None),
+                };
+            }
+            None => failure::bail!("argument '{}' is not a valid tag value.", a),
+        }
+    }
 
     let encrypt_ctx = crypto::EncryptContext::new(&key);
 
@@ -224,7 +242,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         None => None,
     };
 
-    let addr = client::send(
+    let id = client::send(
         client::SendOptions {
             compression: !matches.opt_present("no-compression"),
         },
@@ -232,11 +250,11 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         send_log,
         &mut serve_out,
         &mut serve_in,
+        &tags,
         &mut data,
     )?;
 
-    println!("{}", addr);
-
+    println!("{}", id);
     Ok(())
 }
 
@@ -250,7 +268,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
-    opts.optopt("a", "address", "Address of data to fetch.", "HASH");
+    opts.optopt("", "id", "ID of data to fetch.", "ID");
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -269,14 +287,14 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("the provided key is a not a master decryption key"),
     };
 
-    let address = if matches.opt_present("address") {
-        let addr_str = matches.opt_str("address").unwrap();
-        match address::Address::from_str(&addr_str) {
+    let id = if matches.opt_present("id") {
+        let id_str = matches.opt_str("id").unwrap();
+        match id_str.parse::<i64>() {
             Ok(addr) => addr,
-            Err(err) => return Err(err.context("--address invalid").into()),
+            Err(err) => return Err(err.context("--id invalid").into()),
         }
     } else {
-        failure::bail!("please set --address or --id.")
+        failure::bail!("please set or --id.")
     };
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
@@ -285,7 +303,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     client::request_data_stream(
         &key,
-        address,
+        id,
         &mut serve_out,
         &mut serve_in,
         &mut std::io::stdout(),

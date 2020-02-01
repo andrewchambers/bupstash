@@ -45,10 +45,17 @@ pub struct Repo {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct Item {
+    pub id: i64,
+    pub metadata: ItemMetadata,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ItemMetadata {
     pub tree_height: usize,
     pub encrypt_header: crypto::VersionedEncryptionHeader,
-    // pub encrypted_tags: Vec<u8>,
+    pub encrypted_tags: Vec<u8>,
+    pub address: [u8; ADDRESS_SZ],
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -170,7 +177,7 @@ impl Repo {
             rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
         )?;
         tx.execute(
-            "create table Items(Address, Metadata);",
+            "create table Items(Id INTEGER PRIMARY KEY AUTOINCREMENT, Metadata);",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -249,38 +256,64 @@ impl Repo {
         })
     }
 
-    pub fn add_item(
-        &mut self,
-        addr: Address,
-        metadata: ItemMetadata,
-    ) -> Result<(), failure::Error> {
+    pub fn add_item(&mut self, metadata: ItemMetadata) -> Result<i64, failure::Error> {
         let mut conn = Repo::open_db(&self._repo_path)?;
         let tx = conn.transaction()?;
         tx.execute(
-            "insert into Items(Address, Metadata) values(?, ?);",
-            &[format!("{}", addr), serde_json::to_string(&metadata)?],
+            "insert into Items(Metadata) values(?);",
+            &[serde_json::to_string(&metadata)?],
         )?;
+        let id = tx.last_insert_rowid();
         tx.commit()?;
         drop(conn);
-        Ok(())
+        Ok(id)
     }
 
-    pub fn lookup_item_by_address(
-        &mut self,
-        addr: Address,
-    ) -> Result<Option<ItemMetadata>, failure::Error> {
+    pub fn lookup_item_by_id(&mut self, id: i64) -> Result<Option<Item>, failure::Error> {
         let conn = Repo::open_db(&self._repo_path)?;
-        let md_json: String = match conn.query_row(
-            "select Metadata from Items where Address = ?;",
-            &[format!("{}", addr)],
-            |row| row.get(0),
-        ) {
-            Ok(md_json) => md_json,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
+        let md_json: String =
+            match conn.query_row("select Metadata from Items where Id = ?;", &[id], |row| {
+                row.get(0)
+            }) {
+                Ok(md_json) => md_json,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
         let metadata: ItemMetadata = serde_json::from_str(&md_json)?;
-        Ok(Some(metadata))
+        Ok(Some(Item { id, metadata }))
+    }
+
+    pub fn walk_all_items(
+        &mut self,
+        f: &mut dyn FnMut(Vec<Item>) -> Result<(), failure::Error>,
+    ) -> Result<(), failure::Error> {
+        let mut conn = Repo::open_db(&self._repo_path)?;
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare("select Id, Metadata from Items;")?;
+        let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+        let mut items = Vec::new();
+        loop {
+            match rows.next()? {
+                Some(row) => {
+                    let id: i64 = row.get(0)?;
+                    let metadata: String = row.get(1)?;
+                    let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
+                    items.push(Item { id, metadata });
+                    if items.len() > 100 {
+                        let mut walked_items = Vec::new();
+                        std::mem::swap(&mut items, &mut walked_items);
+                        f(walked_items)?;
+                    }
+                }
+                None => {
+                    if !items.is_empty() {
+                        f(items)?;
+                    };
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
@@ -309,14 +342,13 @@ impl Repo {
                 "update ArchivistMeta set value = ? where key = 'gc_generation';",
                 rusqlite::params![new_gc_generation()],
             )?;
-            let mut stmt = tx.prepare("select Address, Metadata from Items;")?;
+            let mut stmt = tx.prepare("select Metadata from Items;")?;
             let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
 
             while let Some(row) = rows.next()? {
-                let addr: String = row.get(0)?;
-                let addr = Address::from_str(&addr)?;
-                let metadata: String = row.get(1)?;
+                let metadata: String = row.get(0)?;
                 let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
+                let addr = Address::from_bytes(&metadata.address);
                 {
                     if !reachable.contains(&addr) {
                         let mut tr = htree::TreeReader::new(self, metadata.tree_height, addr);

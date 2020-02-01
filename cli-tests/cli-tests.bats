@@ -29,21 +29,21 @@ teardown () {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
-  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id" )"
+  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id" )"
 }
 
 @test "simple send recv send key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send -r "$REPO" -k "$SEND_KEY" -f "$SCRATCH/foo.txt")"
-  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id" )"
+  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id" )"
 }
 
 @test "simple send recv no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send --no-compression -r "$REPO" -k "$SEND_KEY" -f "$SCRATCH/foo.txt")"
-  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id" )"
+  test "$data" = "$(archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id" )"
 }
 
 @test "random data" {
@@ -52,7 +52,7 @@ teardown () {
     rm -f "$SCRATCH/rand.dat"
     head -c $i /dev/urandom > "$SCRATCH/rand.dat"
     id="$(archivist send -r "$REPO" -k "$SEND_KEY" -f "$SCRATCH/rand.dat")"
-    archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id" > "$SCRATCH/got.dat"
+    archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id" > "$SCRATCH/got.dat"
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
   done
 }
@@ -63,7 +63,7 @@ teardown () {
     rm -f "$SCRATCH/rand.dat"
     yes | head -c $i > "$SCRATCH/yes.dat"
     id="$(archivist send -r "$REPO" -k "$SEND_KEY" -f "$SCRATCH/yes.dat")"
-    archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id" > "$SCRATCH/got.dat"
+    archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id" > "$SCRATCH/got.dat"
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
   done
 }
@@ -73,7 +73,7 @@ teardown () {
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   archivist new-master-key -o "$SCRATCH/wrong.key"
-  run archivist get -r "$REPO" -k "$SCRATCH/wrong.key" -a "$id"
+  run archivist get -r "$REPO" -k "$SCRATCH/wrong.key" --id "$id"
   echo "$output" | grep -q "key does not match"
   if test $status = 0
   then
@@ -86,7 +86,7 @@ teardown () {
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   echo -n x >> "$REPO/data/"*
-  run archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id"
+  run archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id"
   echo "$output" | grep -q "corrupt or tampered data"
   if test $status = 0
   then
@@ -98,7 +98,7 @@ _concurrent_send_test_worker () {
   for i in $(seq 100)
   do
     id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f <(echo $i))"
-    test "$i" = $(archivist get -r "$REPO" -k "$MASTER_KEY" -a "$id")
+    test "$i" = $(archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id")
   done
 }
 

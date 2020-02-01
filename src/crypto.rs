@@ -59,7 +59,7 @@ impl EncryptContext {
     }
 
     #[inline(always)]
-    pub fn encrypt_chunk(&self, pt: &[u8]) -> Vec<u8> {
+    pub fn encrypt_data(&self, pt: &[u8]) -> Vec<u8> {
         let n = pt.len() + hydrogen::SECRETBOX_HEADERBYTES;
         let mut ct = Vec::with_capacity(n);
         // This is safe as u8 is primitive, and capacity is valid by definition.
@@ -129,7 +129,7 @@ impl DecryptContext {
     }
 
     #[inline(always)]
-    pub fn decrypt_chunk(&self, ct: &[u8]) -> Option<Vec<u8>> {
+    pub fn decrypt_data(&self, ct: &[u8]) -> Option<Vec<u8>> {
         let n = ct.len() - hydrogen::SECRETBOX_HEADERBYTES;
         let mut pt = Vec::with_capacity(n);
         // This us safe ai u8 is primitive, and capacity is valid by definition.
@@ -153,8 +153,8 @@ mod tests {
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
-        let ct = ectx.encrypt_chunk(&pt);
-        let pt2 = dctx.decrypt_chunk(&ct).unwrap();
+        let ct = ectx.encrypt_data(&pt);
+        let pt2 = dctx.decrypt_data(&ct).unwrap();
         assert_eq!(pt2, [1, 2, 3]);
     }
 
@@ -166,8 +166,8 @@ mod tests {
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
-        let ct = ectx.encrypt_chunk(&pt);
-        let pt2 = dctx.decrypt_chunk(&ct).unwrap();
+        let ct = ectx.encrypt_data(&pt);
+        let pt2 = dctx.decrypt_data(&ct).unwrap();
         assert_eq!(pt2, [1, 2, 3]);
     }
 }

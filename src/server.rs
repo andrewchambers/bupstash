@@ -26,11 +26,15 @@ pub fn serve(
         }
         Packet::RequestData(req) => {
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
-            send(&mut repo, req.root, w)
+            send(&mut repo, req.id, w)
         }
         Packet::StartGC(_) => {
             let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
             gc(&mut repo, w)
+        }
+        Packet::RequestAllItems(_) => {
+            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
+            all_items(&mut repo, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -57,8 +61,8 @@ fn recv(
             }
             Packet::CommitSend(commit) => {
                 repo.sync()?;
-                repo.add_item(commit.address, commit.metadata)?;
-                write_packet(w, &Packet::AckCommit(AckCommit {}))?;
+                let id = repo.add_item(commit.metadata)?;
+                write_packet(w, &Packet::AckCommit(AckCommit { id }))?;
                 break;
             }
             _ => {
@@ -74,32 +78,31 @@ fn recv(
 
 fn send(
     repo: &mut repository::Repo,
-    address: address::Address,
+    id: i64,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let metadata = match repo.lookup_item_by_address(address)? {
-        Some(metadata) => {
+    let item = match repo.lookup_item_by_id(id)? {
+        Some(item) => {
             write_packet(
                 w,
                 &Packet::AckRequestData(AckRequestData {
-                    metadata: Some(metadata.clone()),
+                    item: Some(item.clone()),
                 }),
             )?;
-            metadata
+            item
         }
         None => {
-            let no_metadata: Option<repository::ItemMetadata> = None;
-            write_packet(
-                w,
-                &Packet::AckRequestData(AckRequestData {
-                    metadata: no_metadata,
-                }),
-            )?;
+            let no_item: Option<repository::Item> = None;
+            write_packet(w, &Packet::AckRequestData(AckRequestData { item: no_item }))?;
             return Ok(());
         }
     };
 
-    let mut tr = htree::TreeReader::new(repo, metadata.tree_height, address);
+    let mut tr = htree::TreeReader::new(
+        repo,
+        item.metadata.tree_height,
+        address::Address::from_bytes(&item.metadata.address),
+    );
 
     loop {
         match tr.next_addr()? {
@@ -126,5 +129,18 @@ fn send(
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
     let stats = repo.gc()?;
     write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
+    Ok(())
+}
+
+fn all_items(
+    repo: &mut repository::Repo,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    repo.walk_all_items(&mut |items| {
+        write_packet(w, &Packet::Items(items))?;
+        Ok(())
+    })?;
+
+    write_packet(w, &Packet::Items(vec![]))?;
     Ok(())
 }
