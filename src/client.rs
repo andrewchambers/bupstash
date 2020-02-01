@@ -129,6 +129,7 @@ fn compress_data(mut data: Vec<u8>) -> Vec<u8> {
     }
 }
 
+// TODO We could merge this with the crypto functions, they are used together.
 fn pack_data(
     ctx: &crypto::EncryptContext,
     compression: bool,
@@ -229,6 +230,40 @@ impl<'a> htree::Source for StreamVerifier<'a> {
     }
 }
 
+// TODO We could merge this with the crypto functions, they are used together.
+pub fn unpack_data(ctx: &crypto::DecryptContext, data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
+    match ctx.decrypt_data(&data) {
+        Some(mut data) => {
+            if data.is_empty() {
+                return Err(ClientError::CorruptOrTamperedDataError.into());
+            }
+            match data[data.len() - 1] {
+                footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
+                    data.pop();
+                    Ok(data)
+                }
+                footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
+                    data.pop();
+                    if data.len() < 4 {
+                        return Err(ClientError::CorruptOrTamperedDataError.into());
+                    }
+                    let dlen = data.len();
+                    let decompressed_sz = ((data[dlen - 4] as u32) << 24)
+                        | ((data[dlen - 3] as u32) << 16)
+                        | ((data[dlen - 2] as u32) << 8)
+                        | (data[dlen - 1] as u32);
+                    data.truncate(data.len() - 4);
+                    let decompressed_data =
+                        zstd::block::decompress(&data, decompressed_sz as usize)?;
+                    Ok(decompressed_data)
+                }
+                _ => Err(ClientError::CorruptOrTamperedDataError.into()),
+            }
+        }
+        None => Err(ClientError::CorruptOrTamperedDataError.into()),
+    }
+}
+
 pub fn request_data_stream(
     key: &keys::MasterKey,
     id: i64,
@@ -263,45 +298,11 @@ pub fn request_data_stream(
     loop {
         match tr.next_chunk()? {
             Some((addr, encrypted_chunk_data)) => {
-                match ctx.decrypt_data(&encrypted_chunk_data) {
-                    Some(mut decrypted_chunk_data) => {
-                        if decrypted_chunk_data.is_empty() {
-                            return Err(ClientError::CorruptOrTamperedDataError.into());
-                        }
-                        match decrypted_chunk_data[decrypted_chunk_data.len() - 1] {
-                            footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
-                                decrypted_chunk_data.pop();
-                                if addr != ctx.keyed_content_address(&decrypted_chunk_data) {
-                                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                                }
-                                out.write_all(&decrypted_chunk_data)?;
-                            }
-                            footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
-                                decrypted_chunk_data.pop();
-                                if decrypted_chunk_data.len() < 4 {
-                                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                                }
-                                let dlen = decrypted_chunk_data.len();
-                                let decompressed_sz = ((decrypted_chunk_data[dlen - 4] as u32)
-                                    << 24)
-                                    | ((decrypted_chunk_data[dlen - 3] as u32) << 16)
-                                    | ((decrypted_chunk_data[dlen - 2] as u32) << 8)
-                                    | (decrypted_chunk_data[dlen - 1] as u32);
-                                decrypted_chunk_data.truncate(decrypted_chunk_data.len() - 4);
-                                let decompressed_chunk_data = zstd::block::decompress(
-                                    &decrypted_chunk_data,
-                                    decompressed_sz as usize,
-                                )?;
-                                if addr != ctx.keyed_content_address(&decompressed_chunk_data) {
-                                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                                }
-                                out.write_all(&decompressed_chunk_data)?;
-                            }
-                            _ => return Err(ClientError::CorruptOrTamperedDataError.into()),
-                        };
-                    }
-                    None => return Err(ClientError::CorruptOrTamperedDataError.into()),
-                };
+                let data = unpack_data(&ctx, encrypted_chunk_data)?;
+                if addr != ctx.keyed_content_address(&data) {
+                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                }
+                out.write_all(&data)?;
             }
             None => break,
         }
@@ -327,7 +328,7 @@ pub fn gc(
 pub fn all_items(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-    out: &mut dyn std::io::Write,
+    f: &mut dyn FnMut(Vec<repository::Item>) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
     handle_server_info(r)?;
     write_packet(w, &Packet::RequestAllItems(RequestAllItems {}))?;
@@ -338,9 +339,9 @@ pub fn all_items(
                 if items.is_empty() {
                     break;
                 }
-                // XXX TODO do something with items.
+                f(items)?;
             }
-            _ => failure::bail!("protocol error, expected items"),
+            _ => failure::bail!("protocol error, expected items packet"),
         }
     }
 

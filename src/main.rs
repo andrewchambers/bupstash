@@ -109,21 +109,6 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     }
 }
 
-fn search_main(args: Vec<String>) -> Result<(), failure::Error> {
-    let mut opts = default_cli_opts();
-    opts.reqopt("m", "master-key", "master key to derive key from.", "PATH");
-    let matches = default_parse_opts(opts, &args[..]);
-    let ast = match tquery::parse(&matches.free.join("•")) {
-        Err(e) => {
-            tquery::report_parse_error(e);
-            std::process::exit(1);
-        }
-        Ok(ast) => ast,
-    };
-    eprintln!("{:?}", ast);
-    Ok(())
-}
-
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
     let repo = if matches.opt_present("repository") {
         matches.opt_str("repository").unwrap()
@@ -169,6 +154,85 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     };
 
     Ok(serve_proc)
+}
+
+fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.optopt(
+        "r",
+        "repository",
+        "URI of repository to list items from.",
+        "REPO",
+    );
+    opts.reqopt(
+        "k",
+        "key",
+        "master key to decrypt items during listing/search.",
+        "PATH",
+    );
+    let matches = default_parse_opts(opts, &args[..]);
+
+    let key = if matches.opt_present("key") {
+        matches.opt_str("key").unwrap()
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
+        s.into_string().unwrap()
+    } else {
+        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
+    };
+
+    let key = keys::Key::load_from_file(&key)?;
+
+    let key = match key {
+        keys::Key::MasterKeyV1(mk) => mk,
+        _ => failure::bail!("the provided key is a not a master decryption key"),
+    };
+
+    let mut query: Option<tquery::Query> = None;
+
+    if matches.free.len() != 0 {
+        query = match tquery::parse(&matches.free.join("•")) {
+            Err(e) => {
+                tquery::report_parse_error(e);
+                std::process::exit(1);
+            }
+            Ok(query) => Some(query),
+        };
+    }
+
+    let mut f = |items: Vec<repository::Item>| {
+        for item in items.iter() {
+            if item.metadata.encrypt_header.master_key_id() != key.id {
+                // XXX TODO report to the user somehow?
+                continue;
+            }
+
+            let ctx = crypto::DecryptContext::open(&key, &item.metadata.encrypt_header)?;
+            let tags = client::unpack_data(
+                &ctx,
+                item.metadata.encrypted_tags.clone(), /* XXX copying here seems pointless */
+            )?;
+            let tags: HashMap<String, Option<String>> = serde_json::from_slice(&tags)?;
+
+            let doprint = match query {
+                Some(ref query) => tquery::query_matches(query, &tags),
+                None => true,
+            };
+
+            if doprint {
+                println!("{}: {:?}", item.id, tags);
+            }
+        }
+
+        Ok(())
+    };
+
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::all_items(&mut serve_out, &mut serve_in, &mut f)?;
+
+    Ok(())
 }
 
 fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
@@ -371,7 +435,7 @@ fn main() {
         "init" => init_main(args),
         "new-master-key" => new_master_key_main(args),
         "new-send-key" => new_send_key_main(args),
-        "search" => search_main(args),
+        "list" => list_main(args),
         "send" => send_main(args),
         "get" => get_main(args),
         "gc" => gc_main(args),
