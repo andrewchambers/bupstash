@@ -11,7 +11,7 @@ Some key features:
 
 - Data deduplication allowing efficient storage of large numbers of data snapshots. [see how]
 
-- Zero knowledge storage servers *without* decryption keys. [see how]
+- Zero knowledge storage servers, with cryptographically assured privacy. [see how]
 
 - Access controls over ssh, allowing different permissions on a per ssh key basis. [see how]
 
@@ -25,6 +25,6 @@ Some key features:
 
 - Rigorous test suite, simulating crashes and power failure. [see how]
 
-- Implemented to a high security standard with many attack vectors mitigated. [see how]
+- Implemented to a high security standard with many attack vectors totally mitigated. [see how]
 
-- Turn key hosting available for *HUGE* amounts of data, with cryptographically assured privacy. [see how]
+- Turn key hosting available for *HUGE* amounts of data and total privacy. [see how]
