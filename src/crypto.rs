@@ -4,6 +4,9 @@ use super::keys;
 use failure::bail;
 use serde::{Deserialize, Serialize};
 
+const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
+const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
+
 pub struct EncryptContext {
     pub k: keys::Key,
     pub session_tx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
@@ -59,12 +62,39 @@ impl EncryptContext {
     }
 
     #[inline(always)]
-    pub fn encrypt_data(&self, pt: &[u8]) -> Vec<u8> {
+    fn compress_data(&self, mut data: Vec<u8>) -> Vec<u8> {
+        // Our max chunk size means this should never happen.
+        assert!(data.len() <= 0xffffffff);
+        let mut compressed_data = zstd::block::compress(&data, 0).unwrap();
+        if (compressed_data.len() + 4) >= data.len() {
+            data.push(CHUNK_FOOTER_NO_COMPRESSION);
+            data
+        } else {
+            compressed_data.reserve(5);
+            let sz = data.len() as u32;
+            compressed_data.push(((sz & 0xff000000) >> 24) as u8);
+            compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
+            compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
+            compressed_data.push((sz & 0x000000ff) as u8);
+            compressed_data.push(CHUNK_FOOTER_ZSTD_COMPRESSED);
+            compressed_data
+        }
+    }
+
+    #[inline(always)]
+    pub fn encrypt_data(&self, compression: bool, mut data: Vec<u8>) -> Vec<u8> {
+        let pt = if compression {
+            self.compress_data(data)
+        } else {
+            data.push(CHUNK_FOOTER_NO_COMPRESSION);
+            data
+        };
+
         let n = pt.len() + hydrogen::SECRETBOX_HEADERBYTES;
         let mut ct = Vec::with_capacity(n);
         // This is safe as u8 is primitive, and capacity is valid by definition.
         unsafe { ct.set_len(n) };
-        hydrogen::secretbox_encrypt(&mut ct, pt, 0, *b"_chunk_\0", &self.session_tx_key);
+        hydrogen::secretbox_encrypt(&mut ct, &pt, 0, *b"_chunk_\0", &self.session_tx_key);
         ct
     }
 
@@ -129,16 +159,43 @@ impl DecryptContext {
     }
 
     #[inline(always)]
-    pub fn decrypt_data(&self, ct: &[u8]) -> Option<Vec<u8>> {
+    pub fn decrypt_data(&self, ct: &[u8]) -> Result<Vec<u8>, failure::Error> {
         let n = ct.len() - hydrogen::SECRETBOX_HEADERBYTES;
         let mut pt = Vec::with_capacity(n);
         // This us safe ai u8 is primitive, and capacity is valid by definition.
         unsafe { pt.set_len(n) };
-        if hydrogen::secretbox_decrypt(&mut pt, ct, 0, *b"_chunk_\0", &self.session_rx_key) {
-            Some(pt)
-        } else {
-            None
+
+        if !hydrogen::secretbox_decrypt(&mut pt, ct, 0, *b"_chunk_\0", &self.session_rx_key) {
+            failure::bail!("decryption failed due to data corruption or key mismatch");
         }
+
+        if pt.is_empty() {
+            failure::bail!("data chunk was too small, missing footer");
+        }
+
+        let pt = match pt[pt.len() - 1] {
+            footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
+                pt.pop();
+                pt
+            }
+            footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
+                pt.pop();
+                if pt.len() < 4 {
+                    failure::bail!("data footer missing decompressed size");
+                }
+                let dlen = pt.len();
+                let decompressed_sz = ((pt[dlen - 4] as u32) << 24)
+                    | ((pt[dlen - 3] as u32) << 16)
+                    | ((pt[dlen - 2] as u32) << 8)
+                    | (pt[dlen - 1] as u32);
+                pt.truncate(pt.len() - 4);
+                let decompressed_data = zstd::block::decompress(&pt, decompressed_sz as usize)?;
+                decompressed_data
+            }
+            _ => failure::bail!("unknown footer type type"),
+        };
+
+        Ok(pt)
     }
 }
 
@@ -153,7 +210,7 @@ mod tests {
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
-        let ct = ectx.encrypt_data(&pt);
+        let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();
         assert_eq!(pt2, [1, 2, 3]);
     }
@@ -166,7 +223,7 @@ mod tests {
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
-        let ct = ectx.encrypt_data(&pt);
+        let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();
         assert_eq!(pt2, [1, 2, 3]);
     }

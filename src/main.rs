@@ -207,9 +207,8 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             }
 
             let ctx = crypto::DecryptContext::open(&key, &item.metadata.encrypt_header)?;
-            let tags = client::unpack_data(
-                &ctx,
-                item.metadata.encrypted_tags.clone(), /* XXX copying here seems pointless */
+            let tags = ctx.decrypt_data(
+                &item.metadata.encrypted_tags, /* XXX copying here seems pointless */
             )?;
             let tags: HashMap<String, Option<String>> = serde_json::from_slice(&tags)?;
 

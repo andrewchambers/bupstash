@@ -17,9 +17,6 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
-const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
-
 fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
     match read_packet(r)? {
         Packet::ServerInfo(info) => {
@@ -110,40 +107,6 @@ pub fn send(
     }
 }
 
-fn compress_data(mut data: Vec<u8>) -> Vec<u8> {
-    // Our max chunk size means this should never happen.
-    assert!(data.len() <= 0xffffffff);
-    let mut compressed_data = zstd::block::compress(&data, 0).unwrap();
-    if (compressed_data.len() + 4) >= data.len() {
-        data.push(CHUNK_FOOTER_NO_COMPRESSION);
-        data
-    } else {
-        compressed_data.reserve(5);
-        let sz = data.len() as u32;
-        compressed_data.push(((sz & 0xff000000) >> 24) as u8);
-        compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
-        compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
-        compressed_data.push((sz & 0x000000ff) as u8);
-        compressed_data.push(CHUNK_FOOTER_ZSTD_COMPRESSED);
-        compressed_data
-    }
-}
-
-// TODO We could merge this with the crypto functions, they are used together.
-fn pack_data(
-    ctx: &crypto::EncryptContext,
-    compression: bool,
-    mut data: Vec<u8>,
-) -> Result<Vec<u8>, failure::Error> {
-    let to_encrypt = if compression {
-        compress_data(data)
-    } else {
-        data.push(CHUNK_FOOTER_NO_COMPRESSION);
-        data
-    };
-    Ok(ctx.encrypt_data(&to_encrypt))
-}
-
 fn send2(
     opts: SendOptions,
     ctx: &crypto::EncryptContext,
@@ -169,7 +132,7 @@ fn send2(
             Ok(0) => {
                 let chunk_data = chunker.finish();
                 let addr = ctx.keyed_content_address(&chunk_data);
-                tw.add(&addr, pack_data(ctx, opts.compression, chunk_data)?)?;
+                tw.add(&addr, ctx.encrypt_data(opts.compression, chunk_data))?;
                 let (height, address) = tw.finish()?;
                 tree_height = height;
                 root_address = address;
@@ -182,7 +145,7 @@ fn send2(
                     n_chunked += n;
                     if let Some(chunk_data) = c {
                         let addr = ctx.keyed_content_address(&chunk_data);
-                        tw.add(&addr, pack_data(ctx, opts.compression, chunk_data)?)?;
+                        tw.add(&addr, ctx.encrypt_data(opts.compression, chunk_data))?;
                     }
                 }
             }
@@ -197,11 +160,8 @@ fn send2(
                 address: root_address,
                 tree_height,
                 encrypt_header: ctx.encryption_header(),
-                encrypted_tags: pack_data(
-                    ctx,
-                    true,
-                    serde_json::to_string(&tags)?.as_bytes().to_vec(),
-                )?,
+                encrypted_tags: ctx
+                    .encrypt_data(true, serde_json::to_string(&tags)?.as_bytes().to_vec()),
             },
         }),
     )?;
@@ -227,40 +187,6 @@ impl<'a> htree::Source for StreamVerifier<'a> {
             }
             _ => failure::bail!("protocol error, expected begin chunk packet"),
         }
-    }
-}
-
-// TODO We could merge this with the crypto functions, they are used together.
-pub fn unpack_data(ctx: &crypto::DecryptContext, data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
-    match ctx.decrypt_data(&data) {
-        Some(mut data) => {
-            if data.is_empty() {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
-            }
-            match data[data.len() - 1] {
-                footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
-                    data.pop();
-                    Ok(data)
-                }
-                footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
-                    data.pop();
-                    if data.len() < 4 {
-                        return Err(ClientError::CorruptOrTamperedDataError.into());
-                    }
-                    let dlen = data.len();
-                    let decompressed_sz = ((data[dlen - 4] as u32) << 24)
-                        | ((data[dlen - 3] as u32) << 16)
-                        | ((data[dlen - 2] as u32) << 8)
-                        | (data[dlen - 1] as u32);
-                    data.truncate(data.len() - 4);
-                    let decompressed_data =
-                        zstd::block::decompress(&data, decompressed_sz as usize)?;
-                    Ok(decompressed_data)
-                }
-                _ => Err(ClientError::CorruptOrTamperedDataError.into()),
-            }
-        }
-        None => Err(ClientError::CorruptOrTamperedDataError.into()),
     }
 }
 
@@ -294,7 +220,7 @@ pub fn request_data_stream(
     loop {
         match tr.next_chunk()? {
             Some((addr, encrypted_chunk_data)) => {
-                let data = unpack_data(&ctx, encrypted_chunk_data)?;
+                let data = ctx.decrypt_data(&encrypted_chunk_data)?;
                 if addr != ctx.keyed_content_address(&data) {
                     return Err(ClientError::CorruptOrTamperedDataError.into());
                 }

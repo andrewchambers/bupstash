@@ -87,7 +87,7 @@ teardown () {
   id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
   echo -n x >> "$REPO/data/"*
   run archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id"
-  echo "$output" | grep -q "corrupt or tampered data"
+  echo "$output" | grep -q "corrupt"
   if test $status = 0
   then
     exit 1
