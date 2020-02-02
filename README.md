@@ -1,6 +1,7 @@
 # archivist
 
-archivist is a secure data store for anything ranging from mission critical data to personal data.
+archivist is a secure data store for use cases ranging from business critical data archiving,
+to small scale personal data collections.
 
 - Secure offline master keys, data can't be decrypted without them. [see how]
 
