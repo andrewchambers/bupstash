@@ -3,6 +3,8 @@
 archivist is a secure data store for uses ranging from business critical data archiving,
 to small scale personal data collections.
 
+Some key features:
+
 - Secure offline master keys, data can't be decrypted without them. [see how]
 
 - Append only keys with forward secrecy, preventing data deletion and exfiltration. [see how]
