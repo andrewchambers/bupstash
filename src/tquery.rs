@@ -58,7 +58,7 @@ fn is_sep(c: char) -> bool {
 }
 
 fn is_value_char(c: char) -> bool {
-    if is_sep(c) {
+    if is_sep(c) || is_ws(c) {
         return false;
     }
     match c {

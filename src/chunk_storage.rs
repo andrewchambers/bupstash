@@ -1,5 +1,6 @@
 use super::address::*;
 use super::fsutil;
+use super::htree;
 use super::repository;
 use std::path::PathBuf;
 
@@ -30,6 +31,18 @@ pub trait Engine {
     // in stable storage after a call to sync has returned. A backend
     // can use this to implement concurrent background writes.
     fn sync(&mut self) -> Result<(), failure::Error>;
+}
+
+impl htree::Sink for Box<dyn Engine> {
+    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+        self.as_mut().add_chunk(addr, buf)
+    }
+}
+
+impl htree::Source for Box<dyn Engine> {
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
+        self.as_mut().get_chunk(addr)
+    }
 }
 
 enum WorkerMsg {

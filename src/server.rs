@@ -15,9 +15,11 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
+    let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
     write_packet(
         w,
         &Packet::ServerInfo(ServerInfo {
+            repo_id: repo.id()?,
             protocol: "0".to_string(),
         }),
     )?;
@@ -27,28 +29,26 @@ pub fn serve(
             if !cfg.allow_add {
                 failure::bail!("server has add writing data for this client")
             }
-            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             recv(&mut repo, r, w)
         }
         Packet::RequestData(req) => {
             if !cfg.allow_read {
                 failure::bail!("server has disabled reading data for this client")
             }
-            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             send(&mut repo, req.id, w)
         }
         Packet::StartGC(_) => {
+            drop(repo);
+            repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
             if !cfg.allow_gc {
                 failure::bail!("server has disabled garbage collection for this client")
             }
-            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
             gc(&mut repo, w)
         }
         Packet::RequestAllItems(_) => {
             if !cfg.allow_read {
                 failure::bail!("server has disabled query and search for this client")
             }
-            let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
             all_items(&mut repo, w)
         }
         _ => Err(failure::format_err!(
@@ -65,17 +65,19 @@ fn recv(
     write_packet(
         w,
         &Packet::AckSend(AckSend {
-            gc_generation: repo.gc_generation.clone(),
+            gc_generation: repo.gc_generation()?,
         }),
     )?;
+
+    let mut store_engine = repo.storage_engine()?;
 
     loop {
         match read_packet(r)? {
             Packet::Chunk(chunk) => {
-                repo.add_chunk(&chunk.address, chunk.data)?;
+                store_engine.add_chunk(&chunk.address, chunk.data)?;
             }
             Packet::CommitSend(commit) => {
-                repo.sync()?;
+                store_engine.sync()?;
                 let id = repo.add_item(commit.metadata)?;
                 write_packet(w, &Packet::AckCommit(AckCommit { id }))?;
                 break;
@@ -113,7 +115,13 @@ fn send(
         }
     };
 
-    let mut tr = htree::TreeReader::new(repo, item.metadata.tree_height, &item.metadata.address);
+    let mut storage_engine = repo.storage_engine()?;
+
+    let mut tr = htree::TreeReader::new(
+        &mut storage_engine,
+        item.metadata.tree_height,
+        &item.metadata.address,
+    );
 
     loop {
         match tr.next_addr()? {

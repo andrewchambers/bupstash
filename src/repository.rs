@@ -38,10 +38,9 @@ pub enum OpenMode {
 
 pub struct Repo {
     open_mode: OpenMode,
-    _repo_path: PathBuf,
+    repo_path: PathBuf,
     _gc_lock: FileLock,
-    storage_engine: Box<dyn chunk_storage::Engine>,
-    pub gc_generation: String,
+    conn: rusqlite::Connection,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -89,7 +88,7 @@ impl Drop for FileLock {
     }
 }
 
-fn new_gc_generation() -> String {
+fn new_random_token() -> String {
     let mut gen: [u8; 32] = [0; 32];
     hydrogen::random_buf(&mut gen);
     hex::easy_encode_to_string(&gen)
@@ -161,20 +160,24 @@ impl Repo {
         let tx = conn.transaction()?;
 
         tx.execute(
-            "create table ArchivistMeta(Key, Value, UNIQUE(key, value));",
+            "create table RepositoryMeta(Key, Value, UNIQUE(key, value));",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
-            "insert into ArchivistMeta(Key, Value) values(?, ?);",
-            rusqlite::params!["schema-version", 0],
+            "insert into RepositoryMeta(Key, Value) values('schema-version', 0);",
+            rusqlite::NO_PARAMS,
         )?;
         tx.execute(
-            "insert into ArchivistMeta(Key, Value) values(?, ?);",
-            rusqlite::params!["gc-generation", new_gc_generation()],
+            "insert into RepositoryMeta(Key, Value) values('id', ?);",
+            rusqlite::params![new_random_token()],
         )?;
         tx.execute(
-            "insert into ArchivistMeta(Key, Value) values(?, ?);",
-            rusqlite::params!["storage-engine", serde_json::to_string(&engine)?],
+            "insert into RepositoryMeta(Key, Value) values('gc-generation', ?);",
+            rusqlite::params![new_random_token()],
+        )?;
+        tx.execute(
+            "insert into RepositoryMeta(Key, Value) values('storage-engine', ?);",
+            rusqlite::params![serde_json::to_string(&engine)?],
         )?;
         tx.execute(
             "create table Items(Id INTEGER PRIMARY KEY AUTOINCREMENT, Metadata);",
@@ -215,7 +218,7 @@ impl Repo {
 
         let conn = Repo::open_db(repo_path)?;
         let v: i32 = conn.query_row(
-            "select value from ArchivistMeta where Key='schema-version';",
+            "select value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
@@ -223,14 +226,17 @@ impl Repo {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
-        let engine_meta: String = conn.query_row(
-            "select value from ArchivistMeta where Key='storage-engine';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
+        Ok(Repo {
+            conn,
+            open_mode,
+            repo_path: repo_path.to_path_buf(),
+            _gc_lock: gc_lock,
+        })
+    }
 
-        let gc_generation: String = conn.query_row(
-            "select value from ArchivistMeta where Key='gc-generation';",
+    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
+        let engine_meta: String = self.conn.query_row(
+            "select value from RepositoryMeta where Key='storage-engine';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
@@ -239,7 +245,7 @@ impl Repo {
 
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::Local => {
-                let mut data_dir = repo_path.to_path_buf();
+                let mut data_dir = self.repo_path.to_path_buf();
                 data_dir.push("data");
                 // XXX fixme, how many workers do we want?
                 // configurable?
@@ -247,17 +253,27 @@ impl Repo {
             }
         };
 
-        Ok(Repo {
-            open_mode,
-            _repo_path: repo_path.to_path_buf(),
-            _gc_lock: gc_lock,
-            gc_generation,
-            storage_engine,
-        })
+        Ok(storage_engine)
+    }
+
+    pub fn gc_generation(&self) -> Result<String, failure::Error> {
+        Ok(self.conn.query_row(
+            "select value from RepositoryMeta where Key='gc-generation';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn id(&self) -> Result<String, failure::Error> {
+        Ok(self.conn.query_row(
+            "select value from RepositoryMeta where Key='id';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?)
     }
 
     pub fn add_item(&mut self, metadata: ItemMetadata) -> Result<i64, failure::Error> {
-        let mut conn = Repo::open_db(&self._repo_path)?;
+        let mut conn = Repo::open_db(&self.repo_path)?;
         let tx = conn.transaction()?;
         tx.execute(
             "insert into Items(Metadata) values(?);",
@@ -270,7 +286,7 @@ impl Repo {
     }
 
     pub fn lookup_item_by_id(&mut self, id: i64) -> Result<Option<Item>, failure::Error> {
-        let conn = Repo::open_db(&self._repo_path)?;
+        let conn = Repo::open_db(&self.repo_path)?;
         let metadata: Vec<u8> =
             match conn.query_row("select Metadata from Items where Id = ?;", &[id], |row| {
                 row.get(0)
@@ -287,7 +303,7 @@ impl Repo {
         &mut self,
         f: &mut dyn FnMut(Vec<Item>) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
-        let mut conn = Repo::open_db(&self._repo_path)?;
+        let mut conn = Repo::open_db(&self.repo_path)?;
         let tx = conn.transaction()?;
         let mut stmt = tx.prepare("select Id, Metadata from Items;")?;
         let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
@@ -316,18 +332,6 @@ impl Repo {
         Ok(())
     }
 
-    pub fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
-        self.storage_engine.get_chunk(addr)
-    }
-
-    pub fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        self.storage_engine.add_chunk(addr, buf)
-    }
-
-    pub fn sync(&mut self) -> Result<(), failure::Error> {
-        self.storage_engine.sync()
-    }
-
     pub fn gc(&mut self) -> Result<GCStats, failure::Error> {
         match self.open_mode {
             OpenMode::Exclusive => (),
@@ -335,12 +339,13 @@ impl Repo {
         }
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
-        let mut conn = Repo::open_db(&self._repo_path)?;
+        let mut conn = Repo::open_db(&self.repo_path)?;
+        let mut storage_engine = self.storage_engine()?;
         let tx = conn.transaction()?;
         {
             tx.execute(
-                "update ArchivistMeta set value = ? where key = 'gc_generation';",
-                rusqlite::params![new_gc_generation()],
+                "update RepositoryMeta set value = ? where key = 'gc_generation';",
+                rusqlite::params![new_random_token()],
             )?;
             let mut stmt = tx.prepare("select Metadata from Items;")?;
             let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
@@ -351,7 +356,8 @@ impl Repo {
                 let addr = &metadata.address;
                 {
                     if !reachable.contains(&addr) {
-                        let mut tr = htree::TreeReader::new(self, metadata.tree_height, addr);
+                        let mut tr =
+                            htree::TreeReader::new(&mut storage_engine, metadata.tree_height, addr);
                         while let Some((height, addr)) = tr.next_addr()? {
                             if !reachable.contains(&addr) {
                                 reachable.insert(addr);
@@ -364,18 +370,13 @@ impl Repo {
                 }
             }
         }
-        tx.commit()?;
+
         // We MUST commit the new gc generation before we start
         // deleting any chunks.
+        tx.commit()?;
 
-        let stats = self.storage_engine.gc(&|addr| reachable.contains(&addr))?;
+        let stats = storage_engine.gc(&|addr| reachable.contains(&addr))?;
         Ok(stats)
-    }
-}
-
-impl htree::Source for Repo {
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
-        self.get_chunk(addr)
     }
 }
 
@@ -389,13 +390,14 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
         Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let mut repo = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
+        let repo = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
+        let mut storage_engine = repo.storage_engine().unwrap();
         let addr = Address::default();
-        repo.add_chunk(&addr, vec![1]).unwrap();
-        repo.sync().unwrap();
-        repo.add_chunk(&addr, vec![2]).unwrap();
-        repo.sync().unwrap();
-        let v = repo.get_chunk(&addr).unwrap();
+        storage_engine.add_chunk(&addr, vec![1]).unwrap();
+        storage_engine.sync().unwrap();
+        storage_engine.add_chunk(&addr, vec![2]).unwrap();
+        storage_engine.sync().unwrap();
+        let v = storage_engine.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
     }
 }

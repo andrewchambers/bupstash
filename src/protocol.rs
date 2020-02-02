@@ -9,6 +9,7 @@ const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ServerInfo {
     pub protocol: String,
+    pub repo_id: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -235,6 +236,7 @@ mod tests {
     fn send_recv() {
         let packets = vec![
             Packet::ServerInfo(ServerInfo {
+                repo_id: "abc".to_string(),
                 protocol: "foobar".to_owned(),
             }),
             Packet::BeginSend(BeginSend {}),
