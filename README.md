@@ -10,7 +10,7 @@ archivist is a secure data store for mission critical data and/or personal data.
 
 - The storage server does not need access to any decryption keys. [see how]
 
-- Access controls over ssh, allowing append only data uploads. [see how]
+- Access controls over ssh, allowing different permissions on per ssh key basis. [see how]
 
 - Key/Value tagging system for data and a query language. [see how]
 
