@@ -4,7 +4,7 @@ archivist is a secure data store for mission critical data and/or personal data.
 
 - Secure offline master keys, data can't be decrypted without them. [see how]
 
-- Append only keys and forward secrecy preventing data deletion and exfiltration. [see how]
+- Append only keys with forward secrecy, preventing data deletion and exfiltration. [see how]
 
 - Data deduplication allowing efficient storage of large numbers of data snapshots. [see how]
 
