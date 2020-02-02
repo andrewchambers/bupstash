@@ -24,4 +24,4 @@ archivist is a secure data store for mission critical data and/or personal data.
 
 - Implemented to a high security standard with many attack vectors mitigated. [see how]
 
-- Turn key data hosting with zero access to your data. [see how]
+- Turn key data hosting with no access to your data possible. [see how]
