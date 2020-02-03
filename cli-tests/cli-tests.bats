@@ -95,7 +95,7 @@ teardown () {
 }
 
 _concurrent_send_test_worker () {
-  for i in $(seq 100)
+  for i in $(seq 10)
   do
     id="$(archivist send -r "$REPO" -k "$MASTER_KEY" -f <(echo $i))"
     test "$i" = $(archivist get -r "$REPO" -k "$MASTER_KEY" --id "$id")
@@ -103,10 +103,21 @@ _concurrent_send_test_worker () {
 }
 
 @test "concurrent send" {
-  for i in $(seq 100)
+  for i in $(seq 10)
   do
     _concurrent_send_test_worker &
   done
   wait
+}
+
+@test "simple search and listing" {
+  for i in $(seq 100) # Enough to trigger more than one sync packet.
+  do
+    archivist send -r "$REPO" -k "$MASTER_KEY" -f <(echo $i) "i=$i"
+  done
+
+  test 100 = $(archivist list -r "$REPO" -k "$MASTER_KEY" | wc -l)
+  test 1 = $(archivist list -r "$REPO" -k "$MASTER_KEY" i=100 | wc -l)
+  test 0 = $(archivist list -r "$REPO" -k "$MASTER_KEY" i=101 | wc -l)
 }
 

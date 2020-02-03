@@ -201,9 +201,13 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         };
     }
 
+    let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::ItemMetadata| {
         if metadata.encrypt_header.master_key_id() != key.id {
-            // XXX TODO report to the user somehow?
+            if !*warned_wrong_key {
+                *warned_wrong_key = true;
+                eprintln!("NOTE: Search skipping items encrypted with different master key.")
+            }
             return Ok(());
         }
 
