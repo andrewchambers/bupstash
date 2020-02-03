@@ -2,11 +2,14 @@ use super::address::*;
 use super::chunker;
 use super::crypto;
 use super::htree;
+use super::itemset;
 use super::keys;
 use super::protocol::*;
+use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
+use super::tquery;
 
 use failure::Fail;
 use std::collections::HashMap;
@@ -72,20 +75,21 @@ pub fn send(
     handle_server_info(r)?;
     write_packet(w, &Packet::BeginSend(BeginSend {}))?;
 
-    let mut send_log = match read_packet(r)? {
+    let (mut send_log, gc_generation) = match read_packet(r)? {
         Packet::AckSend(ack) => {
-            if let Some(send_log) = send_log {
-                sendlog::SendLog::open(&send_log, &ack.gc_generation)?
+            let send_log = if let Some(send_log) = send_log {
+                sendlog::SendLog::open(&send_log)?
             } else {
-                sendlog::SendLog::open(&std::path::PathBuf::from(":memory:"), &ack.gc_generation)?
-            }
+                sendlog::SendLog::open(&std::path::PathBuf::from(":memory:"))?
+            };
+            (send_log, ack.gc_generation)
         }
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
     let send_result: Result<i64, failure::Error>;
     {
-        let mut send_log_tx = send_log.transaction()?;
+        let mut send_log_tx = send_log.transaction(&gc_generation)?;
         {
             let mut filtered_conn = FilteredConnection {
                 tx: &mut send_log_tx,
@@ -156,12 +160,11 @@ fn send2(
     write_packet(
         filtered_conn.w,
         &Packet::CommitSend(CommitSend {
-            metadata: repository::ItemMetadata {
+            metadata: itemset::ItemMetadata {
                 address: root_address,
                 tree_height,
                 encrypt_header: ctx.encryption_header(),
-                encrypted_tags: ctx
-                    .encrypt_data(true, serde_json::to_string(&tags)?.as_bytes().to_vec()),
+                encrypted_tags: ctx.encrypt_data(true, bincode::serialize(&tags)?),
             },
         }),
     )?;
@@ -202,8 +205,8 @@ pub fn request_data_stream(
     write_packet(w, &Packet::RequestData(RequestData { id }))?;
 
     let metadata = match read_packet(r)? {
-        Packet::AckRequestData(req) => match req.item {
-            Some(item) => item.metadata,
+        Packet::AckRequestData(req) => match req.metadata {
+            Some(metadata) => metadata,
             None => failure::bail!("no stored items with the requested address"),
         },
         _ => failure::bail!("protocol error, expected ack request packet"),
@@ -247,25 +250,47 @@ pub fn gc(
     }
 }
 
-pub fn all_items(
+pub fn list(
+    query_cache: &mut querycache::QueryCache,
+    f: &mut dyn FnMut(i64, itemset::ItemMetadata) -> Result<(), failure::Error>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-    f: &mut dyn FnMut(Vec<repository::Item>) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
     handle_server_info(r)?;
-    write_packet(w, &Packet::RequestAllItems(RequestAllItems {}))?;
+
+    let after = query_cache.last_log_op()?;
+    let gc_generation = query_cache.gc_generation()?;
+
+    write_packet(
+        w,
+        &Packet::RequestItemSync(RequestItemSync {
+            after,
+            gc_generation,
+        }),
+    )?;
+
+    let gc_generation = match read_packet(r)? {
+        Packet::AckItemSync(ack) => ack.gc_generation,
+        _ => failure::bail!("protocol error, expected items packet"),
+    };
+
+    let mut tx = query_cache.transaction(&gc_generation)?;
 
     loop {
         match read_packet(r)? {
-            Packet::Items(items) => {
-                if items.is_empty() {
+            Packet::LogOps(ops) => {
+                if ops.is_empty() {
                     break;
                 }
-                f(items)?;
+                for (id, op) in ops {
+                    tx.sync_op(id, op)?;
+                }
             }
             _ => failure::bail!("protocol error, expected items packet"),
         }
     }
-
+    tx.commit()?;
+    let mut tx = query_cache.transaction(&gc_generation)?;
+    tx.walk_items(f)?;
     Ok(())
 }

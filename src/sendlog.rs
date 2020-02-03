@@ -13,7 +13,7 @@ pub struct SendLogTx<'a> {
 }
 
 impl SendLog {
-    pub fn open(p: &PathBuf, gc_generation: &str) -> Result<SendLog, failure::Error> {
+    pub fn open(p: &PathBuf) -> Result<SendLog, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row(
             "pragma locking_mode=EXCLUSIVE;",
@@ -31,6 +31,18 @@ impl SendLog {
             "create table if not exists Sent(Addr, AB, unique(Addr)); ",
             rusqlite::NO_PARAMS,
         )?;
+
+        tx.commit()?;
+
+        Ok(SendLog { conn: conn })
+    }
+
+    pub fn transaction<'a>(
+        self: &'a mut Self,
+        gc_generation: &str,
+    ) -> Result<SendLogTx<'a>, failure::Error> {
+        let tx = self.conn.transaction()?;
+
         match tx.query_row(
             "select value from LogMeta where key = 'gc_generation';",
             rusqlite::NO_PARAMS,
@@ -57,13 +69,6 @@ impl SendLog {
             }
             Err(err) => return Err(err.into()),
         }
-        tx.commit()?;
-
-        Ok(SendLog { conn: conn })
-    }
-
-    pub fn transaction<'a>(self: &'a mut Self) -> Result<SendLogTx<'a>, failure::Error> {
-        let tx = self.conn.transaction()?;
 
         let old_ab = match tx.query_row(
             "select value from LogMeta where key = 'ab';",
@@ -135,18 +140,18 @@ mod tests {
             d
         };
         // Commit an address
-        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
         drop(sendlog);
 
         // Ensure address is still present after reopening db.
-        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
         // Drop tx to avoid ab cycling
         drop(tx);
@@ -154,9 +159,9 @@ mod tests {
 
         // Since the gc_generation changed, address should not
         // be there anymore.
-        let mut sendlog = SendLog::open(&log_path, "345").unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("345").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
     }
 
@@ -168,17 +173,17 @@ mod tests {
             d.push("send.log");
             d
         };
-        let mut sendlog = SendLog::open(&log_path, "123").unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
         let addr = Address::default();
         // Commit adding an address
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
         // Start a new tx, ensure we still have that address.
         // then add the address again.
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
@@ -186,11 +191,11 @@ mod tests {
         // Start a new tx, ensure we still have that address.
         // This time we don't readd the address, it should expire
         // when the transaction cycles.
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
         // Verify the value was cycled away.
-        let mut tx = sendlog.transaction().unwrap();
+        let mut tx = sendlog.transaction("123").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
     }

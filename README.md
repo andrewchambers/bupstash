@@ -27,4 +27,4 @@ Some key features:
 
 - Implemented to a high security standard with many attack vectors totally mitigated. [see how]
 
-- Turn key hosting available for *HUGE* amounts of data and total privacy. [see how]
+- Turn key hosting available for *HUGE* amounts of data. [see how]

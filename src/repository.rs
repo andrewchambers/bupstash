@@ -5,6 +5,7 @@ use super::fsutil;
 use super::hex;
 use super::htree;
 use super::hydrogen;
+use super::itemset;
 use failure::Fail;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -41,20 +42,6 @@ pub struct Repo {
     repo_path: PathBuf,
     _gc_lock: FileLock,
     conn: rusqlite::Connection,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct Item {
-    pub id: i64,
-    pub metadata: ItemMetadata,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct ItemMetadata {
-    pub tree_height: usize,
-    pub encrypt_header: crypto::VersionedEncryptionHeader,
-    pub encrypted_tags: Vec<u8>,
-    pub address: Address,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -179,10 +166,8 @@ impl Repo {
             "insert into RepositoryMeta(Key, Value) values('storage-engine', ?);",
             rusqlite::params![serde_json::to_string(&engine)?],
         )?;
-        tx.execute(
-            "create table Items(Id INTEGER PRIMARY KEY AUTOINCREMENT, Metadata);",
-            rusqlite::NO_PARAMS,
-        )?;
+
+        itemset::init_tables(&tx)?;
 
         tx.commit()?;
         drop(conn);
@@ -272,64 +257,29 @@ impl Repo {
         )?)
     }
 
-    pub fn add_item(&mut self, metadata: ItemMetadata) -> Result<i64, failure::Error> {
-        let mut conn = Repo::open_db(&self.repo_path)?;
-        let tx = conn.transaction()?;
-        tx.execute(
-            "insert into Items(Metadata) values(?);",
-            &[bincode::serialize(&metadata)?],
-        )?;
+    pub fn add_item(&mut self, metadata: itemset::ItemMetadata) -> Result<i64, failure::Error> {
+        let tx = self.conn.transaction()?;
+        itemset::add_item(&tx, metadata)?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
-        drop(conn);
         Ok(id)
     }
 
-    pub fn lookup_item_by_id(&mut self, id: i64) -> Result<Option<Item>, failure::Error> {
-        let conn = Repo::open_db(&self.repo_path)?;
-        let metadata: Vec<u8> =
-            match conn.query_row("select Metadata from Items where Id = ?;", &[id], |row| {
-                row.get(0)
-            }) {
-                Ok(metadata) => metadata,
-                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-        let metadata: ItemMetadata = bincode::deserialize(&metadata)?;
-        Ok(Some(Item { id, metadata }))
+    pub fn lookup_item_by_id(
+        &mut self,
+        id: i64,
+    ) -> Result<Option<itemset::ItemMetadata>, failure::Error> {
+        let tx = self.conn.transaction()?;
+        itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn walk_all_items(
+    pub fn walk_log(
         &mut self,
-        f: &mut dyn FnMut(Vec<Item>) -> Result<(), failure::Error>,
+        after: i64,
+        f: &mut dyn FnMut(i64, itemset::LogOp) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
-        let mut conn = Repo::open_db(&self.repo_path)?;
-        let tx = conn.transaction()?;
-        let mut stmt = tx.prepare("select Id, Metadata from Items;")?;
-        let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
-        let mut items = Vec::new();
-        loop {
-            match rows.next()? {
-                Some(row) => {
-                    let id: i64 = row.get(0)?;
-                    let metadata: String = row.get(1)?;
-                    let metadata: ItemMetadata = serde_json::from_str(&metadata)?;
-                    items.push(Item { id, metadata });
-                    if items.len() > 100 {
-                        let mut walked_items = Vec::new();
-                        std::mem::swap(&mut items, &mut walked_items);
-                        f(walked_items)?;
-                    }
-                }
-                None => {
-                    if !items.is_empty() {
-                        f(items)?;
-                    };
-                    break;
-                }
-            }
-        }
-        Ok(())
+        let tx = self.conn.transaction()?;
+        itemset::walk_log(&tx, after, f)
     }
 
     pub fn gc(&mut self) -> Result<GCStats, failure::Error> {
@@ -339,36 +289,32 @@ impl Repo {
         }
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
-        let mut conn = Repo::open_db(&self.repo_path)?;
         let mut storage_engine = self.storage_engine()?;
-        let tx = conn.transaction()?;
+        let tx = self.conn.transaction()?;
         {
             tx.execute(
                 "update RepositoryMeta set value = ? where key = 'gc_generation';",
                 rusqlite::params![new_random_token()],
             )?;
-            let mut stmt = tx.prepare("select Metadata from Items;")?;
-            let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
 
-            while let Some(row) = rows.next()? {
-                let metadata: Vec<u8> = row.get(0)?;
-                let metadata: ItemMetadata = bincode::deserialize(&metadata)?;
+            itemset::compact(&tx)?;
+
+            itemset::walk_items(&tx, &mut |_id, metadata| {
                 let addr = &metadata.address;
-                {
-                    if !reachable.contains(&addr) {
-                        let mut tr =
-                            htree::TreeReader::new(&mut storage_engine, metadata.tree_height, addr);
-                        while let Some((height, addr)) = tr.next_addr()? {
-                            if !reachable.contains(&addr) {
-                                reachable.insert(addr);
-                                if height != 0 {
-                                    tr.push_addr(height - 1, &addr)?;
-                                }
+                if !reachable.contains(&addr) {
+                    let mut tr =
+                        htree::TreeReader::new(&mut storage_engine, metadata.tree_height, addr);
+                    while let Some((height, addr)) = tr.next_addr()? {
+                        if !reachable.contains(&addr) {
+                            reachable.insert(addr);
+                            if height != 0 {
+                                tr.push_addr(height - 1, &addr)?;
                             }
                         }
                     }
                 }
-            }
+                Ok(())
+            })?;
         }
 
         // We MUST commit the new gc generation before we start

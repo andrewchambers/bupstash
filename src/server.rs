@@ -1,4 +1,5 @@
 use super::htree;
+use super::itemset;
 use super::protocol::*;
 use super::repository;
 
@@ -45,11 +46,11 @@ pub fn serve(
             }
             gc(&mut repo, w)
         }
-        Packet::RequestAllItems(_) => {
+        Packet::RequestItemSync(req) => {
             if !cfg.allow_read {
                 failure::bail!("server has disabled query and search for this client")
             }
-            all_items(&mut repo, w)
+            item_sync(&mut repo, req.after, req.gc_generation, w)
         }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
@@ -98,30 +99,29 @@ fn send(
     id: i64,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let item = match repo.lookup_item_by_id(id)? {
-        Some(item) => {
+    let metadata = match repo.lookup_item_by_id(id)? {
+        Some(metadata) => {
             write_packet(
                 w,
                 &Packet::AckRequestData(AckRequestData {
-                    item: Some(item.clone()),
+                    metadata: Some(metadata.clone()),
                 }),
             )?;
-            item
+            metadata
         }
         None => {
-            let no_item: Option<repository::Item> = None;
-            write_packet(w, &Packet::AckRequestData(AckRequestData { item: no_item }))?;
+            write_packet(
+                w,
+                &Packet::AckRequestData(AckRequestData { metadata: None }),
+            )?;
             return Ok(());
         }
     };
 
     let mut storage_engine = repo.storage_engine()?;
 
-    let mut tr = htree::TreeReader::new(
-        &mut storage_engine,
-        item.metadata.tree_height,
-        &item.metadata.address,
-    );
+    let mut tr =
+        htree::TreeReader::new(&mut storage_engine, metadata.tree_height, &metadata.address);
 
     loop {
         match tr.next_addr()? {
@@ -151,15 +151,41 @@ fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), fai
     Ok(())
 }
 
-fn all_items(
+fn item_sync(
     repo: &mut repository::Repo,
+    after: i64,
+    request_gc_generation: Option<String>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    repo.walk_all_items(&mut |items| {
-        write_packet(w, &Packet::Items(items))?;
+    let current_generation = repo.gc_generation()?;
+
+    let after = match request_gc_generation {
+        Some(request_gc_generation) if request_gc_generation == current_generation => after,
+        _ => -1,
+    };
+
+    write_packet(
+        w,
+        &Packet::AckItemSync(AckItemSync {
+            gc_generation: current_generation,
+        }),
+    )?;
+
+    let mut logops = Vec::new();
+
+    repo.walk_log(after, &mut |id, op| {
+        logops.push((id, op));
+        if logops.len() >= 64 {
+            let mut v = Vec::new();
+            std::mem::swap(&mut v, &mut logops);
+            write_packet(w, &Packet::LogOps(v))?;
+        }
         Ok(())
     })?;
 
-    write_packet(w, &Packet::Items(vec![]))?;
+    if !logops.is_empty() {
+        write_packet(w, &Packet::LogOps(logops))?;
+    }
+    write_packet(w, &Packet::LogOps(vec![]))?;
     Ok(())
 }

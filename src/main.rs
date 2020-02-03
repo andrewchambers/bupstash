@@ -7,8 +7,10 @@ pub mod fsutil;
 pub mod hex;
 pub mod htree;
 pub mod hydrogen;
+pub mod itemset;
 pub mod keys;
 pub mod protocol;
+pub mod querycache;
 pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
@@ -199,27 +201,26 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         };
     }
 
-    let mut f = |items: Vec<repository::Item>| {
-        for item in items.iter() {
-            if item.metadata.encrypt_header.master_key_id() != key.id {
-                // XXX TODO report to the user somehow?
-                continue;
-            }
+    let mut f = |id: i64, metadata: itemset::ItemMetadata| {
+        if metadata.encrypt_header.master_key_id() != key.id {
+            // XXX TODO report to the user somehow?
+            return Ok(());
+        }
 
-            let ctx = crypto::DecryptContext::open(&key, &item.metadata.encrypt_header)?;
-            let tags = ctx.decrypt_data(
-                &item.metadata.encrypted_tags, /* XXX copying here seems pointless */
-            )?;
-            let tags: HashMap<String, Option<String>> = serde_json::from_slice(&tags)?;
+        let ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
+        let tags = ctx.decrypt_data(
+            &metadata.encrypted_tags, /* XXX copying here seems pointless */
+        )?;
 
-            let doprint = match query {
-                Some(ref query) => tquery::query_matches(query, &tags),
-                None => true,
-            };
+        let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
 
-            if doprint {
-                println!("{}: {:?}", item.id, tags);
-            }
+        let doprint = match query {
+            Some(ref query) => tquery::query_matches(query, &tags),
+            None => true,
+        };
+
+        if doprint {
+            println!("{}: {:?}", id, tags);
         }
 
         Ok(())
@@ -229,7 +230,13 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::all_items(&mut serve_out, &mut serve_in, &mut f)?;
+    client::list(
+        // XXX TODO this should come from somewhere.
+        &mut querycache::QueryCache::open(&std::path::PathBuf::from(":memory:"))?,
+        &mut f,
+        &mut serve_out,
+        &mut serve_in,
+    )?;
 
     Ok(())
 }

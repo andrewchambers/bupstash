@@ -1,5 +1,5 @@
 use super::address::*;
-
+use super::itemset;
 use super::repository;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -28,7 +28,7 @@ pub struct AckSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct CommitSend {
-    pub metadata: repository::ItemMetadata,
+    pub metadata: itemset::ItemMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -43,7 +43,7 @@ pub struct RequestData {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckRequestData {
-    pub item: Option<repository::Item>,
+    pub metadata: Option<itemset::ItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -55,7 +55,15 @@ pub struct GCComplete {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RequestAllItems {}
+pub struct RequestItemSync {
+    pub after: i64,
+    pub gc_generation: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AckItemSync {
+    pub gc_generation: String,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -69,8 +77,9 @@ pub enum Packet {
     AckRequestData(AckRequestData),
     StartGC(StartGC),
     GCComplete(GCComplete),
-    RequestAllItems(RequestAllItems),
-    Items(Vec<repository::Item>),
+    RequestItemSync(RequestItemSync),
+    AckItemSync(AckItemSync),
+    LogOps(Vec<(i64, itemset::LogOp)>),
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
@@ -83,8 +92,9 @@ const PACKET_KIND_REQUEST_DATA: u8 = 6;
 const PACKET_KIND_ACK_REQUEST_DATA: u8 = 7;
 const PACKET_KIND_START_GC: u8 = 8;
 const PACKET_KIND_GC_COMPLETE: u8 = 9;
-const PACKET_KIND_REQUEST_ALL_ITEMS: u8 = 10;
-const PACKET_KIND_ITEMS: u8 = 11;
+const PACKET_KIND_REQUEST_ITEM_SYNC: u8 = 10;
+const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
+const PACKET_KIND_LOG_OPS: u8 = 12;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -135,8 +145,9 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(bincode::deserialize(&buf)?),
         PACKET_KIND_START_GC => Packet::StartGC(bincode::deserialize(&buf)?),
         PACKET_KIND_GC_COMPLETE => Packet::GCComplete(bincode::deserialize(&buf)?),
-        PACKET_KIND_REQUEST_ALL_ITEMS => Packet::RequestAllItems(bincode::deserialize(&buf)?),
-        PACKET_KIND_ITEMS => Packet::Items(bincode::deserialize(&buf)?),
+        PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(bincode::deserialize(&buf)?),
+        PACKET_KIND_LOG_OPS => Packet::LogOps(bincode::deserialize(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -211,14 +222,19 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::RequestAllItems(ref v) => {
+        Packet::RequestItemSync(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_REQUEST_ALL_ITEMS, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::Items(ref v) => {
+        Packet::AckItemSync(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ITEMS, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_ACK_ITEM_SYNC, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::LogOps(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
     }
@@ -244,7 +260,7 @@ mod tests {
                 gc_generation: "blah".to_owned(),
             }),
             Packet::CommitSend(CommitSend {
-                metadata: repository::ItemMetadata {
+                metadata: itemset::ItemMetadata {
                     address: Address::default(),
                     tree_height: 3,
                     encrypt_header: {
@@ -261,17 +277,14 @@ mod tests {
             }),
             Packet::RequestData(RequestData { id: 153534 }),
             Packet::AckRequestData(AckRequestData {
-                item: {
+                metadata: {
                     let master_key = keys::MasterKey::gen();
                     let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    Some(repository::Item {
-                        id: 546546,
-                        metadata: repository::ItemMetadata {
-                            address: Address::default(),
-                            tree_height: 1234,
-                            encrypt_header: ectx.encryption_header(),
-                            encrypted_tags: vec![1, 2, 3],
-                        },
+                    Some(itemset::ItemMetadata {
+                        address: Address::default(),
+                        tree_height: 1234,
+                        encrypt_header: ectx.encryption_header(),
+                        encrypted_tags: vec![1, 2, 3],
                     })
                 },
             }),
@@ -283,21 +296,14 @@ mod tests {
                     bytes_remaining: 678,
                 },
             }),
-            Packet::RequestAllItems(RequestAllItems {}),
-            Packet::Items(vec![repository::Item {
-                id: 765756,
-                metadata: repository::ItemMetadata {
-                    address: Address::default(),
-                    tree_height: 1234,
-                    encrypt_header: {
-                        let master_key = keys::MasterKey::gen();
-                        let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-
-                        ectx.encryption_header()
-                    },
-                    encrypted_tags: vec![1, 2, 3],
-                },
-            }]),
+            Packet::RequestItemSync(RequestItemSync {
+                after: 123,
+                gc_generation: Some("123".to_owned()),
+            }),
+            Packet::AckItemSync(AckItemSync {
+                gc_generation: "123".to_owned(),
+            }),
+            Packet::LogOps(vec![(765756, itemset::LogOp::RemoveItem(123))]),
         ];
 
         for p1 in packets.iter() {
