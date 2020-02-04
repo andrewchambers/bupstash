@@ -209,7 +209,7 @@ pub fn request_data_stream(
         failure::bail!("decryption key does not match master key used for encryption");
     }
 
-    let ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
+    let mut ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
     let mut sv = StreamVerifier { r: r };
     let mut tr = htree::TreeReader::new(&mut sv, metadata.tree_height, &metadata.address);
 

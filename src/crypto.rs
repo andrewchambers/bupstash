@@ -133,6 +133,8 @@ impl EncryptContext {
 pub struct DecryptContext {
     pub k: keys::MasterKey,
     pub hash_key: [u8; hydrogen::HASH_KEYBYTES],
+    cached_session_rx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
+    cached_packet1: [u8; hydrogen::KX_N_PACKET1BYTES],
 }
 
 impl DecryptContext {
@@ -149,6 +151,8 @@ impl DecryptContext {
                 Ok(DecryptContext {
                     k: k.clone(),
                     hash_key: combined_hashkey(&k.hash_key_part_1, &hdr.hash_key_part_2),
+                    cached_session_rx_key: [0; hydrogen::KX_SESSIONKEYBYTES],
+                    cached_packet1: [0; hydrogen::KX_N_PACKET1BYTES],
                 })
             }
         }
@@ -162,11 +166,12 @@ impl DecryptContext {
     }
 
     #[inline(always)]
-    pub fn decrypt_data(&self, ct: &[u8]) -> Result<Vec<u8>, failure::Error> {
-        if ct.len() < hydrogen::KX_N_PACKET1BYTES + hydrogen::SECRETBOX_HEADERBYTES {
+    pub fn decrypt_data(&mut self, ct: &[u8]) -> Result<Vec<u8>, failure::Error> {
+        const HDR_SZ: usize = hydrogen::KX_N_PACKET1BYTES + hydrogen::SECRETBOX_HEADERBYTES;
+        if ct.len() < HDR_SZ {
             bail!("data is possibly corrupt, shorter than required encryption header");
         }
-        let n = ct.len() - (hydrogen::KX_N_PACKET1BYTES + hydrogen::SECRETBOX_HEADERBYTES);
+        let n = ct.len() - HDR_SZ;
         let mut pt = Vec::with_capacity(n);
         // This is safe as u8 is primitive, and capacity is valid by definition.
         unsafe { pt.set_len(n) };
@@ -174,18 +179,25 @@ impl DecryptContext {
         let mut packet1 = [0; hydrogen::KX_N_PACKET1BYTES];
         packet1[..].clone_from_slice(&ct[0..hydrogen::KX_N_PACKET1BYTES]);
 
-        let session_rx_key =
-            match hydrogen::kx_n_2(&packet1, &self.k.data_psk, &self.k.data_pk, &self.k.data_sk) {
+        if packet1[..] != self.cached_packet1[..] {
+            self.cached_packet1 = packet1;
+            self.cached_session_rx_key = match hydrogen::kx_n_2(
+                &packet1,
+                &self.k.data_psk,
+                &self.k.data_pk,
+                &self.k.data_sk,
+            ) {
                 Some((_session_tx_key, session_rx_key)) => session_rx_key,
                 None => bail!("tampering or corruption detected while deriving decryption key"),
             };
+        }
 
         if !hydrogen::secretbox_decrypt(
             &mut pt,
             &ct[hydrogen::KX_N_PACKET1BYTES..],
             0,
             *b"_chunk_\0",
-            &session_rx_key,
+            &self.cached_session_rx_key,
         ) {
             failure::bail!("decryption failed due to data corruption or key mismatch");
         }
@@ -229,7 +241,7 @@ mod tests {
         let master_key = keys::MasterKey::gen();
         let ectx = EncryptContext::new(&keys::Key::MasterKeyV1(master_key.clone()));
         let ehdr = ectx.encryption_header();
-        let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
+        let mut dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
         let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();
@@ -242,7 +254,7 @@ mod tests {
         let send_key = keys::SendKey::gen(&master_key);
         let ectx = EncryptContext::new(&keys::Key::SendKeyV1(send_key));
         let ehdr = ectx.encryption_header();
-        let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
+        let mut dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];
         let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();

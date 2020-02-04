@@ -251,7 +251,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             return Ok(());
         }
 
-        let ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
+        let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
         let tags = ctx.decrypt_data(
             &metadata.encrypted_tags, /* XXX copying here seems pointless */
         )?;
