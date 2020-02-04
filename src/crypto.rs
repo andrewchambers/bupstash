@@ -17,9 +17,7 @@ pub struct EncryptContext {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct EncryptionHeader {
     pub master_key_id: [u8; keys::KEYID_SZ],
-    pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
-    // FIXME... Slight hack, we use a vector so serde derive works.
-    pub packet1: Vec<u8>,
+    pub hash_key_part_2: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -35,29 +33,37 @@ impl VersionedEncryptionHeader {
     }
 }
 
-fn combined_hashkey(
-    k1: &[u8; hydrogen::HASH_KEYBYTES],
-    k2: &[u8; hydrogen::HASH_KEYBYTES],
-) -> [u8; hydrogen::HASH_KEYBYTES] {
-    let mut hash_key = [0; hydrogen::HASH_KEYBYTES];
-    for (i, b) in hash_key.iter_mut().enumerate() {
-        *b = k1[i] ^ k2[i];
-    }
-    hash_key
+fn combined_hashkey(k1: &[u8], k2: &[u8]) -> [u8; hydrogen::HASH_KEYBYTES] {
+    let mut k = [0; hydrogen::HASH_KEYBYTES];
+    let mut h = hydrogen::Hash::init(*b"_hashkey", None);
+    h.update(&k1[..]);
+    h.update(&k2[..]);
+    h.finish(&mut k);
+    k
 }
 
 impl EncryptContext {
     pub fn new(k: &keys::Key) -> Self {
-        let (psk, pk, hash_key1, hash_key2) = match k {
-            keys::Key::MasterKeyV1(k) => (k.data_psk, k.data_pk, k.hash_key1, k.hash_key2),
-            keys::Key::SendKeyV1(k) => (k.data_psk, k.master_data_pk, k.hash_key1, k.hash_key2),
+        let (psk, pk, hash_key_part_1, hash_key_part_2) = match k {
+            keys::Key::MasterKeyV1(k) => (
+                k.data_psk,
+                k.data_pk,
+                &k.hash_key_part_1,
+                &k.hash_key_part_2,
+            ),
+            keys::Key::SendKeyV1(k) => (
+                k.data_psk,
+                k.master_data_pk,
+                &k.hash_key_part_1,
+                &k.hash_key_part_2,
+            ),
         };
         let (session_tx_key, _session_rx_key, packet1) = hydrogen::kx_n_1(&psk, &pk);
         EncryptContext {
-            k: *k,
+            k: k.clone(),
             session_tx_key,
             packet1,
-            hash_key: combined_hashkey(&hash_key1, &hash_key2),
+            hash_key: combined_hashkey(hash_key_part_1, hash_key_part_2),
         }
     }
 
@@ -90,35 +96,42 @@ impl EncryptContext {
             data
         };
 
-        let n = pt.len() + hydrogen::SECRETBOX_HEADERBYTES;
+        let n = pt.len() + hydrogen::SECRETBOX_HEADERBYTES + self.packet1.len();
         let mut ct = Vec::with_capacity(n);
         // This is safe as u8 is primitive, and capacity is valid by definition.
         unsafe { ct.set_len(n) };
-        hydrogen::secretbox_encrypt(&mut ct, &pt, 0, *b"_chunk_\0", &self.session_tx_key);
+        hydrogen::secretbox_encrypt(
+            &mut ct[self.packet1.len()..],
+            &pt,
+            0,
+            *b"_chunk_\0",
+            &self.session_tx_key,
+        );
+        ct[..self.packet1.len()].clone_from_slice(&self.packet1);
         ct
     }
 
     #[inline(always)]
     pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
-        address::Address::from_bytes(&hydrogen::hash_with_key(pt, *b"_address", &self.hash_key))
+        let mut addr = address::Address::default();
+        hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);
+        addr
     }
 
     pub fn encryption_header(&self) -> VersionedEncryptionHeader {
-        let (master_key_id, hash_key2) = match self.k {
-            keys::Key::MasterKeyV1(k) => (k.id, k.hash_key2),
-            keys::Key::SendKeyV1(k) => (k.master_key_id, k.hash_key2),
+        let (master_key_id, hash_key_part_2) = match &self.k {
+            keys::Key::MasterKeyV1(k) => (k.id, &k.hash_key_part_2),
+            keys::Key::SendKeyV1(k) => (k.master_key_id, &k.hash_key_part_2),
         };
         VersionedEncryptionHeader::V1(EncryptionHeader {
             master_key_id,
-            hash_key2,
-            packet1: Vec::from(&self.packet1[..]),
+            hash_key_part_2: hash_key_part_2.clone(),
         })
     }
 }
 
 pub struct DecryptContext {
     pub k: keys::MasterKey,
-    pub session_rx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
     pub hash_key: [u8; hydrogen::HASH_KEYBYTES],
 }
 
@@ -133,39 +146,47 @@ impl DecryptContext {
                     bail!("provided master key does not match master key used to encrypt data");
                 }
 
-                if hdr.packet1.len() != hydrogen::KX_N_PACKET1BYTES {
-                    bail!("provided encryption header is corrupt");
-                }
-
-                let mut packet1: [u8; hydrogen::KX_N_PACKET1BYTES] =
-                    [0; hydrogen::KX_N_PACKET1BYTES];
-                packet1.clone_from_slice(&hdr.packet1);
-
-                match hydrogen::kx_n_2(&packet1, &k.data_psk, &k.data_pk, &k.data_sk) {
-                    Some((_session_tx_key, session_rx_key)) => Ok(DecryptContext {
-                        k: *k,
-                        session_rx_key,
-                        hash_key: combined_hashkey(&k.hash_key1, &hdr.hash_key2),
-                    }),
-                    None => bail!("tampering or corruption detected while deriving decryption key"),
-                }
+                Ok(DecryptContext {
+                    k: k.clone(),
+                    hash_key: combined_hashkey(&k.hash_key_part_1, &hdr.hash_key_part_2),
+                })
             }
         }
     }
 
     #[inline(always)]
     pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
-        address::Address::from_bytes(&hydrogen::hash_with_key(pt, *b"_address", &self.hash_key))
+        let mut addr = address::Address::default();
+        hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);
+        addr
     }
 
     #[inline(always)]
     pub fn decrypt_data(&self, ct: &[u8]) -> Result<Vec<u8>, failure::Error> {
-        let n = ct.len() - hydrogen::SECRETBOX_HEADERBYTES;
+        if ct.len() < hydrogen::KX_N_PACKET1BYTES + hydrogen::SECRETBOX_HEADERBYTES {
+            bail!("data is possibly corrupt, shorter than required encryption header");
+        }
+        let n = ct.len() - (hydrogen::KX_N_PACKET1BYTES + hydrogen::SECRETBOX_HEADERBYTES);
         let mut pt = Vec::with_capacity(n);
-        // This us safe ai u8 is primitive, and capacity is valid by definition.
+        // This is safe as u8 is primitive, and capacity is valid by definition.
         unsafe { pt.set_len(n) };
 
-        if !hydrogen::secretbox_decrypt(&mut pt, ct, 0, *b"_chunk_\0", &self.session_rx_key) {
+        let mut packet1 = [0; hydrogen::KX_N_PACKET1BYTES];
+        packet1[..].clone_from_slice(&ct[0..hydrogen::KX_N_PACKET1BYTES]);
+
+        let session_rx_key =
+            match hydrogen::kx_n_2(&packet1, &self.k.data_psk, &self.k.data_pk, &self.k.data_sk) {
+                Some((_session_tx_key, session_rx_key)) => session_rx_key,
+                None => bail!("tampering or corruption detected while deriving decryption key"),
+            };
+
+        if !hydrogen::secretbox_decrypt(
+            &mut pt,
+            &ct[hydrogen::KX_N_PACKET1BYTES..],
+            0,
+            *b"_chunk_\0",
+            &session_rx_key,
+        ) {
             failure::bail!("decryption failed due to data corruption or key mismatch");
         }
 
@@ -206,7 +227,7 @@ mod tests {
     #[test]
     fn master_key_round_trip_encrypt() {
         let master_key = keys::MasterKey::gen();
-        let ectx = EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
+        let ectx = EncryptContext::new(&keys::Key::MasterKeyV1(master_key.clone()));
         let ehdr = ectx.encryption_header();
         let dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
         let pt = [1, 2, 3];

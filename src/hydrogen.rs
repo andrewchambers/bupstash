@@ -5,7 +5,6 @@ mod libhydrogen {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/hydrogen_bindings.rs"));
 }
-
 use std::ffi::c_void;
 
 pub const SECRETBOX_KEYBYTES: usize = libhydrogen::hydro_secretbox_KEYBYTES as usize;
@@ -92,38 +91,93 @@ pub fn random_buf(buf: &mut [u8]) {
     unsafe { libhydrogen::hydro_random_buf(buf.as_mut_ptr() as *mut c_void, buf.len() as usize) }
 }
 
-pub fn hash(message: &[u8], context: [u8; 8]) -> [u8; HASH_BYTES] {
-    let mut h = [0; HASH_BYTES];
+pub fn random(sz: usize) -> Vec<u8> {
+    let mut v = Vec::with_capacity(sz);
     unsafe {
-        libhydrogen::hydro_hash_hash(
-            (&mut h).as_mut_ptr(),
-            h.len() as usize,
-            message.as_ptr() as *mut c_void,
-            message.len(),
-            context.as_ptr() as *const i8,
-            std::ptr::null(),
-        );
-    }
-    h
+        v.set_len(sz);
+        libhydrogen::hydro_random_buf((&mut v).as_mut_ptr() as *mut c_void, v.len() as usize);
+    };
+    v
 }
 
-pub fn hash_with_key(
+pub fn hash(
     message: &[u8],
     context: [u8; 8],
-    key: &[u8; HASH_KEYBYTES],
-) -> [u8; HASH_BYTES] {
-    let mut h = [0; HASH_BYTES];
+    key: Option<&[u8; HASH_KEYBYTES]>,
+    output: &mut [u8],
+) {
     unsafe {
         libhydrogen::hydro_hash_hash(
-            (&mut h).as_mut_ptr(),
-            h.len() as usize,
+            output.as_mut_ptr(),
+            output.len() as usize,
             message.as_ptr() as *mut c_void,
             message.len(),
             context.as_ptr() as *const i8,
-            key.as_ptr(),
+            if let Some(k) = key {
+                k.as_ptr() as *const u8
+            } else {
+                std::ptr::null()
+            },
         );
     }
-    h
+}
+
+pub struct Hash {
+    st: libhydrogen::hydro_hash_state,
+}
+
+impl Hash {
+    pub fn init(context: [u8; 8], key: Option<&[u8; HASH_KEYBYTES]>) -> Hash {
+        let mut h = Hash {
+            st: unsafe {
+                std::mem::MaybeUninit::<libhydrogen::hydro_hash_state>::uninit().assume_init()
+            },
+        };
+
+        unsafe {
+            libhydrogen::hydro_hash_init(
+                &mut h.st as *mut libhydrogen::hydro_hash_state,
+                context.as_ptr() as *const i8,
+                if let Some(k) = key {
+                    k.as_ptr() as *const u8
+                } else {
+                    std::ptr::null()
+                },
+            )
+        };
+
+        h
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        unsafe {
+            libhydrogen::hydro_hash_update(
+                &mut self.st as *mut libhydrogen::hydro_hash_state,
+                data.as_ptr() as *const std::ffi::c_void,
+                data.len() as usize,
+            )
+        };
+    }
+
+    pub fn finish(mut self, out: &mut [u8]) {
+        assert!(out.len() >= libhydrogen::hydro_hash_BYTES_MIN as usize);
+        assert!(out.len() <= libhydrogen::hydro_hash_BYTES_MAX as usize);
+        unsafe {
+            libhydrogen::hydro_hash_update(
+                &mut self.st as *mut libhydrogen::hydro_hash_state,
+                out.as_mut_ptr() as *const std::ffi::c_void,
+                out.len() as usize,
+            )
+        };
+    }
+}
+
+pub fn secretbox_keygen() -> [u8; SECRETBOX_KEYBYTES] {
+    let mut k = [0; SECRETBOX_KEYBYTES];
+    unsafe {
+        libhydrogen::hydro_secretbox_keygen(k.as_mut_ptr());
+    }
+    k
 }
 
 #[inline(always)]
@@ -181,4 +235,35 @@ pub fn secretbox_decrypt(
 /// This function should only be called once at the beginning of a program using libhydrogen.
 pub unsafe fn init() {
     libhydrogen::hydro_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::Bencher;
+
+    #[bench]
+    fn bench_encrypt_1_m_bytes(b: &mut Bencher) {
+        let pt = vec![0; 1000000];
+        let mut ct = vec![0; 1000000 + SECRETBOX_HEADERBYTES];
+        let k = secretbox_keygen();
+        b.iter(|| secretbox_encrypt(&mut ct, &pt, 0, *b"_bench_\0", &k))
+    }
+
+    #[bench]
+    fn bench_decrypt_1_m_bytes(b: &mut Bencher) {
+        let mut pt = vec![0; 1000000];
+        let mut ct = vec![0; 1000000 + SECRETBOX_HEADERBYTES];
+        let k = secretbox_keygen();
+        secretbox_encrypt(&mut ct, &pt, 0, *b"_bench_\0", &k);
+        b.iter(|| assert!(secretbox_decrypt(&mut pt, &ct, 0, *b"_bench_\0", &k)))
+    }
+
+    #[bench]
+    fn bench_kx_n2(b: &mut Bencher) {
+        let (pk, sk) = kx_keygen();
+        let psk: [u8; KX_PSKBYTES] = [0; KX_PSKBYTES];
+        let (_, _, pkt1) = kx_n_1(&psk, &pk);
+        b.iter(|| kx_n_2(&pkt1, &psk, &pk, &sk).unwrap())
+    }
 }

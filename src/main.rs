@@ -1,3 +1,6 @@
+#![feature(test)]
+extern crate test;
+
 pub mod address;
 pub mod chunk_storage;
 pub mod chunker;

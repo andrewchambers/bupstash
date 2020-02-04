@@ -6,28 +6,29 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
 pub const KEYID_SZ: usize = 32;
+const PARTIAL_HASH_KEY_SZ: usize = 64;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MasterKey {
     pub id: [u8; KEYID_SZ],
-    pub hash_key1: [u8; hydrogen::HASH_KEYBYTES],
-    pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
+    pub hash_key_part_1: Vec<u8>,
+    pub hash_key_part_2: Vec<u8>,
     pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
     pub data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
     pub data_psk: [u8; hydrogen::KX_PSKBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SendKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
     pub master_data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    pub hash_key1: [u8; hydrogen::HASH_KEYBYTES],
-    pub hash_key2: [u8; hydrogen::HASH_KEYBYTES],
+    pub hash_key_part_1: Vec<u8>,
+    pub hash_key_part_2: Vec<u8>,
     pub data_psk: [u8; hydrogen::KX_PSKBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Key {
     MasterKeyV1(MasterKey),
     SendKeyV1(SendKey),
@@ -77,15 +78,15 @@ fn keyid_gen() -> [u8; KEYID_SZ] {
 impl MasterKey {
     pub fn gen() -> MasterKey {
         let id = keyid_gen();
-        let hash_key1 = hydrogen::hash_keygen();
-        let hash_key2 = hydrogen::hash_keygen();
+        let hash_key_part_1 = hydrogen::random(PARTIAL_HASH_KEY_SZ);
+        let hash_key_part_2 = hydrogen::random(PARTIAL_HASH_KEY_SZ);
         let data_psk = hydrogen::kx_psk_keygen();
         let (data_pk, data_sk) = hydrogen::kx_keygen();
 
         MasterKey {
             id,
-            hash_key1,
-            hash_key2,
+            hash_key_part_1,
+            hash_key_part_2,
             data_psk,
             data_pk,
             data_sk,
@@ -98,8 +99,8 @@ impl SendKey {
         SendKey {
             id: keyid_gen(),
             master_key_id: mk.id,
-            hash_key1: mk.hash_key1,
-            hash_key2: hydrogen::hash_keygen(),
+            hash_key_part_1: mk.hash_key_part_1.clone(),
+            hash_key_part_2: hydrogen::random(PARTIAL_HASH_KEY_SZ),
             data_psk: mk.data_psk,
             master_data_pk: mk.data_pk,
         }

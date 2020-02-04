@@ -1,9 +1,11 @@
 
 
-SCRATCH="$BATS_TMPDIR/archivist-test-scratch"
-REPO="$SCRATCH/archivist-test-repo"
-MASTER_KEY="$SCRATCH/archivist-test-master.key"
-SEND_KEY="$SCRATCH/archivist-test-send.key"
+export SCRATCH="$BATS_TMPDIR/archivist-test-scratch"
+export REPO="$SCRATCH/archivist-test-repo"
+export MASTER_KEY="$SCRATCH/archivist-test-master.key"
+export SEND_KEY="$SCRATCH/archivist-test-send.key"
+export ARCHIVIST_SEND_LOG="$SCRATCH/send-log.sqlite3"
+export ARCHIVIST_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
 
 setup () {
   mkdir "$SCRATCH"

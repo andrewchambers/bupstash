@@ -49,6 +49,12 @@ pub struct TreeWriter<'a> {
     rollsums: Vec<rollsum::Rollsum>,
 }
 
+fn tree_block_address(data: &[u8]) -> Address {
+    let mut addr = Address::default();
+    hydrogen::hash(&data, *b"_htree_\0", None, &mut addr.bytes[..]);
+    addr
+}
+
 impl<'a> TreeWriter<'a> {
     pub fn new(
         sink: &'a mut dyn Sink,
@@ -68,7 +74,7 @@ impl<'a> TreeWriter<'a> {
     fn clear_level(&mut self, level: usize) -> Result<(), failure::Error> {
         let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
         std::mem::swap(&mut block, &mut self.tree_blocks[level]);
-        let block_address = Address::from_bytes(&hydrogen::hash(&block, *b"_htree_\0"));
+        let block_address = tree_block_address(&block);
         self.sink.add_chunk(&block_address, block)?;
         self.add_addr(level + 1, &block_address)?;
         self.rollsums[level].reset();
@@ -169,7 +175,7 @@ impl<'a> TreeReader<'a> {
 
     pub fn push_addr(&mut self, level: usize, addr: &Address) -> Result<(), failure::Error> {
         let data = self.source.get_chunk(addr)?;
-        if level > 0 && *addr != Address::from_bytes(&hydrogen::hash(&data, *b"_htree_\0")) {
+        if level > 0 && *addr != tree_block_address(&data) {
             return Err(HTreeError::CorruptOrTamperedDataError.into());
         }
         self.read_offsets.push(0);
