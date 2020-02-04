@@ -66,7 +66,7 @@ pub struct SendOptions {
 pub fn send(
     opts: SendOptions,
     ctx: &crypto::EncryptContext,
-    send_log: Option<std::path::PathBuf>,
+    send_log: &mut sendlog::SendLog,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tags: &HashMap<String, Option<String>>,
@@ -75,15 +75,8 @@ pub fn send(
     handle_server_info(r)?;
     write_packet(w, &Packet::BeginSend(BeginSend {}))?;
 
-    let (mut send_log, gc_generation) = match read_packet(r)? {
-        Packet::AckSend(ack) => {
-            let send_log = if let Some(send_log) = send_log {
-                sendlog::SendLog::open(&send_log)?
-            } else {
-                sendlog::SendLog::open(&std::path::PathBuf::from(":memory:"))?
-            };
-            (send_log, ack.gc_generation)
-        }
+    let gc_generation = match read_packet(r)? {
+        Packet::AckSend(ack) => ack.gc_generation,
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
@@ -207,7 +200,7 @@ pub fn request_data_stream(
     let metadata = match read_packet(r)? {
         Packet::AckRequestData(req) => match req.metadata {
             Some(metadata) => metadata,
-            None => failure::bail!("no stored items with the requested address"),
+            None => failure::bail!("no stored items with the requested id"),
         },
         _ => failure::bail!("protocol error, expected ack request packet"),
     };

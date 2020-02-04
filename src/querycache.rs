@@ -18,6 +18,11 @@ impl QueryCache {
 
     pub fn open(p: &PathBuf) -> Result<QueryCache, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
+
+        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
+
         conn.query_row(
             "pragma locking_mode=EXCLUSIVE;",
             rusqlite::NO_PARAMS,
@@ -30,6 +35,29 @@ impl QueryCache {
             "create table if not exists QueryCacheMeta(Key, Value, unique(Key)); ",
             rusqlite::NO_PARAMS,
         )?;
+
+        match tx.query_row(
+            "select Value from QueryCacheMeta where Key = 'schema-version';",
+            rusqlite::NO_PARAMS,
+            |r| {
+                let v: i64 = r.get(0)?;
+                Ok(v)
+            },
+        ) {
+            Ok(v) => {
+                if v != 0 {
+                    failure::bail!("query cache at {:?} is from a different version of the software and must be removed manually", &p);
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                tx.execute(
+                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 0);",
+                    rusqlite::NO_PARAMS,
+                )?;
+            }
+            Err(err) => return Err(err.into()),
+        }
+
         itemset::init_tables(&mut tx)?;
 
         tx.commit()?;

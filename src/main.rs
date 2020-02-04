@@ -26,6 +26,22 @@ fn die(s: String) -> ! {
     std::process::exit(1);
 }
 
+fn cache_dir() -> Result<std::path::PathBuf, failure::Error> {
+    let mut cache_dir = match std::env::var_os("XDG_CACHE_HOME") {
+        Some(cache_dir) => std::path::PathBuf::from(&cache_dir),
+        None => match std::env::var_os("HOME") {
+            Some(home) => {
+                let mut h = std::path::PathBuf::from(&home);
+                h.push(".cache");
+                h
+            }
+            None => failure::bail!("unable to determine cache dir from XDG_CACHE_HOME or HOME"),
+        },
+    };
+    cache_dir.push("archivist");
+    Ok(cache_dir)
+}
+
 fn print_help_and_exit(subcommand: &str, opts: &Options) {
     let brief = match subcommand {
         "init" => include_str!("../doc/cli/init.txt"),
@@ -172,6 +188,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         "master key to decrypt items during listing/search.",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "query-cache",
+        "Path to the query cache (used for storing synced items before search).",
+        "PATH",
+    );
     let matches = default_parse_opts(opts, &args[..]);
 
     let key = if matches.opt_present("key") {
@@ -200,6 +222,21 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             Ok(query) => Some(query),
         };
     }
+
+    let mut query_cache = match matches.opt_str("query-cache") {
+        Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))?,
+        None => match std::env::var_os("ARCHIVIST_QUERY_CACHE") {
+            Some(query_cache) => {
+                querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))?
+            }
+            None => {
+                let mut p = cache_dir()?;
+                std::fs::create_dir_all(&p)?;
+                p.push("query-cache.sqlite3");
+                querycache::QueryCache::open(&p)?
+            }
+        },
+    };
 
     let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::ItemMetadata| {
@@ -234,13 +271,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::list(
-        // XXX TODO this should come from somewhere.
-        &mut querycache::QueryCache::open(&std::path::PathBuf::from(":memory:"))?,
-        &mut f,
-        &mut serve_out,
-        &mut serve_in,
-    )?;
+    client::list(&mut query_cache, &mut f, &mut serve_out, &mut serve_in)?;
 
     Ok(())
 }
@@ -307,21 +338,29 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let encrypt_ctx = crypto::EncryptContext::new(&key);
 
+    let mut send_log = match matches.opt_str("send-log") {
+        Some(send_log) => sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?,
+        None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
+            Some(send_log) => sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?,
+            None => {
+                let mut p = cache_dir()?;
+                std::fs::create_dir_all(&p)?;
+                p.push("send-log.sqlite3");
+                sendlog::SendLog::open(&p)?
+            }
+        },
+    };
+
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-
-    let send_log = match matches.opt_str("send-log") {
-        Some(send_log) => Some(std::path::PathBuf::from(send_log)),
-        None => None,
-    };
 
     let id = client::send(
         client::SendOptions {
             compression: !matches.opt_present("no-compression"),
         },
         &encrypt_ctx,
-        send_log,
+        &mut send_log,
         &mut serve_out,
         &mut serve_in,
         &tags,
