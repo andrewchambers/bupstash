@@ -161,3 +161,26 @@ _concurrent_send_test_worker () {
   archivist gc
   test 0 = $(archivist list -k "$MASTER_KEY" | wc -l)
 }
+
+@test "get via query" {
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello1) foo=bar
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=baz
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=bang
+  test "hello2" = $(archivist get -k "$MASTER_KEY" "foo=ban*")
+}
+
+@test "rm via query" {
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello1) foo=bar
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=baz
+  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=bang
+  test 3 = $(archivist list -k "$MASTER_KEY" | wc -l)
+  if archivist rm -k "$MASTER_KEY" "foo=*"
+  then
+    exit 1
+  fi
+  archivist rm -k "$MASTER_KEY" "foo=bar"
+  test 2 = $(archivist list -k "$MASTER_KEY" | wc -l)
+  archivist rm --all -k "$MASTER_KEY" "foo=*"
+  test 0 = $(archivist list -k "$MASTER_KEY" | wc -l)
+}
+

@@ -147,6 +147,38 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
     }
 }
 
+fn matches_to_id_and_query(
+    matches: &Matches,
+) -> Result<(Option<i64>, Option<tquery::Query>), failure::Error> {
+    let id: Option<i64> = match matches.opt_str("id") {
+        Some(id) => match id.parse::<i64>() {
+            Ok(id) => Some(id),
+            Err(err) => return Err(err.context("--id invalid").into()),
+        },
+        _ => None,
+    };
+
+    let query: Option<tquery::Query> = if matches.free.len() != 0 {
+        match tquery::parse(&matches.free.join("•")) {
+            Ok(query) => Some(query),
+            Err(e) => {
+                tquery::report_parse_error(e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    match (id, &query) {
+        (Some(_), _) => (),
+        (_, Some(_)) => (),
+        _ => failure::bail!("you must specify either --id or query arguments"),
+    };
+
+    Ok((id, query))
+}
+
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
     let repo = if matches.opt_present("repository") {
         matches.opt_str("repository").unwrap()
@@ -420,31 +452,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("the provided key is a not a master decryption key"),
     };
 
-    let id: Option<i64> = match matches.opt_str("id") {
-        Some(id) => match id.parse::<i64>() {
-            Ok(id) => Some(id),
-            Err(err) => return Err(err.context("--id invalid").into()),
-        },
-        _ => None,
-    };
-
-    let query: Option<tquery::Query> = if matches.free.len() != 0 {
-        match tquery::parse(&matches.free.join("•")) {
-            Ok(query) => Some(query),
-            Err(e) => {
-                tquery::report_parse_error(e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        None
-    };
-
-    match (id, &query) {
-        (Some(_), _) => (),
-        (_, Some(_)) => (),
-        _ => failure::bail!("you must specify either --id or query arguments"),
-    };
+    let (id, query) = matches_to_id_and_query(&matches)?;
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
@@ -512,26 +520,80 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
+    opts.optopt(
+        "",
+        "query-cache",
+        "Path to the query cache (used for storing synced items before search).",
+        "PATH",
+    );
     opts.optopt("", "id", "ID of entry to delete.", "ID");
+    opts.optopt("k", "key", "Decryption key.", "PATH");
+    opts.optflag("", "all", "remove every item matching query.");
 
     let matches = default_parse_opts(opts, &args[..]);
 
-    let id = if matches.opt_present("id") {
-        let id_str = matches.opt_str("id").unwrap();
-        match id_str.parse::<i64>() {
-            Ok(addr) => addr,
-            Err(err) => return Err(err.context("--id invalid").into()),
-        }
-    } else {
-        failure::bail!("please set or --id.")
-    };
+    let (id, query) = matches_to_id_and_query(&matches)?;
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     client::handle_server_info(&mut serve_out)?;
-    client::remove(vec![id], &mut serve_out, &mut serve_in)?;
+
+    let ids: Vec<i64> = match (id, query) {
+        (Some(id), _) => vec![id],
+        (_, Some(query)) => {
+            let mut query_cache = matches_to_query_cache(&matches)?;
+
+            client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+
+            let key = if matches.opt_present("key") {
+                matches.opt_str("key").unwrap()
+            } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
+                s.into_string().unwrap()
+            } else {
+                failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
+            };
+
+            let key = keys::Key::load_from_file(&key)?;
+            let key = match key {
+                keys::Key::MasterKeyV1(mk) => mk,
+                _ => failure::bail!("the provided key is a not a master decryption key"),
+            };
+
+            let mut ids = Vec::new();
+
+            let mut f = |id: i64, metadata: itemset::ItemMetadata| {
+                if metadata.encrypt_header.master_key_id() != key.id {
+                    return Ok(());
+                }
+                let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
+                let tags = ctx.decrypt_data(&metadata.encrypted_tags)?;
+                let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                if tquery::query_matches(&query, &tags) {
+                    ids.push(id);
+                }
+                Ok(())
+            };
+            let mut tx = query_cache.transaction()?;
+            tx.walk_items(&mut f)?;
+
+            if ids.len() != 1 && !matches.opt_present("all") {
+                failure::bail!(
+                    "the provided query matched {} items, need a single match unless --all is specified",
+                    ids.len()
+                );
+            };
+
+            ids
+        }
+        _ => panic!(),
+    };
+
+    for ids in ids.chunks(128) {
+        client::remove(ids.to_vec(), &mut serve_out, &mut serve_in)?;
+    }
+
     client::hangup(&mut serve_in)?;
 
     Ok(())
