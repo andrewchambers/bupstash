@@ -15,18 +15,7 @@ pub struct SendLogTx<'a> {
 impl SendLog {
     pub fn open(p: &PathBuf) -> Result<SendLog, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
-
-        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
-
-        conn.query_row(
-            "pragma locking_mode=EXCLUSIVE;",
-            rusqlite::NO_PARAMS,
-            |_r| Ok(()),
-        )?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
-
         let tx = conn.transaction()?;
         // We only really need one process per write log at a time.
         tx.execute(

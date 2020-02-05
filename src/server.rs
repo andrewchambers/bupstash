@@ -52,6 +52,14 @@ pub fn serve(
             }
             item_sync(&mut repo, req.after, req.gc_generation, w)
         }
+        Packet::LogOp(op) => {
+            if !cfg.allow_edit {
+                failure::bail!("server has disabled delete/edit for this client")
+            }
+            let id = repo.do_op(op)?;
+            write_packet(w, &Packet::AckLogOp(id))?;
+            Ok(())
+        }
         _ => Err(failure::format_err!(
             "protocol error, unexpected packet kind"
         )),
@@ -77,17 +85,18 @@ fn recv(
             Packet::Chunk(chunk) => {
                 store_engine.add_chunk(&chunk.address, chunk.data)?;
             }
-            Packet::CommitSend(commit) => {
+            Packet::LogOp(op) => {
                 store_engine.sync()?;
-                let id = repo.add_item(commit.metadata)?;
-                write_packet(w, &Packet::AckCommit(AckCommit { id }))?;
+                match op {
+                    itemset::LogOp::AddItem(_) => {
+                        let id = repo.do_op(op)?;
+                        write_packet(w, &Packet::AckLogOp(id))?;
+                    }
+                    _ => failure::bail!("protocol error, expected add item log op"),
+                }
                 break;
             }
-            _ => {
-                return Err(failure::format_err!(
-                    "protocol error, unexpected packet kind"
-                ))
-            }
+            _ => failure::bail!("protocol error, unexpected packet"),
         }
     }
 
@@ -178,14 +187,13 @@ fn item_sync(
         if logops.len() >= 64 {
             let mut v = Vec::new();
             std::mem::swap(&mut v, &mut logops);
-            write_packet(w, &Packet::LogOps(v))?;
+            write_packet(w, &Packet::SyncLogOps(v))?;
         }
         Ok(())
     })?;
-
     if !logops.is_empty() {
-        write_packet(w, &Packet::LogOps(logops))?;
+        write_packet(w, &Packet::SyncLogOps(logops))?;
     }
-    write_packet(w, &Packet::LogOps(vec![]))?;
+    write_packet(w, &Packet::SyncLogOps(vec![]))?;
     Ok(())
 }

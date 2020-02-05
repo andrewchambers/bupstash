@@ -152,18 +152,16 @@ fn send2(
 
     write_packet(
         filtered_conn.w,
-        &Packet::CommitSend(CommitSend {
-            metadata: itemset::ItemMetadata {
-                address: root_address,
-                tree_height,
-                encrypt_header: ctx.encryption_header(),
-                encrypted_tags: ctx.encrypt_data(true, bincode::serialize(&tags)?),
-            },
-        }),
+        &Packet::LogOp(itemset::LogOp::AddItem(itemset::ItemMetadata {
+            address: root_address,
+            tree_height,
+            encrypt_header: ctx.encryption_header(),
+            encrypted_tags: ctx.encrypt_data(true, bincode::serialize(&tags)?),
+        })),
     )?;
 
     match read_packet(r)? {
-        Packet::AckCommit(ack) => Ok(ack.id),
+        Packet::AckLogOp(id) => Ok(id),
         _ => failure::bail!("protocol error, expected begin ack packet"),
     }
 }
@@ -271,7 +269,7 @@ pub fn list(
 
     loop {
         match read_packet(r)? {
-            Packet::LogOps(ops) => {
+            Packet::SyncLogOps(ops) => {
                 if ops.is_empty() {
                     break;
                 }
@@ -285,5 +283,22 @@ pub fn list(
     tx.commit()?;
     let mut tx = query_cache.transaction(&gc_generation)?;
     tx.walk_items(f)?;
+    Ok(())
+}
+
+pub fn remove(
+    ids: Vec<i64>,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    handle_server_info(r)?;
+
+    write_packet(w, &Packet::LogOp(itemset::LogOp::RemoveItems(ids)))?;
+
+    match read_packet(r)? {
+        Packet::AckLogOp(_) => {}
+        _ => failure::bail!("protocol error, expected ack log op packet"),
+    }
+
     Ok(())
 }

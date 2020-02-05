@@ -13,7 +13,9 @@ pub struct ItemMetadata {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum LogOp {
     AddItem(ItemMetadata),
-    RemoveItem(i64),
+    // Note: There is an asymmetry here in that we can delete many items with one log op.
+    // This is because batch deleting is possible, but batch makes less sense.
+    RemoveItems(Vec<i64>),
 }
 
 pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
@@ -36,23 +38,15 @@ pub fn do_op(tx: &rusqlite::Transaction, op: &LogOp) -> Result<i64, failure::Err
             tx.execute("insert into Items(LogOpId) values(?);", &[id])?;
             Ok(id)
         }
-        LogOp::RemoveItem(itemid) => {
-            match tx.query_row("select 1 from Items where LogOpId = ?;", &[itemid], |_r| {
-                Ok(())
-            }) {
-                Ok(_) => {
-                    tx.execute("delete from Items where LogOpId = ?;", &[itemid])?;
-                    tx.execute(
-                        "insert into ItemOpLog(OpData) values(?);",
-                        &[bincode::serialize(&op)?],
-                    )?;
-                    Ok(tx.last_insert_rowid())
-                }
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    Err(failure::format_err!("no item with id {}", itemid))
-                }
-                Err(err) => Err(err.into()),
+        LogOp::RemoveItems(items) => {
+            for itemid in items {
+                tx.execute("delete from Items where LogOpId = ?;", &[*itemid])?;
             }
+            tx.execute(
+                "insert into ItemOpLog(OpData) values(?);",
+                &[bincode::serialize(&op)?],
+            )?;
+            Ok(tx.last_insert_rowid())
         }
     }
 }
@@ -71,23 +65,15 @@ pub fn do_op_with_id(
             tx.execute("insert into Items(LogOpId) values(?);", &[id])?;
             Ok(id)
         }
-        LogOp::RemoveItem(itemid) => {
-            match tx.query_row("select 1 from Items where LogOpId = ?;", &[itemid], |_r| {
-                Ok(())
-            }) {
-                Ok(_) => {
-                    tx.execute("delete from Items where LogOpId = ?;", &[itemid])?;
-                    tx.execute(
-                        "insert into ItemOpLog(Id, OpData) values(?, ?);",
-                        rusqlite::params![id, bincode::serialize(&op)?],
-                    )?;
-                    Ok(id)
-                }
-                Err(rusqlite::Error::QueryReturnedNoRows) => {
-                    Err(failure::format_err!("no item with id {}", itemid))
-                }
-                Err(err) => Err(err.into()),
+        LogOp::RemoveItems(items) => {
+            for itemid in items {
+                tx.execute("delete from Items where LogOpId = ?;", &[*itemid])?;
             }
+            tx.execute(
+                "insert into ItemOpLog(Id, OpData) values(?, ?);",
+                rusqlite::params![id, bincode::serialize(&op)?],
+            )?;
+            Ok(tx.last_insert_rowid())
         }
     }
 }
@@ -95,15 +81,6 @@ pub fn do_op_with_id(
 pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     tx.execute("DELETE FROM ItemOpLog WHERE Id IN \
 (SELECT ItemOpLog.Id FROM ItemOpLog LEFT JOIN Items ON ItemOpLog.Id=Items.LogOpId WHERE Items.LogOpId IS NULL);", rusqlite::NO_PARAMS)?;
-    Ok(())
-}
-
-pub fn add_item(tx: &rusqlite::Transaction, metadata: ItemMetadata) -> Result<i64, failure::Error> {
-    do_op(tx, &LogOp::AddItem(metadata))
-}
-
-pub fn remove_item(tx: &rusqlite::Transaction, id: i64) -> Result<(), failure::Error> {
-    do_op(tx, &LogOp::RemoveItem(id))?;
     Ok(())
 }
 

@@ -27,16 +27,6 @@ pub struct AckSend {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct CommitSend {
-    pub metadata: itemset::ItemMetadata,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct AckCommit {
-    pub id: i64,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RequestData {
     pub id: i64,
 }
@@ -71,30 +61,30 @@ pub enum Packet {
     BeginSend(BeginSend),
     AckSend(AckSend),
     Chunk(Chunk),
-    CommitSend(CommitSend),
-    AckCommit(AckCommit),
+    LogOp(itemset::LogOp),
+    AckLogOp(i64),
     RequestData(RequestData),
     AckRequestData(AckRequestData),
     StartGC(StartGC),
     GCComplete(GCComplete),
     RequestItemSync(RequestItemSync),
     AckItemSync(AckItemSync),
-    LogOps(Vec<(i64, itemset::LogOp)>),
+    SyncLogOps(Vec<(i64, itemset::LogOp)>),
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
 const PACKET_KIND_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_ACK_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
-const PACKET_KIND_COMMIT_SEND: u8 = 4;
-const PACKET_KIND_ACK_COMMIT: u8 = 5;
+const PACKET_KIND_LOG_OP: u8 = 4;
+const PACKET_KIND_ACK_LOG_OP: u8 = 5;
 const PACKET_KIND_REQUEST_DATA: u8 = 6;
 const PACKET_KIND_ACK_REQUEST_DATA: u8 = 7;
 const PACKET_KIND_START_GC: u8 = 8;
 const PACKET_KIND_GC_COMPLETE: u8 = 9;
 const PACKET_KIND_REQUEST_ITEM_SYNC: u8 = 10;
 const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
-const PACKET_KIND_LOG_OPS: u8 = 12;
+const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -139,15 +129,15 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
             buf.truncate(buf.len() - ADDRESS_SZ);
             Packet::Chunk(Chunk { address, data: buf })
         }
-        PACKET_KIND_COMMIT_SEND => Packet::CommitSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_ACK_COMMIT => Packet::AckCommit(bincode::deserialize(&buf)?),
+        PACKET_KIND_LOG_OP => Packet::LogOp(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_LOG_OP => Packet::AckLogOp(bincode::deserialize(&buf)?),
         PACKET_KIND_REQUEST_DATA => Packet::RequestData(bincode::deserialize(&buf)?),
         PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(bincode::deserialize(&buf)?),
         PACKET_KIND_START_GC => Packet::StartGC(bincode::deserialize(&buf)?),
         PACKET_KIND_GC_COMPLETE => Packet::GCComplete(bincode::deserialize(&buf)?),
         PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(bincode::deserialize(&buf)?),
         PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(bincode::deserialize(&buf)?),
-        PACKET_KIND_LOG_OPS => Packet::LogOps(bincode::deserialize(&buf)?),
+        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -192,14 +182,14 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::CommitSend(ref v) => {
+        Packet::LogOp(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_COMMIT_SEND, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckCommit(ref v) => {
+        Packet::AckLogOp(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ACK_COMMIT, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_ACK_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RequestData(ref v) => {
@@ -232,9 +222,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_ACK_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::LogOps(ref v) => {
+        Packet::SyncLogOps(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_LOG_OPS, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
     }
@@ -259,18 +249,16 @@ mod tests {
             Packet::AckSend(AckSend {
                 gc_generation: "blah".to_owned(),
             }),
-            Packet::CommitSend(CommitSend {
-                metadata: itemset::ItemMetadata {
-                    address: Address::default(),
-                    tree_height: 3,
-                    encrypt_header: {
-                        let master_key = keys::MasterKey::gen();
-                        let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                        ectx.encryption_header()
-                    },
-                    encrypted_tags: vec![1, 2, 3],
+            Packet::LogOp(itemset::LogOp::AddItem(itemset::ItemMetadata {
+                address: Address::default(),
+                tree_height: 3,
+                encrypt_header: {
+                    let master_key = keys::MasterKey::gen();
+                    let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
+                    ectx.encryption_header()
                 },
-            }),
+                encrypted_tags: vec![1, 2, 3],
+            })),
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
@@ -303,7 +291,7 @@ mod tests {
             Packet::AckItemSync(AckItemSync {
                 gc_generation: "123".to_owned(),
             }),
-            Packet::LogOps(vec![(765756, itemset::LogOp::RemoveItem(123))]),
+            Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
         ];
 
         for p1 in packets.iter() {

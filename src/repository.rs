@@ -257,10 +257,9 @@ impl Repo {
         )?)
     }
 
-    pub fn add_item(&mut self, metadata: itemset::ItemMetadata) -> Result<i64, failure::Error> {
+    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<i64, failure::Error> {
         let tx = self.conn.transaction()?;
-        itemset::add_item(&tx, metadata)?;
-        let id = tx.last_insert_rowid();
+        let id = itemset::do_op(&tx, &op)?;
         tx.commit()?;
         Ok(id)
     }

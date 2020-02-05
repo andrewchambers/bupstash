@@ -201,10 +201,10 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = if matches.opt_present("key") {
         matches.opt_str("key").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
         s.into_string().unwrap()
     } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
+        failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
     };
 
     let key = keys::Key::load_from_file(&key)?;
@@ -384,16 +384,16 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
-    opts.optopt("", "id", "ID of data to fetch.", "ID");
+    opts.optopt("", "id", "ID of entry to fetch.", "ID");
 
     let matches = default_parse_opts(opts, &args[..]);
 
     let key = if matches.opt_present("key") {
         matches.opt_str("key").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
+    } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
         s.into_string().unwrap()
     } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
+        failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
     };
 
     let key = keys::Key::load_from_file(&key)?;
@@ -427,6 +427,39 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     Ok(())
 }
+
+fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+
+    opts.optopt(
+        "r",
+        "repository",
+        "URI of repository to fetch data from.",
+        "REPO",
+    );
+    opts.optopt("", "id", "ID of entry to delete.", "ID");
+
+    let matches = default_parse_opts(opts, &args[..]);
+
+    let id = if matches.opt_present("id") {
+        let id_str = matches.opt_str("id").unwrap();
+        match id_str.parse::<i64>() {
+            Ok(addr) => addr,
+            Err(err) => return Err(err.context("--id invalid").into()),
+        }
+    } else {
+        failure::bail!("please set or --id.")
+    };
+
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::remove(vec![id], &mut serve_out, &mut serve_in)?;
+
+    Ok(())
+}
+
 fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.optopt(
@@ -455,7 +488,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag(
         "",
         "allow-add",
-        "allow client to add more data to the repository.",
+        "allow client to add more entry to the repository.",
     );
     opts.optflag(
         "",
@@ -531,6 +564,7 @@ fn main() {
         "send" => send_main(args),
         "get" => get_main(args),
         "gc" => gc_main(args),
+        "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();
