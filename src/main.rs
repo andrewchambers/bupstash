@@ -413,7 +413,11 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let mut data = if matches.opt_present("file") {
         let f = matches.opt_str("file").unwrap();
-        let f = std::fs::File::open(f)?;
+        let f: Box<dyn std::io::Read> = if f == "-" {
+            Box::new(std::io::stdin())
+        } else {
+            Box::new(std::fs::File::open(f)?)
+        };
         f
     } else {
         failure::bail!("please set --file to the data you are sending")
