@@ -22,6 +22,7 @@ pub mod tquery;
 
 use failure::Fail;
 use getopts::{Matches, Options};
+use serde::Serialize;
 use std::collections::HashMap;
 
 fn die(s: String) -> ! {
@@ -61,6 +62,15 @@ fn default_cli_opts() -> Options {
     let mut opts = Options::new();
     opts.optflag("h", "help", "print this help menu.");
     opts
+}
+
+fn query_cache_opt(opts: &mut Options) {
+    opts.optopt(
+        "",
+        "query-cache",
+        "Path to the query cache (used for storing synced items before search).",
+        "PATH",
+    );
 }
 
 fn default_parse_opts(opts: Options, args: &[String]) -> Matches {
@@ -226,6 +236,17 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     Ok(serve_proc)
 }
 
+enum ListFormat {
+    Human,
+    Jsonl,
+}
+
+#[derive(Serialize)]
+struct ToJsonl {
+    id: i64,
+    tags: std::collections::BTreeMap<String, Option<String>>,
+}
+
 fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.optopt(
@@ -242,11 +263,22 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     );
     opts.optopt(
         "",
-        "query-cache",
-        "Path to the query cache (used for storing synced items before search).",
+        "format",
+        "Output format, valid values are human | jsonl",
         "PATH",
     );
+    query_cache_opt(&mut opts);
+
     let matches = default_parse_opts(opts, &args[..]);
+
+    let list_format = match matches.opt_str("format") {
+        Some(f) => match &f[..] {
+            "jsonl" => ListFormat::Jsonl,
+            "human" => ListFormat::Human,
+            _ => failure::bail!("invalid --format, expected one of human | jsonl"),
+        },
+        None => ListFormat::Human,
+    };
 
     let key = if matches.opt_present("key") {
         matches.opt_str("key").unwrap()
@@ -299,8 +331,32 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             None => true,
         };
 
+        let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+        tags.sort_by(|(k1, _), (k2, _)| k1.partial_cmp(k2).unwrap());
+
         if doprint {
-            println!("{}: {:?}", id, tags);
+            match list_format {
+                ListFormat::Human => {
+                    print!("{}:", id);
+                    for (k, v) in tags {
+                        print!(" {}", k);
+                        match v {
+                            Some(v) => {
+                                print!("=\"{}\"", v.replace("\\", "\\\\").replace("\"", "\\\""))
+                            }
+                            None => (),
+                        }
+                    }
+                    println!("");
+                }
+                ListFormat::Jsonl => {
+                    let jsonl = ToJsonl {
+                        id,
+                        tags: tags.into_iter().collect(),
+                    };
+                    println!("{}", serde_json::to_string(&jsonl)?);
+                }
+            }
         }
 
         Ok(())
@@ -427,12 +483,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
-    opts.optopt(
-        "",
-        "query-cache",
-        "Path to the query cache (used for storing synced items before search).",
-        "PATH",
-    );
+    query_cache_opt(&mut opts);
     opts.optopt("", "id", "ID of entry to fetch.", "ID");
 
     let matches = default_parse_opts(opts, &args[..]);
@@ -513,21 +564,15 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-
     opts.optopt(
         "r",
         "repository",
         "URI of repository to fetch data from.",
         "REPO",
     );
-    opts.optopt(
-        "",
-        "query-cache",
-        "Path to the query cache (used for storing synced items before search).",
-        "PATH",
-    );
+    query_cache_opt(&mut opts);
     opts.optopt("", "id", "ID of entry to delete.", "ID");
-    opts.optopt("k", "key", "Decryption key.", "PATH");
+    opts.optopt("k", "key", "decryption key for querying.", "PATH");
     opts.optflag("", "all", "remove every item matching query.");
 
     let matches = default_parse_opts(opts, &args[..]);
