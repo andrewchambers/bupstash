@@ -16,7 +16,7 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let mut repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Shared)?;
+    let mut repo = repository::Repo::open(&cfg.repo_path)?;
     write_packet(
         w,
         &Packet::ServerInfo(ServerInfo {
@@ -25,44 +25,42 @@ pub fn serve(
         }),
     )?;
 
-    match read_packet(r)? {
-        Packet::BeginSend(_) => {
-            if !cfg.allow_add {
-                failure::bail!("server has add writing data for this client")
+    loop {
+        match read_packet(r)? {
+            Packet::BeginSend(_) => {
+                if !cfg.allow_add {
+                    failure::bail!("server has add writing data for this client")
+                }
+                recv(&mut repo, r, w)?;
             }
-            recv(&mut repo, r, w)
-        }
-        Packet::RequestData(req) => {
-            if !cfg.allow_read {
-                failure::bail!("server has disabled reading data for this client")
+            Packet::RequestData(req) => {
+                if !cfg.allow_read {
+                    failure::bail!("server has disabled reading data for this client")
+                }
+                send(&mut repo, req.id, w)?;
             }
-            send(&mut repo, req.id, w)
-        }
-        Packet::StartGC(_) => {
-            drop(repo);
-            repo = repository::Repo::open(&cfg.repo_path, repository::OpenMode::Exclusive)?;
-            if !cfg.allow_gc {
-                failure::bail!("server has disabled garbage collection for this client")
+            Packet::StartGC(_) => {
+                if !cfg.allow_gc {
+                    failure::bail!("server has disabled garbage collection for this client")
+                }
+                gc(&mut repo, w)?;
             }
-            gc(&mut repo, w)
-        }
-        Packet::RequestItemSync(req) => {
-            if !cfg.allow_read {
-                failure::bail!("server has disabled query and search for this client")
+            Packet::RequestItemSync(req) => {
+                if !cfg.allow_read {
+                    failure::bail!("server has disabled query and search for this client")
+                }
+                item_sync(&mut repo, req.after, req.gc_generation, w)?;
             }
-            item_sync(&mut repo, req.after, req.gc_generation, w)
-        }
-        Packet::LogOp(op) => {
-            if !cfg.allow_edit {
-                failure::bail!("server has disabled delete/edit for this client")
+            Packet::LogOp(op) => {
+                if !cfg.allow_edit {
+                    failure::bail!("server has disabled delete/edit for this client")
+                }
+                let id = repo.do_op(op)?;
+                write_packet(w, &Packet::AckLogOp(id))?;
             }
-            let id = repo.do_op(op)?;
-            write_packet(w, &Packet::AckLogOp(id))?;
-            Ok(())
+            Packet::EndOfTransmission => break Ok(()),
+            _ => failure::bail!("protocol error, unexpected packet kind"),
         }
-        _ => Err(failure::format_err!(
-            "protocol error, unexpected packet kind"
-        )),
     }
 }
 
@@ -155,7 +153,10 @@ fn send(
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    let stats = repo.gc()?;
+    repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive);
+    let stats = repo.gc();
+    repo.alter_gc_lock_mode(repository::GCLockMode::Shared);
+    let stats = stats?;
     write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
     Ok(())
 }

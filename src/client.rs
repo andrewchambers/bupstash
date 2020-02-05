@@ -9,7 +9,6 @@ use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
-use super::tquery;
 
 use failure::Fail;
 use std::collections::HashMap;
@@ -20,16 +19,16 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-fn handle_server_info(r: &mut dyn std::io::Read) -> Result<(), failure::Error> {
+pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
     match read_packet(r)? {
         Packet::ServerInfo(info) => {
             if info.protocol != "0" {
                 failure::bail!("remote protocol version mismatch");
             };
+            Ok(info)
         }
         _ => failure::bail!("protocol error, expected server info packet"),
     }
-    Ok(())
 }
 
 struct FilteredConnection<'a, 'b> {
@@ -72,7 +71,6 @@ pub fn send(
     tags: &HashMap<String, Option<String>>,
     data: &mut dyn std::io::Read,
 ) -> Result<i64, failure::Error> {
-    handle_server_info(r)?;
     write_packet(w, &Packet::BeginSend(BeginSend {}))?;
 
     let gc_generation = match read_packet(r)? {
@@ -81,27 +79,26 @@ pub fn send(
     };
 
     let send_result: Result<i64, failure::Error>;
+    let mut send_log_tx = send_log.transaction(&gc_generation)?;
     {
-        let mut send_log_tx = send_log.transaction(&gc_generation)?;
-        {
-            let mut filtered_conn = FilteredConnection {
-                tx: &mut send_log_tx,
-                w: w,
-            };
-            // XXX We divide send up into two parts to make the
-            // lifetime easier to deal. Theres a good chance
-            // it can be factored better, but this works for now.
-            send_result = send2(opts, ctx, r, &mut filtered_conn, tags, data);
-        }
-
-        match send_result {
-            Ok(id) => {
-                send_log_tx.commit()?;
-                Ok(id)
-            }
-            Err(err) => Err(err),
-        }
+        let mut filtered_conn = FilteredConnection {
+            tx: &mut send_log_tx,
+            w: w,
+        };
+        // XXX We divide send up into two parts to make the
+        // lifetime easier to deal. Theres a good chance
+        // it can be factored better, but this works for now.
+        send_result = send2(opts, ctx, r, &mut filtered_conn, tags, data);
     }
+
+    let id = match send_result {
+        Ok(id) => {
+            send_log_tx.commit()?;
+            id
+        }
+        Err(err) => return Err(err.into()),
+    };
+    Ok(id)
 }
 
 fn send2(
@@ -191,8 +188,6 @@ pub fn request_data_stream(
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    handle_server_info(r)?;
-
     write_packet(w, &Packet::RequestData(RequestData { id }))?;
 
     let metadata = match read_packet(r)? {
@@ -225,7 +220,6 @@ pub fn request_data_stream(
     }
 
     out.flush()?;
-
     Ok(())
 }
 
@@ -233,24 +227,23 @@ pub fn gc(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<repository::GCStats, failure::Error> {
-    handle_server_info(r)?;
     write_packet(w, &Packet::StartGC(StartGC {}))?;
-    match read_packet(r)? {
-        Packet::GCComplete(gccomplete) => Ok(gccomplete.stats),
+    let stats = match read_packet(r)? {
+        Packet::GCComplete(gccomplete) => gccomplete.stats,
         _ => failure::bail!("protocol error, expected gc complete packet"),
-    }
+    };
+    Ok(stats)
 }
 
-pub fn list(
+pub fn sync(
     query_cache: &mut querycache::QueryCache,
-    f: &mut dyn FnMut(i64, itemset::ItemMetadata) -> Result<(), failure::Error>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    handle_server_info(r)?;
+    let mut tx = query_cache.transaction()?;
 
-    let after = query_cache.last_log_op()?;
-    let gc_generation = query_cache.gc_generation()?;
+    let after = tx.last_log_op()?;
+    let gc_generation = tx.current_gc_generation()?;
 
     write_packet(
         w,
@@ -265,7 +258,7 @@ pub fn list(
         _ => failure::bail!("protocol error, expected items packet"),
     };
 
-    let mut tx = query_cache.transaction(&gc_generation)?;
+    tx.start_sync(gc_generation)?;
 
     loop {
         match read_packet(r)? {
@@ -280,9 +273,8 @@ pub fn list(
             _ => failure::bail!("protocol error, expected items packet"),
         }
     }
+
     tx.commit()?;
-    let mut tx = query_cache.transaction(&gc_generation)?;
-    tx.walk_items(f)?;
     Ok(())
 }
 
@@ -291,14 +283,15 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    handle_server_info(r)?;
-
     write_packet(w, &Packet::LogOp(itemset::LogOp::RemoveItems(ids)))?;
-
     match read_packet(r)? {
         Packet::AckLogOp(_) => {}
         _ => failure::bail!("protocol error, expected ack log op packet"),
     }
+    Ok(())
+}
 
+pub fn hangup(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+    write_packet(w, &Packet::EndOfTransmission)?;
     Ok(())
 }

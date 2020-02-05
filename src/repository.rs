@@ -1,6 +1,6 @@
 use super::address::*;
 use super::chunk_storage;
-use super::crypto;
+
 use super::fsutil;
 use super::hex;
 use super::htree;
@@ -32,16 +32,17 @@ pub enum StorageEngineSpec {
     Local,
 }
 
-pub enum OpenMode {
+#[derive(Clone)]
+pub enum GCLockMode {
     Shared,
     Exclusive,
 }
 
 pub struct Repo {
-    open_mode: OpenMode,
     repo_path: PathBuf,
-    _gc_lock: FileLock,
     conn: rusqlite::Connection,
+    _gc_lock_mode: GCLockMode,
+    _gc_lock: Option<FileLock>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -71,7 +72,7 @@ impl FileLock {
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let _ = self.f.unlock();
+        self.f.unlock().unwrap();
     }
 }
 
@@ -193,13 +194,8 @@ impl Repo {
         Ok(conn)
     }
 
-    pub fn open(repo_path: &Path, open_mode: OpenMode) -> Result<Repo, failure::Error> {
+    pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
         Repo::check_sane(&repo_path)?;
-
-        let gc_lock = match open_mode {
-            OpenMode::Shared => FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?,
-            OpenMode::Exclusive => FileLock::get_exclusive(&Repo::gc_lock_path(&repo_path))?,
-        };
 
         let conn = Repo::open_db(repo_path)?;
         let v: i32 = conn.query_row(
@@ -213,10 +209,23 @@ impl Repo {
 
         Ok(Repo {
             conn,
-            open_mode,
             repo_path: repo_path.to_path_buf(),
-            _gc_lock: gc_lock,
+            _gc_lock_mode: GCLockMode::Shared,
+            _gc_lock: Some(FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?),
         })
+    }
+
+    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) {
+        self._gc_lock = None;
+        self._gc_lock_mode = gc_lock_mode.clone();
+        self._gc_lock = match gc_lock_mode {
+            GCLockMode::Shared => {
+                Some(FileLock::get_shared(&Repo::gc_lock_path(&self.repo_path)).unwrap())
+            }
+            GCLockMode::Exclusive => {
+                Some(FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
+            }
+        }
     }
 
     pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
@@ -282,8 +291,8 @@ impl Repo {
     }
 
     pub fn gc(&mut self) -> Result<GCStats, failure::Error> {
-        match self.open_mode {
-            OpenMode::Exclusive => (),
+        match self._gc_lock_mode {
+            GCLockMode::Exclusive => (),
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
@@ -335,7 +344,7 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
         Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
-        let repo = Repo::open(path_buf.as_path(), OpenMode::Shared).unwrap();
+        let repo = Repo::open(path_buf.as_path()).unwrap();
         let mut storage_engine = repo.storage_engine().unwrap();
         let addr = Address::default();
         storage_engine.add_chunk(&addr, vec![1]).unwrap();

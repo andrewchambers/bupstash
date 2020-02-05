@@ -10,12 +10,6 @@ pub struct QueryCacheTx<'a> {
 }
 
 impl QueryCache {
-    fn clear(tx: &mut rusqlite::Transaction) -> Result<(), failure::Error> {
-        tx.execute("delete from Items;", rusqlite::NO_PARAMS)?;
-        tx.execute("delete from ItemOpLog;", rusqlite::NO_PARAMS)?;
-        Ok(())
-    }
-
     pub fn open(p: &PathBuf) -> Result<QueryCache, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
@@ -56,8 +50,22 @@ impl QueryCache {
         Ok(QueryCache { conn: conn })
     }
 
+    pub fn transaction<'a>(self: &'a mut Self) -> Result<QueryCacheTx<'a>, failure::Error> {
+        let tx = self.conn.transaction()?;
+        Ok(QueryCacheTx { tx })
+    }
+}
+
+impl<'a> QueryCacheTx<'a> {
+    fn clear(&mut self) -> Result<(), failure::Error> {
+        self.tx.execute("delete from Items;", rusqlite::NO_PARAMS)?;
+        self.tx
+            .execute("delete from ItemOpLog;", rusqlite::NO_PARAMS)?;
+        Ok(())
+    }
+
     pub fn last_log_op(self: &mut Self) -> Result<i64, failure::Error> {
-        let last_id = match self.conn.query_row(
+        let last_id = match self.tx.query_row(
             "select Id from ItemOpLog order by Id desc limit 1;",
             rusqlite::NO_PARAMS,
             |r| {
@@ -73,8 +81,8 @@ impl QueryCache {
         Ok(last_id)
     }
 
-    pub fn gc_generation<'a>(self: &'a mut Self) -> Result<Option<String>, failure::Error> {
-        match self.conn.query_row(
+    pub fn current_gc_generation(&mut self) -> Result<Option<String>, failure::Error> {
+        match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc_generation';",
             rusqlite::NO_PARAMS,
             |r| {
@@ -88,13 +96,8 @@ impl QueryCache {
         }
     }
 
-    pub fn transaction<'a>(
-        self: &'a mut Self,
-        gc_generation: &str,
-    ) -> Result<QueryCacheTx<'a>, failure::Error> {
-        let mut tx = self.conn.transaction()?;
-
-        match tx.query_row(
+    pub fn start_sync(self: &mut Self, gc_generation: String) -> Result<(), failure::Error> {
+        match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc_generation';",
             rusqlite::NO_PARAMS,
             |r| {
@@ -104,16 +107,16 @@ impl QueryCache {
         ) {
             Ok(old_generation) => {
                 if gc_generation != old_generation {
-                    QueryCache::clear(&mut tx)?;
-                    tx.execute(
+                    self.clear()?;
+                    self.tx.execute(
                         "update QueryCacheMeta set Value = ? where Key = 'gc_generation';",
                         &[&gc_generation],
                     )?;
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                QueryCache::clear(&mut tx)?;
-                tx.execute(
+                self.clear()?;
+                self.tx.execute(
                     "insert into QueryCacheMeta(Key, Value) values('gc_generation', ?);",
                     &[&gc_generation],
                 )?;
@@ -121,11 +124,9 @@ impl QueryCache {
             Err(err) => return Err(err.into()),
         }
 
-        Ok(QueryCacheTx { tx })
+        Ok(())
     }
-}
 
-impl<'a> QueryCacheTx<'a> {
     pub fn sync_op(self: &mut Self, id: i64, op: itemset::LogOp) -> Result<i64, failure::Error> {
         itemset::do_op_with_id(&mut self.tx, id, &op)
     }

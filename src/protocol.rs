@@ -70,6 +70,7 @@ pub enum Packet {
     RequestItemSync(RequestItemSync),
     AckItemSync(AckItemSync),
     SyncLogOps(Vec<(i64, itemset::LogOp)>),
+    EndOfTransmission,
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
@@ -85,6 +86,7 @@ const PACKET_KIND_GC_COMPLETE: u8 = 9;
 const PACKET_KIND_REQUEST_ITEM_SYNC: u8 = 10;
 const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
+const PACKET_KIND_END_OF_TRANSMISSION: u8 = 13;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -138,6 +140,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(bincode::deserialize(&buf)?),
         PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(bincode::deserialize(&buf)?),
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
+        PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
     Ok(packet)
@@ -227,6 +230,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
+        Packet::EndOfTransmission => {
+            send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
+        }
     }
     w.flush()?;
     Ok(())
@@ -292,6 +298,7 @@ mod tests {
                 gc_generation: "123".to_owned(),
             }),
             Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
+            Packet::EndOfTransmission,
         ];
 
         for p1 in packets.iter() {

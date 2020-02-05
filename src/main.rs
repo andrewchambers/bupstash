@@ -130,6 +130,23 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     }
 }
 
+fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, failure::Error> {
+    match matches.opt_str("query-cache") {
+        Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache)),
+        None => match std::env::var_os("ARCHIVIST_QUERY_CACHE") {
+            Some(query_cache) => {
+                querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))
+            }
+            None => {
+                let mut p = cache_dir()?;
+                std::fs::create_dir_all(&p)?;
+                p.push("query-cache.sqlite3");
+                querycache::QueryCache::open(&p)
+            }
+        },
+    }
+}
+
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
     let repo = if matches.opt_present("repository") {
         matches.opt_str("repository").unwrap()
@@ -226,20 +243,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         };
     }
 
-    let mut query_cache = match matches.opt_str("query-cache") {
-        Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))?,
-        None => match std::env::var_os("ARCHIVIST_QUERY_CACHE") {
-            Some(query_cache) => {
-                querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))?
-            }
-            None => {
-                let mut p = cache_dir()?;
-                std::fs::create_dir_all(&p)?;
-                p.push("query-cache.sqlite3");
-                querycache::QueryCache::open(&p)?
-            }
-        },
-    };
+    let mut query_cache = matches_to_query_cache(&matches)?;
 
     let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::ItemMetadata| {
@@ -274,7 +278,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::list(&mut query_cache, &mut f, &mut serve_out, &mut serve_in)?;
+    client::handle_server_info(&mut serve_out)?;
+    client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+    client::hangup(&mut serve_in)?;
+
+    let mut tx = query_cache.transaction()?;
+    tx.walk_items(&mut f)?;
 
     Ok(())
 }
@@ -358,6 +367,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
+    client::handle_server_info(&mut serve_out)?;
     let id = client::send(
         client::SendOptions {
             compression: !matches.opt_present("no-compression"),
@@ -369,6 +379,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         &tags,
         &mut data,
     )?;
+    client::hangup(&mut serve_in)?;
 
     println!("{}", id);
     Ok(())
@@ -383,6 +394,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "repository",
         "URI of repository to fetch data from.",
         "REPO",
+    );
+    opts.optopt(
+        "",
+        "query-cache",
+        "Path to the query cache (used for storing synced items before search).",
+        "PATH",
     );
     opts.optopt("", "id", "ID of entry to fetch.", "ID");
 
@@ -403,19 +420,76 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("the provided key is a not a master decryption key"),
     };
 
-    let id = if matches.opt_present("id") {
-        let id_str = matches.opt_str("id").unwrap();
-        match id_str.parse::<i64>() {
-            Ok(addr) => addr,
+    let id: Option<i64> = match matches.opt_str("id") {
+        Some(id) => match id.parse::<i64>() {
+            Ok(id) => Some(id),
             Err(err) => return Err(err.context("--id invalid").into()),
+        },
+        _ => None,
+    };
+
+    let query: Option<tquery::Query> = if matches.free.len() != 0 {
+        match tquery::parse(&matches.free.join("•")) {
+            Ok(query) => Some(query),
+            Err(e) => {
+                tquery::report_parse_error(e);
+                std::process::exit(1);
+            }
         }
     } else {
-        failure::bail!("please set or --id.")
+        None
+    };
+
+    match (id, &query) {
+        (Some(_), _) => (),
+        (_, Some(_)) => (),
+        _ => failure::bail!("you must specify either --id or query arguments"),
     };
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::handle_server_info(&mut serve_out)?;
+
+    let id = match (id, query) {
+        (Some(id), _) => id,
+        (_, Some(query)) => {
+            let mut query_cache = matches_to_query_cache(&matches)?;
+
+            client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+
+            let mut n_matches: u64 = 0;
+            let mut id = -1;
+
+            let mut f = |qid: i64, metadata: itemset::ItemMetadata| {
+                if metadata.encrypt_header.master_key_id() != key.id {
+                    return Ok(());
+                }
+
+                let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
+                let tags = ctx.decrypt_data(&metadata.encrypted_tags)?;
+                let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                if tquery::query_matches(&query, &tags) {
+                    n_matches += 1;
+                    id = qid;
+                }
+                Ok(())
+            };
+
+            let mut tx = query_cache.transaction()?;
+            tx.walk_items(&mut f)?;
+
+            if n_matches != 1 {
+                failure::bail!(
+                    "the provided query matched {} items, need a single match",
+                    n_matches
+                );
+            }
+            id
+        }
+        _ => panic!(),
+    };
 
     client::request_data_stream(
         &key,
@@ -424,6 +498,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut serve_in,
         &mut std::io::stdout(),
     )?;
+    client::hangup(&mut serve_in)?;
 
     Ok(())
 }
@@ -455,7 +530,9 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
+    client::handle_server_info(&mut serve_out)?;
     client::remove(vec![id], &mut serve_out, &mut serve_in)?;
+    client::hangup(&mut serve_in)?;
 
     Ok(())
 }
@@ -473,10 +550,9 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-    // XXX TODO more gc stats.
-    // Especially interested in repository size and also
-    // how much space was freed.
+    client::handle_server_info(&mut serve_out)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
+    client::hangup(&mut serve_in)?;
     println!("{:?} chunks deleted", stats.chunks_deleted);
     println!("{:?} bytes freed", stats.bytes_freed);
     println!("{:?} bytes remaining", stats.bytes_remaining);
