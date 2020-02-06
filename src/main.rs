@@ -255,7 +255,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to list items from.",
         "REPO",
     );
-    opts.reqopt(
+    opts.optopt(
         "k",
         "key",
         "master key to decrypt items during listing/search.",
