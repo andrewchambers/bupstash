@@ -11,7 +11,7 @@ pub trait Engine {
     // Get a chunk from the storage engine using the worker pool.
     fn get_chunk_async(
         &mut self,
-        addr: Address,
+        addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>>;
 
     // Call should_keep on each item in chunk storage.
@@ -19,7 +19,7 @@ pub trait Engine {
     // Returns the number of chunks removed.
     fn gc(
         &mut self,
-        should_keep: &dyn Fn(Address) -> bool,
+        should_keep: &dyn Fn(&Address) -> bool,
     ) -> Result<repository::GCStats, failure::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
@@ -179,7 +179,7 @@ impl Engine for LocalStorage {
 
     fn gc(
         &mut self,
-        should_keep: &dyn Fn(Address) -> bool,
+        should_keep: &dyn Fn(&Address) -> bool,
     ) -> Result<repository::GCStats, failure::Error> {
         let mut stats = repository::GCStats {
             chunks_deleted: 0,
@@ -190,7 +190,7 @@ impl Engine for LocalStorage {
             let e = e?;
             match Address::from_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
-                    if !should_keep(addr) {
+                    if !should_keep(&addr) {
                         if let Ok(md) = e.metadata() {
                             stats.bytes_freed += md.len() as usize
                         }
@@ -213,10 +213,10 @@ impl Engine for LocalStorage {
 
     fn get_chunk_async(
         &mut self,
-        addr: Address,
+        addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
         let (tx, rx) = crossbeam::channel::bounded(1);
-        self.dispatch.send(WorkerMsg::GetChunk((addr, tx))).unwrap();
+        self.dispatch.send(WorkerMsg::GetChunk((*addr, tx))).unwrap();
         rx
     }
 
@@ -256,7 +256,7 @@ mod tests {
         local_storage.sync().unwrap();
         let v = local_storage.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
-        let v = local_storage.get_chunk_async(addr).recv().unwrap().unwrap();
+        let v = local_storage.get_chunk_async(&addr).recv().unwrap().unwrap();
         assert_eq!(v, vec![1]);
     }
 }
