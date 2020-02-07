@@ -7,3 +7,5 @@ The write log should probably allow more than a single a/b cycle. We could cap b
 The keys should have a magic number so we can present nicer error messages.
 
 We should explain defaults of sendlog and query-cache.
+
+Prefetch/pipeline in get. We should be fetching the next item while sending the current one.

@@ -67,7 +67,6 @@ impl EncryptContext {
         }
     }
 
-    #[inline(always)]
     fn compress_data(&self, mut data: Vec<u8>) -> Vec<u8> {
         // Our max chunk size means this should never happen.
         assert!(data.len() <= 0xffffffff);
@@ -87,7 +86,6 @@ impl EncryptContext {
         }
     }
 
-    #[inline(always)]
     pub fn encrypt_data(&self, compression: bool, mut data: Vec<u8>) -> Vec<u8> {
         let pt = if compression {
             self.compress_data(data)
@@ -111,7 +109,6 @@ impl EncryptContext {
         ct
     }
 
-    #[inline(always)]
     pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
         let mut addr = address::Address::default();
         hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);

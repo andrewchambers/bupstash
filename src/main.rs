@@ -1,6 +1,3 @@
-#![feature(test)]
-extern crate test;
-
 pub mod address;
 pub mod chunk_storage;
 pub mod chunker;
@@ -103,16 +100,16 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     let matches = default_parse_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {
-        die("Expected a single path to initialize.".to_string());
+        failure::bail!("Expected a single path to initialize.");
     }
 
-    let backend: repository::StorageEngineSpec;
-
-    if !matches.opt_present("storage") {
-        backend = repository::StorageEngineSpec::Local;
-    } else {
-        panic!("TODO")
-    }
+    let backend: repository::StorageEngineSpec = match matches.opt_str("storage") {
+        Some(s) => match serde_json::from_str(&s) {
+            Ok(s) => s,
+            Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
+        },
+        None => repository::StorageEngineSpec::Local,
+    };
 
     repository::Repo::init(std::path::Path::new(&matches.free[0]), backend)
 }
@@ -664,7 +661,6 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     client::handle_server_info(&mut serve_out)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
-    println!("{:?} chunks deleted", stats.chunks_deleted);
     println!("{:?} bytes freed", stats.bytes_freed);
     println!("{:?} bytes remaining", stats.bytes_remaining);
     Ok(())

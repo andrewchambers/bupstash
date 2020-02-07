@@ -5,6 +5,7 @@ mod libhydrogen {
     #![allow(dead_code)]
     include!(concat!(env!("OUT_DIR"), "/hydrogen_bindings.rs"));
 }
+use std::convert::TryInto;
 use std::ffi::c_void;
 
 pub const SECRETBOX_KEYBYTES: usize = libhydrogen::hydro_secretbox_KEYBYTES as usize;
@@ -88,14 +89,22 @@ pub fn hash_keygen() -> [u8; HASH_KEYBYTES] {
 }
 
 pub fn random_buf(buf: &mut [u8]) {
-    unsafe { libhydrogen::hydro_random_buf(buf.as_mut_ptr() as *mut c_void, buf.len() as usize) }
+    unsafe {
+        libhydrogen::hydro_random_buf(
+            buf.as_mut_ptr() as *mut c_void,
+            buf.len().try_into().unwrap(),
+        )
+    }
 }
 
 pub fn random(sz: usize) -> Vec<u8> {
     let mut v = Vec::with_capacity(sz);
     unsafe {
         v.set_len(sz);
-        libhydrogen::hydro_random_buf((&mut v).as_mut_ptr() as *mut c_void, v.len() as usize);
+        libhydrogen::hydro_random_buf(
+            (&mut v).as_mut_ptr() as *mut c_void,
+            v.len().try_into().unwrap(),
+        );
     };
     v
 }
@@ -109,9 +118,9 @@ pub fn hash(
     unsafe {
         libhydrogen::hydro_hash_hash(
             output.as_mut_ptr(),
-            output.len() as usize,
+            output.len().try_into().unwrap(),
             message.as_ptr() as *mut c_void,
-            message.len(),
+            message.len().try_into().unwrap(),
             context.as_ptr() as *const i8,
             if let Some(k) = key {
                 k.as_ptr() as *const u8
@@ -154,7 +163,7 @@ impl Hash {
             libhydrogen::hydro_hash_update(
                 &mut self.st as *mut libhydrogen::hydro_hash_state,
                 data.as_ptr() as *const std::ffi::c_void,
-                data.len() as usize,
+                data.len().try_into().unwrap(),
             )
         };
     }
@@ -166,7 +175,7 @@ impl Hash {
             libhydrogen::hydro_hash_update(
                 &mut self.st as *mut libhydrogen::hydro_hash_state,
                 out.as_mut_ptr() as *const std::ffi::c_void,
-                out.len() as usize,
+                out.len().try_into().unwrap(),
             )
         };
     }
@@ -195,7 +204,7 @@ pub fn secretbox_encrypt(
         libhydrogen::hydro_secretbox_encrypt(
             ct.as_mut_ptr(),
             pt.as_ptr() as *const c_void,
-            pt.len(),
+            pt.len().try_into().unwrap(),
             tag,
             context.as_ptr() as *const i8,
             k as *const u8,
@@ -222,7 +231,7 @@ pub fn secretbox_decrypt(
         libhydrogen::hydro_secretbox_decrypt(
             pt.as_mut_ptr() as *mut c_void,
             ct.as_ptr(),
-            ct.len(),
+            ct.len().try_into().unwrap(),
             tag,
             context.as_ptr() as *const i8,
             k as *const u8,
@@ -235,35 +244,4 @@ pub fn secretbox_decrypt(
 /// This function should only be called once at the beginning of a program using libhydrogen.
 pub unsafe fn init() {
     libhydrogen::hydro_init();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test::Bencher;
-
-    #[bench]
-    fn bench_encrypt_1_m_bytes(b: &mut Bencher) {
-        let pt = vec![0; 1000000];
-        let mut ct = vec![0; 1000000 + SECRETBOX_HEADERBYTES];
-        let k = secretbox_keygen();
-        b.iter(|| secretbox_encrypt(&mut ct, &pt, 0, *b"_bench_\0", &k))
-    }
-
-    #[bench]
-    fn bench_decrypt_1_m_bytes(b: &mut Bencher) {
-        let mut pt = vec![0; 1000000];
-        let mut ct = vec![0; 1000000 + SECRETBOX_HEADERBYTES];
-        let k = secretbox_keygen();
-        secretbox_encrypt(&mut ct, &pt, 0, *b"_bench_\0", &k);
-        b.iter(|| assert!(secretbox_decrypt(&mut pt, &ct, 0, *b"_bench_\0", &k)))
-    }
-
-    #[bench]
-    fn bench_kx_n2(b: &mut Bencher) {
-        let (pk, sk) = kx_keygen();
-        let psk: [u8; KX_PSKBYTES] = [0; KX_PSKBYTES];
-        let (_, _, pkt1) = kx_n_1(&psk, &pk);
-        b.iter(|| kx_n_2(&pkt1, &psk, &pk, &sk).unwrap())
-    }
 }

@@ -27,9 +27,14 @@ pub enum RepoError {
     UnsupportedSchemaVersion,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
     Local,
+    S3 {
+        endpoint: String,
+        bucket: String,
+        prefix: String,
+    },
 }
 
 #[derive(Clone)]
@@ -47,8 +52,9 @@ pub struct Repo {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GCStats {
-    pub chunks_deleted: usize,
+    pub chunks_freed: usize,
     pub bytes_freed: usize,
+    pub chunks_remaining: usize,
     pub bytes_remaining: usize,
 }
 
@@ -168,6 +174,8 @@ impl Repo {
             rusqlite::params![serde_json::to_string(&engine)?],
         )?;
 
+        // TODO XXX validate storage engine works.
+
         itemset::init_tables(&tx)?;
 
         tx.commit()?;
@@ -245,6 +253,13 @@ impl Repo {
                 // configurable?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
             }
+            StorageEngineSpec::S3 {
+                endpoint,
+                bucket,
+                prefix,
+            } => Box::new(chunk_storage::S3Storage::new(
+                &endpoint, &bucket, &prefix, 4,
+            )),
         };
 
         Ok(storage_engine)
