@@ -204,10 +204,10 @@ pub fn request_data_stream(
 
     let mut ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
     let mut sv = StreamVerifier { r: r };
-    let mut tr = htree::TreeReader::new(&mut sv, metadata.tree_height, &metadata.address);
+    let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
 
     loop {
-        match tr.next_chunk()? {
+        match tr.next_chunk(&mut sv)? {
             Some((addr, encrypted_chunk_data)) => {
                 let data = ctx.decrypt_data(&encrypted_chunk_data)?;
                 if addr != ctx.keyed_content_address(&data) {

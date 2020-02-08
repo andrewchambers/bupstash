@@ -150,17 +150,15 @@ impl<'a> TreeWriter<'a> {
     }
 }
 
-pub struct TreeReader<'a> {
-    source: &'a mut dyn Source,
+pub struct TreeReader {
     tree_blocks: Vec<Vec<u8>>,
     tree_heights: Vec<usize>,
     read_offsets: Vec<usize>,
 }
 
-impl<'a> TreeReader<'a> {
-    pub fn new(source: &'a mut dyn Source, level: usize, addr: &Address) -> TreeReader<'a> {
+impl TreeReader {
+    pub fn new(level: usize, addr: &Address) -> TreeReader {
         let mut tr = TreeReader {
-            source,
             tree_blocks: Vec::new(),
             tree_heights: Vec::new(),
             read_offsets: Vec::new(),
@@ -173,8 +171,12 @@ impl<'a> TreeReader<'a> {
         tr
     }
 
-    pub fn push_addr(&mut self, level: usize, addr: &Address) -> Result<(), failure::Error> {
-        let data = self.source.get_chunk(addr)?;
+    pub fn push_addr(
+        &mut self,
+        level: usize,
+        addr: &Address,
+        data: Vec<u8>,
+    ) -> Result<(), failure::Error> {
         if level > 0 && *addr != tree_block_address(&data) {
             return Err(HTreeError::CorruptOrTamperedDataError.into());
         }
@@ -219,17 +221,18 @@ impl<'a> TreeReader<'a> {
         }
     }
 
-    pub fn next_chunk(&mut self) -> Result<Option<(Address, Vec<u8>)>, failure::Error> {
+    pub fn next_chunk<S: Source>(
+        &mut self,
+        source: &mut S,
+    ) -> Result<Option<(Address, Vec<u8>)>, failure::Error> {
         loop {
             match self.next_addr()? {
                 Some((height, addr)) => {
-                    if height != 0 {
-                        self.push_addr(height - 1, &addr)?;
-                    }
-
+                    let data = source.get_chunk(&addr)?;
                     if height == 0 {
-                        let data = self.source.get_chunk(&addr)?;
                         return Ok(Some((addr, data)));
+                    } else {
+                        self.push_addr(height - 1, &addr, data)?;
                     }
                 }
                 None => {
@@ -237,10 +240,6 @@ impl<'a> TreeReader<'a> {
                 }
             }
         }
-    }
-
-    pub fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
-        self.source.get_chunk(addr)
     }
 }
 
@@ -382,7 +381,7 @@ mod tests {
             addr = result.1;
         }
 
-        let mut tr = TreeReader::new(&mut chunks, height, &addr);
+        let mut tr = TreeReader::new(height, &addr);
 
         // First address is already counted
         let mut count = 0;
@@ -392,7 +391,8 @@ mod tests {
             match tr.next_addr().unwrap() {
                 Some((height, addr)) => {
                     if height != 0 {
-                        tr.push_addr(height - 1, &addr).unwrap();
+                        let data = chunks.get_chunk(&addr).unwrap();
+                        tr.push_addr(height - 1, &addr, data).unwrap();
                     }
 
                     count += 1;
@@ -436,20 +436,20 @@ mod tests {
             addr = result.1;
         }
 
-        let mut tr = TreeReader::new(&mut chunks, level, &addr);
+        let mut tr = TreeReader::new(level, &addr);
 
-        let (addr, buf) = tr.next_chunk().unwrap().unwrap();
+        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
         assert_eq!(Address::from_bytes(&[1; ADDRESS_SZ]), addr);
         let empty: Vec<u8> = vec![];
         assert_eq!(buf, empty);
-        let (addr, buf) = tr.next_chunk().unwrap().unwrap();
+        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
         assert_eq!(Address::from_bytes(&[2; ADDRESS_SZ]), addr);
         assert_eq!(buf, vec![0]);
-        let (addr, buf) = tr.next_chunk().unwrap().unwrap();
+        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
         assert_eq!(Address::from_bytes(&[3; ADDRESS_SZ]), addr);
         assert_eq!(buf, vec![1, 2, 3]);
 
-        if let Some(_) = tr.next_chunk().unwrap() {
+        if let Some(_) = tr.next_chunk(&mut chunks).unwrap() {
             panic!("expected eof")
         }
     }

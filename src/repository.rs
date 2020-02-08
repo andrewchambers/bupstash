@@ -325,13 +325,13 @@ impl Repo {
             itemset::walk_items(&tx, &mut |_id, metadata| {
                 let addr = &metadata.address;
                 if !reachable.contains(&addr) {
-                    let mut tr =
-                        htree::TreeReader::new(&mut storage_engine, metadata.tree_height, addr);
+                    let mut tr = htree::TreeReader::new(metadata.tree_height, addr);
                     while let Some((height, addr)) = tr.next_addr()? {
                         if !reachable.contains(&addr) {
                             reachable.insert(addr);
                             if height != 0 {
-                                tr.push_addr(height - 1, &addr)?;
+                                let data = storage_engine.get_chunk(&addr)?;
+                                tr.push_addr(height - 1, &addr, data)?;
                             }
                         }
                     }
