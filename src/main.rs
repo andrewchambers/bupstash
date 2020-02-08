@@ -439,15 +439,22 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let encrypt_ctx = crypto::EncryptContext::new(&key);
 
+    // TODO XXX make cli option.
+    const SEND_SEQUENCE_MEMORY: i64 = 3;
+
     let mut send_log = match matches.opt_str("send-log") {
-        Some(send_log) => sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?,
+        Some(send_log) => {
+            sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)?
+        }
         None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
-            Some(send_log) => sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?,
+            Some(send_log) => {
+                sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)?
+            }
             None => {
                 let mut p = cache_dir()?;
                 std::fs::create_dir_all(&p)?;
                 p.push("send-log.sqlite3");
-                sendlog::SendLog::open(&p)?
+                sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)?
             }
         },
     };

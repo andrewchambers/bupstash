@@ -68,7 +68,7 @@ pub struct LocalStorage {
     data_dir: PathBuf,
     worker_handles: Vec<std::thread::JoinHandle<()>>,
     dispatch: crossbeam::channel::Sender<WorkerMsg>,
-    rendezvous: crossbeam::channel::Receiver<bool>,
+    rendezvous: crossbeam::channel::Receiver<Option<failure::Error>>,
 }
 
 impl Drop for LocalStorage {
@@ -102,8 +102,7 @@ impl LocalStorage {
 
             let worker = builder
                 .spawn(move || {
-                    // FIXME: TODO: send actual io error.
-                    let mut is_ok = true;
+                    let mut write_err: Option<failure::Error> = None;
                     loop {
                         match worker_rx.recv() {
                             Ok(WorkerMsg::GetChunk((addr, tx))) => {
@@ -124,13 +123,16 @@ impl LocalStorage {
                                     Ok(())
                                 };
                                 worker_data_dir.pop();
-                                match result {
-                                    Ok(_) => (),
-                                    Err(_) => is_ok = false,
+                                if let Err(err) = result {
+                                    if write_err.is_none() {
+                                        write_err = Some(err.into());
+                                    }
                                 }
                             }
                             Ok(WorkerMsg::Barrier) => {
-                                worker_ack_barrier.send(is_ok).unwrap();
+                                let mut err = None;
+                                std::mem::swap(&mut write_err, &mut err);
+                                worker_ack_barrier.send(err).unwrap();
                             }
                             Ok(WorkerMsg::Exit) => {
                                 return;
@@ -228,18 +230,21 @@ impl Engine for LocalStorage {
         for _i in 0..self.worker_handles.len() {
             self.dispatch.send(WorkerMsg::Barrier).unwrap();
         }
-        let mut all_ok = true;
+        let mut write_error: Option<failure::Error> = None;
         for _i in 0..self.worker_handles.len() {
-            let ok = self.rendezvous.recv().unwrap();
-            if !ok {
-                all_ok = false;
+            if let Some(err) = self.rendezvous.recv().unwrap() {
+                if write_error.is_none() {
+                    write_error = Some(err)
+                }
             }
         }
-        if !all_ok {
-            // FIXME: get real io error context/info.
-            return Err(failure::format_err!("io error syncing data"));
-        }
+
+        // Sync regardless
         fsutil::sync_dir(&self.data_dir)?;
+
+        if let Some(err) = write_error {
+            return Err(err);
+        }
         Ok(())
     }
 }
@@ -250,7 +255,7 @@ pub struct S3Storage {
     prefix: String,
     worker_handles: Vec<std::thread::JoinHandle<()>>,
     dispatch: crossbeam::channel::Sender<WorkerMsg>,
-    rendezvous: crossbeam::channel::Receiver<bool>,
+    rendezvous: crossbeam::channel::Receiver<Option<failure::Error>>,
 }
 
 impl Drop for S3Storage {
@@ -313,8 +318,7 @@ impl S3Storage {
             let worker = builder
                 .spawn(move || {
                     let mut client = S3Storage::new_client(endpoint);
-                    // FIXME: TODO: send actual io error.
-                    let mut is_ok = true;
+                    let mut write_err: Option<failure::Error> = None;
                     loop {
                         match worker_rx.recv() {
                             Ok(WorkerMsg::GetChunk((addr, tx))) => {
@@ -346,7 +350,9 @@ impl S3Storage {
                                         rusoto_s3::HeadObjectError::NoSuchKey(_),
                                     )) => (),
                                     Err(err) => {
-                                        is_ok = false;
+                                        if write_err.is_none() {
+                                            write_err = Some(err.into());
+                                        }
                                         continue;
                                     }
                                 }
@@ -361,11 +367,17 @@ impl S3Storage {
                                     .sync();
                                 match result {
                                     Ok(_) => (),
-                                    Err(_) => is_ok = false,
+                                    Err(err) => {
+                                        if write_err.is_none() {
+                                            write_err = Some(err.into());
+                                        }
+                                    }
                                 }
                             }
                             Ok(WorkerMsg::Barrier) => {
-                                worker_ack_barrier.send(is_ok).unwrap();
+                                let mut err = None;
+                                std::mem::swap(&mut write_err, &mut err);
+                                worker_ack_barrier.send(err).unwrap();
                             }
                             Ok(WorkerMsg::Exit) => {
                                 return;
@@ -493,16 +505,18 @@ impl Engine for S3Storage {
         for _i in 0..self.worker_handles.len() {
             self.dispatch.send(WorkerMsg::Barrier).unwrap();
         }
-        let mut all_ok = true;
+
+        let mut write_error: Option<failure::Error> = None;
         for _i in 0..self.worker_handles.len() {
-            let ok = self.rendezvous.recv().unwrap();
-            if !ok {
-                all_ok = false;
+            if let Some(err) = self.rendezvous.recv().unwrap() {
+                if write_error.is_none() {
+                    write_error = Some(err)
+                }
             }
         }
-        if !all_ok {
-            // FIXME: get real io error context/info.
-            return Err(failure::format_err!("io error syncing data"));
+
+        if let Some(err) = write_error {
+            return Err(err);
         }
         Ok(())
     }

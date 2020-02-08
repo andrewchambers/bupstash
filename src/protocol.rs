@@ -285,7 +285,8 @@ mod tests {
             Packet::StartGC(StartGC {}),
             Packet::GCComplete(GCComplete {
                 stats: repository::GCStats {
-                    chunks_deleted: 123,
+                    chunks_remaining: 1,
+                    chunks_freed: 123,
                     bytes_freed: 345,
                     bytes_remaining: 678,
                 },

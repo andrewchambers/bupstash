@@ -2,22 +2,21 @@ use super::address::*;
 use std::path::PathBuf;
 
 pub struct SendLog {
+    remember: i64,
     conn: rusqlite::Connection,
 }
 
 pub struct SendLogTx<'a> {
-    // Each 'sent' entry is either a or b.
-    // When a send is complete, we delete the old entries.
-    ab: bool,
+    remember: i64,
+    sequence: i64,
     tx: rusqlite::Transaction<'a>,
 }
 
 impl SendLog {
-    pub fn open(p: &PathBuf) -> Result<SendLog, failure::Error> {
+    pub fn open(p: &PathBuf, remember: i64) -> Result<SendLog, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
         let tx = conn.transaction()?;
-        // We only really need one process per write log at a time.
         tx.execute(
             "create table if not exists LogMeta(Key, Value, unique(Key)); ",
             rusqlite::NO_PARAMS,
@@ -45,14 +44,29 @@ impl SendLog {
             Err(err) => return Err(err.into()),
         }
 
+        match tx.query_row(
+            "select 1 from LogMeta where Key = 'sequence-number';",
+            rusqlite::NO_PARAMS,
+            |_r| Ok(()),
+        ) {
+            Ok(_) => (),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                tx.execute(
+                    "insert into LogMeta(Key, Value) values('sequence-number', 0);",
+                    rusqlite::NO_PARAMS,
+                )?;
+            }
+            Err(err) => return Err(err.into()),
+        }
+
         tx.execute(
-            "create table if not exists Sent(Addr, AB, unique(Addr)); ",
+            "create table if not exists Sent(Addr, Seq, unique(Addr)); ",
             rusqlite::NO_PARAMS,
         )?;
 
         tx.commit()?;
 
-        Ok(SendLog { conn: conn })
+        Ok(SendLog { conn, remember })
     }
 
     pub fn transaction<'a>(
@@ -88,46 +102,35 @@ impl SendLog {
             Err(err) => return Err(err.into()),
         }
 
-        let old_ab = match tx.query_row(
-            "select value from LogMeta where key = 'ab';",
+        let sequence = tx.query_row(
+            "select Value from LogMeta where Key = 'sequence-number';",
             rusqlite::NO_PARAMS,
             |r| {
-                let ab: bool = r.get(0)?;
-                Ok(ab)
+                let n: i64 = r.get(0)?;
+                Ok(n)
             },
-        ) {
-            Ok(ab) => ab,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                let ab = false;
-                tx.execute("insert into LogMeta(Key, Value) values('ab', ?);", &[ab])?;
-                ab
-            }
-            Err(err) => return Err(err.into()),
-        };
+        )?;
 
-        Ok(SendLogTx { ab: !old_ab, tx })
+        Ok(SendLogTx {
+            remember: self.remember,
+            sequence,
+            tx,
+        })
     }
 }
 
 impl<'a> SendLogTx<'a> {
     pub fn add_address(self: &mut Self, addr: &Address) -> Result<(), failure::Error> {
-        // Store raw bytes as this is performance sensitive and it is pointless converting.
-        // XXX FIXME precompile query.
-        self.tx.execute(
-            "insert or replace into Sent(Addr, AB) values(?, ?); ",
-            rusqlite::params![&addr.bytes[..], self.ab],
-        )?;
+        let mut stmt = self
+            .tx
+            .prepare_cached("insert or replace into Sent(Addr, Seq) values(?, ?); ")?;
+        stmt.execute(rusqlite::params![&addr.bytes[..], self.sequence])?;
         Ok(())
     }
 
     pub fn has_address(self: &mut Self, addr: &Address) -> Result<bool, failure::Error> {
-        // Store raw bytes as this is performance sensitive and it is pointless converting.
-        // XXX FIXME precompile query.
-        match self.tx.query_row(
-            "select 1 from Sent where Addr=?;",
-            &[&addr.bytes[..]],
-            |_r| Ok(()),
-        ) {
+        let mut stmt = self.tx.prepare_cached("select 1 from Sent where Addr=?;")?;
+        match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
             Ok(_) => Ok(true),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
             Err(err) => Err(err.into()),
@@ -136,10 +139,14 @@ impl<'a> SendLogTx<'a> {
 
     pub fn commit(self: Self) -> Result<(), failure::Error> {
         // Delete old values from the send log.
-        self.tx
-            .execute("delete from sent where ab = ?;", &[!self.ab])?;
-        self.tx
-            .execute("update LogMeta set Value = ? where Key = 'ab';", &[self.ab])?;
+        self.tx.execute(
+            "delete from Sent where Seq <= ? ;",
+            &[self.sequence - self.remember],
+        )?;
+        self.tx.execute(
+            "update LogMeta set Value = ? where Key = 'sequence-number';",
+            &[self.sequence + 1],
+        )?;
         self.tx.commit()?;
         Ok(())
     }
@@ -158,7 +165,7 @@ mod tests {
             d
         };
         // Commit an address
-        let mut sendlog = SendLog::open(&log_path).unwrap();
+        let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
         let mut tx = sendlog.transaction("123").unwrap();
         tx.add_address(&addr).unwrap();
@@ -167,7 +174,7 @@ mod tests {
         drop(sendlog);
 
         // Ensure address is still present after reopening db.
-        let mut sendlog = SendLog::open(&log_path).unwrap();
+        let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
         let mut tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
@@ -177,7 +184,7 @@ mod tests {
 
         // Since the gc_generation changed, address should not
         // be there anymore.
-        let mut sendlog = SendLog::open(&log_path).unwrap();
+        let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
         let mut tx = sendlog.transaction("345").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
@@ -191,7 +198,7 @@ mod tests {
             d.push("send.log");
             d
         };
-        let mut sendlog = SendLog::open(&log_path).unwrap();
+        let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
         // Commit adding an address
         let mut tx = sendlog.transaction("123").unwrap();
@@ -206,11 +213,9 @@ mod tests {
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
-        // Start a new tx, ensure we still have that address.
-        // This time we don't readd the address, it should expire
-        // when the transaction cycles.
-        let mut tx = sendlog.transaction("123").unwrap();
-        assert!(tx.has_address(&addr).unwrap());
+        // Start a new tx, it should expire
+        // when the sequence number hits the limit transaction cycles.
+        let tx = sendlog.transaction("123").unwrap();
         tx.commit().unwrap();
         // Verify the value was cycled away.
         let mut tx = sendlog.transaction("123").unwrap();
