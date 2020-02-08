@@ -171,15 +171,7 @@ impl TreeReader {
         tr
     }
 
-    pub fn push_addr(
-        &mut self,
-        level: usize,
-        addr: &Address,
-        data: Vec<u8>,
-    ) -> Result<(), failure::Error> {
-        if level > 0 && *addr != tree_block_address(&data) {
-            return Err(HTreeError::CorruptOrTamperedDataError.into());
-        }
+    pub fn push_level(&mut self, level: usize, data: Vec<u8>) -> Result<(), failure::Error> {
         self.read_offsets.push(0);
         self.tree_heights.push(level);
         self.tree_blocks.push(data);
@@ -232,7 +224,10 @@ impl TreeReader {
                     if height == 0 {
                         return Ok(Some((addr, data)));
                     } else {
-                        self.push_addr(height - 1, &addr, data)?;
+                        if addr != tree_block_address(&data) {
+                            return Err(HTreeError::CorruptOrTamperedDataError.into());
+                        }
+                        self.push_level(height - 1, data)?;
                     }
                 }
                 None => {
@@ -392,7 +387,7 @@ mod tests {
                 Some((height, addr)) => {
                     if height != 0 {
                         let data = chunks.get_chunk(&addr).unwrap();
-                        tr.push_addr(height - 1, &addr, data).unwrap();
+                        tr.push_level(height - 1, data).unwrap();
                     }
 
                     count += 1;

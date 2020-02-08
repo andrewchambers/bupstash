@@ -331,7 +331,7 @@ impl Repo {
                             reachable.insert(addr);
                             if height != 0 {
                                 let data = storage_engine.get_chunk(&addr)?;
-                                tr.push_addr(height - 1, &addr, data)?;
+                                tr.push_level(height - 1, data)?;
                             }
                         }
                     }

@@ -147,7 +147,7 @@ fn send(
         let (height, chunk_address, pending_chunk) = next_in_pipeline;
         let chunk_data = pending_chunk.recv()??;
         if height != 0 {
-            tr.push_addr(height - 1, &chunk_address, chunk_data.clone())?;
+            tr.push_level(height - 1, chunk_data.clone())?;
         }
 
         match tr.next_addr()? {
