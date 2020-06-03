@@ -272,7 +272,7 @@ impl Drop for S3Storage {
 impl S3Storage {
     fn new_client(endpoint: String) -> S3Client {
         S3Client::new(rusoto_core::Region::Custom {
-            name: "archivist".to_string(),
+            name: "".to_string(),
             endpoint: endpoint.to_string(),
         })
     }
