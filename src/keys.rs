@@ -16,6 +16,9 @@ pub struct MasterKey {
     pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
     pub data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
     pub data_psk: [u8; hydrogen::KX_PSKBYTES],
+    pub metadata_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    pub metadata_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
+    pub metadata_psk: [u8; hydrogen::KX_PSKBYTES],
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -29,9 +32,20 @@ pub struct SendKey {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct MetadataKey {
+    pub id: [u8; KEYID_SZ],
+    pub master_key_id: [u8; KEYID_SZ],
+    pub metadata_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    pub metadata_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
+    pub metadata_psk: [u8; hydrogen::KX_PSKBYTES],
+}
+
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Key {
     MasterKeyV1(MasterKey),
     SendKeyV1(SendKey),
+    MetadataKeyV1(SendKey),
 }
 
 impl Key {
@@ -65,6 +79,7 @@ impl Key {
         match self {
             Key::MasterKeyV1(k) => k.id,
             Key::SendKeyV1(k) => k.master_key_id,
+            Key::MetadataKeyV1(k) => k.master_key_id,
         }
     }
 }
@@ -82,6 +97,8 @@ impl MasterKey {
         let hash_key_part_2 = hydrogen::random(PARTIAL_HASH_KEY_SZ);
         let data_psk = hydrogen::kx_psk_keygen();
         let (data_pk, data_sk) = hydrogen::kx_keygen();
+        let metadata_psk = hydrogen::kx_psk_keygen();
+        let (metadata_pk, metadata_sk) = hydrogen::kx_keygen();
 
         MasterKey {
             id,
@@ -90,6 +107,9 @@ impl MasterKey {
             data_psk,
             data_pk,
             data_sk,
+            metadata_psk,
+            metadata_pk,
+            metadata_sk,
         }
     }
 }
