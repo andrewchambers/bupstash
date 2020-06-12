@@ -127,38 +127,51 @@ fn send(
 
     let mut storage_engine = repo.storage_engine()?;
 
-    let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
+    match metadata {
+        itemset::VersionedItemMetadata::V1(metadata) => {
+            let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
 
-    // Here we send using a pipeline. The idea is we lookahead and use a worker to prefetch
-    // the next data chunk in the stream, this eliminates some of the problems with latency
-    // when fetching from a slow storage engine.
+            // Here we send using a pipeline. The idea is we lookahead and use a worker to prefetch
+            // the next data chunk in the stream, this eliminates some of the problems with latency
+            // when fetching from a slow storage engine.
 
-    let (height, chunk_address) = tr.next_addr()?.unwrap();
-    let mut next_in_pipeline = (
-        height,
-        chunk_address,
-        storage_engine.get_chunk_async(&chunk_address),
-    );
+            let (height, chunk_address) = tr.next_addr()?.unwrap();
+            let mut next_in_pipeline = (
+                height,
+                chunk_address,
+                storage_engine.get_chunk_async(&chunk_address),
+            );
 
-    // XXX
-    // we could use a queue with N values, initially filled with noops to utilize N workers
-    // worth of lookahead. The tradeoff is we can have a peak memory usage of N*MaxChunkSize.
-    loop {
-        let (height, chunk_address, pending_chunk) = next_in_pipeline;
-        let chunk_data = pending_chunk.recv()??;
-        if height != 0 {
-            tr.push_level(height - 1, chunk_data.clone())?;
-        }
+            // XXX
+            // we could use a queue with N values, initially filled with noops to utilize N workers
+            // worth of lookahead. The tradeoff is we can have a peak memory usage of N*MaxChunkSize.
+            loop {
+                let (height, chunk_address, pending_chunk) = next_in_pipeline;
+                let chunk_data = pending_chunk.recv()??;
+                if height != 0 {
+                    tr.push_level(height - 1, chunk_data.clone())?;
+                }
 
-        match tr.next_addr()? {
-            Some((height, chunk_address)) => {
-                next_in_pipeline = (
-                    height,
-                    chunk_address,
-                    storage_engine.get_chunk_async(&chunk_address),
-                );
-            }
-            None => {
+                match tr.next_addr()? {
+                    Some((height, chunk_address)) => {
+                        next_in_pipeline = (
+                            height,
+                            chunk_address,
+                            storage_engine.get_chunk_async(&chunk_address),
+                        );
+                    }
+                    None => {
+                        write_packet(
+                            w,
+                            &Packet::Chunk(Chunk {
+                                address: chunk_address,
+                                data: chunk_data,
+                            }),
+                        )?;
+                        return Ok(());
+                    }
+                }
+
                 write_packet(
                     w,
                     &Packet::Chunk(Chunk {
@@ -166,17 +179,8 @@ fn send(
                         data: chunk_data,
                     }),
                 )?;
-                return Ok(());
             }
         }
-
-        write_packet(
-            w,
-            &Packet::Chunk(Chunk {
-                address: chunk_address,
-                data: chunk_data,
-            }),
-        )?;
     }
 }
 

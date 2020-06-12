@@ -2,68 +2,114 @@ use super::address;
 use super::hydrogen;
 use super::keys;
 use failure::bail;
-use serde::{Deserialize, Serialize};
+use std::convert::{From, TryFrom};
 
 const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
 const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
 
 pub struct EncryptContext {
-    pub k: keys::Key,
+    pub k: keys::Key, // FIXME remove this?
     pub session_tx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
     pub packet1: [u8; hydrogen::KX_N_PACKET1BYTES],
+}
+
+pub struct KeyedHashContext {
     pub hash_key: [u8; hydrogen::HASH_KEYBYTES],
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct EncryptionHeader {
-    pub master_key_id: [u8; keys::KEYID_SZ],
-    pub hash_key_part_2: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub enum VersionedEncryptionHeader {
-    V1(EncryptionHeader),
-}
-
-impl VersionedEncryptionHeader {
-    pub fn master_key_id(&self) -> [u8; keys::KEYID_SZ] {
-        match self {
-            VersionedEncryptionHeader::V1(hdr) => hdr.master_key_id,
-        }
-    }
-}
-
-fn combined_hashkey(k1: &[u8], k2: &[u8]) -> [u8; hydrogen::HASH_KEYBYTES] {
+fn combined_hashkey(
+    k1a: &[u8],
+    k1b: &[u8],
+    k2a: &[u8],
+    k2b: &[u8],
+) -> [u8; hydrogen::HASH_KEYBYTES] {
     let mut k = [0; hydrogen::HASH_KEYBYTES];
     let mut h = hydrogen::Hash::init(*b"_hashkey", None);
-    h.update(&k1[..]);
-    h.update(&k2[..]);
+    h.update(&k1a[..]);
+    h.update(&k1b[..]);
+    h.update(&k2a[..]);
+    h.update(&k2b[..]);
     h.finish(&mut k);
     k
 }
 
-impl EncryptContext {
-    pub fn new(k: &keys::Key) -> Self {
-        let (psk, pk, hash_key_part_1, hash_key_part_2) = match k {
+impl KeyedHashContext {
+    #[inline(always)]
+    pub fn content_address(&self, pt: &[u8]) -> address::Address {
+        let mut addr = address::Address::default();
+        hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);
+        addr
+    }
+}
+
+impl TryFrom<&keys::Key> for KeyedHashContext {
+    type Error = failure::Error;
+
+    fn try_from(k: &keys::Key) -> Result<Self, failure::Error> {
+        let (hk_1a, hk_1b, hk_2a, hk_2b) = match k {
             keys::Key::MasterKeyV1(k) => (
-                k.data_psk,
-                k.data_pk,
-                &k.hash_key_part_1,
-                &k.hash_key_part_2,
+                &k.hash_key_part_1a,
+                &k.hash_key_part_1b,
+                &k.hash_key_part_2a,
+                &k.hash_key_part_2b,
             ),
             keys::Key::SendKeyV1(k) => (
-                k.data_psk,
-                k.master_data_pk,
-                &k.hash_key_part_1,
-                &k.hash_key_part_2,
+                &k.hash_key_part_1a,
+                &k.hash_key_part_1b,
+                &k.hash_key_part_2a,
+                &k.hash_key_part_2b,
             ),
+            keys::Key::MetadataKeyV1(_k) => {
+                failure::bail!("metadata key cannot be used for hashing data")
+            }
+        };
+        Ok(KeyedHashContext {
+            hash_key: combined_hashkey(hk_1a, hk_1b, hk_2a, hk_2b),
+        })
+    }
+}
+
+impl From<&keys::MasterKey> for KeyedHashContext {
+    fn from(k: &keys::MasterKey) -> Self {
+        KeyedHashContext {
+            hash_key: combined_hashkey(
+                &k.hash_key_part_1a,
+                &k.hash_key_part_1b,
+                &k.hash_key_part_2a,
+                &k.hash_key_part_2b,
+            ),
+        }
+    }
+}
+
+impl EncryptContext {
+    pub fn data_context(k: &keys::Key) -> Result<Self, failure::Error> {
+        let (psk, pk) = match k {
+            keys::Key::MasterKeyV1(k) => (k.data_psk, k.data_pk),
+            keys::Key::SendKeyV1(k) => (k.data_psk, k.data_pk),
+            keys::Key::MetadataKeyV1(_k) => {
+                failure::bail!("unable to encrypt data with a metadata key")
+            }
+        };
+        let (session_tx_key, _session_rx_key, packet1) = hydrogen::kx_n_1(&psk, &pk);
+        Ok(EncryptContext {
+            k: k.clone(),
+            session_tx_key,
+            packet1,
+        })
+    }
+
+    pub fn metadata_context(k: &keys::Key) -> Self {
+        let (psk, pk) = match k {
+            keys::Key::MasterKeyV1(k) => (k.metadata_psk, k.metadata_pk),
+            keys::Key::SendKeyV1(k) => (k.metadata_psk, k.metadata_pk),
+            keys::Key::MetadataKeyV1(k) => (k.metadata_psk, k.metadata_pk),
         };
         let (session_tx_key, _session_rx_key, packet1) = hydrogen::kx_n_1(&psk, &pk);
         EncryptContext {
             k: k.clone(),
             session_tx_key,
             packet1,
-            hash_key: combined_hashkey(hash_key_part_1, hash_key_part_2),
         }
     }
 
@@ -108,58 +154,49 @@ impl EncryptContext {
         ct[..self.packet1.len()].clone_from_slice(&self.packet1);
         ct
     }
-
-    pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
-        let mut addr = address::Address::default();
-        hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);
-        addr
-    }
-
-    pub fn encryption_header(&self) -> VersionedEncryptionHeader {
-        let (master_key_id, hash_key_part_2) = match &self.k {
-            keys::Key::MasterKeyV1(k) => (k.id, &k.hash_key_part_2),
-            keys::Key::SendKeyV1(k) => (k.master_key_id, &k.hash_key_part_2),
-        };
-        VersionedEncryptionHeader::V1(EncryptionHeader {
-            master_key_id,
-            hash_key_part_2: hash_key_part_2.clone(),
-        })
-    }
 }
 
 pub struct DecryptContext {
-    pub k: keys::MasterKey,
-    pub hash_key: [u8; hydrogen::HASH_KEYBYTES],
+    psk: [u8; hydrogen::KX_PSKBYTES],
+    pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    sk: [u8; hydrogen::KX_SECRETKEYBYTES],
     cached_session_rx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
     cached_packet1: [u8; hydrogen::KX_N_PACKET1BYTES],
 }
 
 impl DecryptContext {
-    pub fn open(
-        k: &keys::MasterKey,
-        hdr: &VersionedEncryptionHeader,
-    ) -> Result<Self, failure::Error> {
-        match hdr {
-            VersionedEncryptionHeader::V1(ref hdr) => {
-                if hdr.master_key_id != k.id {
-                    bail!("provided master key does not match master key used to encrypt data");
-                }
+    pub fn metadata_context(k: &keys::Key) -> Result<Self, failure::Error> {
+        let (psk, pk, sk) = match k {
+            keys::Key::MasterKeyV1(k) => (k.metadata_psk, k.metadata_pk, k.metadata_sk),
+            keys::Key::MetadataKeyV1(k) => (k.metadata_psk, k.metadata_pk, k.metadata_sk),
+            keys::Key::SendKeyV1(_k) => failure::bail!("unable to decrypt data with a send key"),
+        };
 
-                Ok(DecryptContext {
-                    k: k.clone(),
-                    hash_key: combined_hashkey(&k.hash_key_part_1, &hdr.hash_key_part_2),
-                    cached_session_rx_key: [0; hydrogen::KX_SESSIONKEYBYTES],
-                    cached_packet1: [0; hydrogen::KX_N_PACKET1BYTES],
-                })
-            }
-        }
+        Ok(DecryptContext {
+            psk,
+            pk,
+            sk,
+            cached_session_rx_key: [0; hydrogen::KX_SESSIONKEYBYTES],
+            cached_packet1: [0; hydrogen::KX_N_PACKET1BYTES],
+        })
     }
 
-    #[inline(always)]
-    pub fn keyed_content_address(&self, pt: &[u8]) -> address::Address {
-        let mut addr = address::Address::default();
-        hydrogen::hash(pt, *b"_address", Some(&self.hash_key), &mut addr.bytes[..]);
-        addr
+    pub fn data_context(k: &keys::Key) -> Result<Self, failure::Error> {
+        let (psk, pk, sk) = match k {
+            keys::Key::MasterKeyV1(k) => (k.data_psk, k.data_pk, k.data_sk),
+            keys::Key::MetadataKeyV1(_k) => {
+                failure::bail!("unable to decrypt data with a metadata key")
+            }
+            keys::Key::SendKeyV1(_k) => failure::bail!("unable to decrypt data with a send key"),
+        };
+
+        Ok(DecryptContext {
+            psk,
+            pk,
+            sk,
+            cached_session_rx_key: [0; hydrogen::KX_SESSIONKEYBYTES],
+            cached_packet1: [0; hydrogen::KX_N_PACKET1BYTES],
+        })
     }
 
     #[inline(always)]
@@ -178,15 +215,11 @@ impl DecryptContext {
 
         if packet1[..] != self.cached_packet1[..] {
             self.cached_packet1 = packet1;
-            self.cached_session_rx_key = match hydrogen::kx_n_2(
-                &packet1,
-                &self.k.data_psk,
-                &self.k.data_pk,
-                &self.k.data_sk,
-            ) {
-                Some((_session_tx_key, session_rx_key)) => session_rx_key,
-                None => bail!("tampering or corruption detected while deriving decryption key"),
-            };
+            self.cached_session_rx_key =
+                match hydrogen::kx_n_2(&packet1, &self.psk, &self.pk, &self.sk) {
+                    Some((_session_tx_key, session_rx_key)) => session_rx_key,
+                    None => bail!("tampering or corruption detected while deriving decryption key"),
+                };
         }
 
         if !hydrogen::secretbox_decrypt(
@@ -234,11 +267,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn master_key_round_trip_encrypt() {
+    fn master_key_round_trip_data_encrypt() {
         let master_key = keys::MasterKey::gen();
-        let ectx = EncryptContext::new(&keys::Key::MasterKeyV1(master_key.clone()));
-        let ehdr = ectx.encryption_header();
-        let mut dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
+        let master_key = keys::Key::MasterKeyV1(master_key);
+        let ectx = EncryptContext::data_context(&master_key).unwrap();
+        let mut dctx = DecryptContext::data_context(&master_key).unwrap();
         let pt = [1, 2, 3];
         let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();
@@ -246,15 +279,45 @@ mod tests {
     }
 
     #[test]
-    fn send_key_round_trip_encrypt() {
+    fn send_key_round_trip_data_encrypt() {
         let master_key = keys::MasterKey::gen();
         let send_key = keys::SendKey::gen(&master_key);
-        let ectx = EncryptContext::new(&keys::Key::SendKeyV1(send_key));
-        let ehdr = ectx.encryption_header();
-        let mut dctx = DecryptContext::open(&master_key, &ehdr).unwrap();
+        let master_key = keys::Key::MasterKeyV1(master_key);
+        let ectx = EncryptContext::data_context(&keys::Key::SendKeyV1(send_key)).unwrap();
+        let mut dctx = DecryptContext::data_context(&master_key).unwrap();
         let pt = [1, 2, 3];
         let ct = ectx.encrypt_data(true, (&pt).to_vec());
         let pt2 = dctx.decrypt_data(&ct).unwrap();
         assert_eq!(pt2, [1, 2, 3]);
+    }
+
+    #[test]
+    fn master_key_round_trip_metadata_encrypt() {
+        let master_key = keys::MasterKey::gen();
+        let master_key = keys::Key::MasterKeyV1(master_key);
+        let ectx = EncryptContext::metadata_context(&master_key);
+        let mut dctx = DecryptContext::metadata_context(&master_key).unwrap();
+        let pt = [1, 2, 3];
+        let ct = ectx.encrypt_data(true, (&pt).to_vec());
+        let pt2 = dctx.decrypt_data(&ct).unwrap();
+        assert_eq!(pt2, [1, 2, 3]);
+    }
+
+    #[test]
+    fn metadata_key_round_trip_data_encrypt() {
+        let master_key = keys::MasterKey::gen();
+        let metadata_key = keys::MetadataKey::gen(&master_key);
+        let metadata_key = keys::Key::MetadataKeyV1(metadata_key);
+        let master_key = keys::Key::MasterKeyV1(master_key);
+
+        let ectx = EncryptContext::metadata_context(&metadata_key);
+        let pt = [1, 2, 3];
+        let ct = ectx.encrypt_data(true, (&pt).to_vec());
+        let mut dctx = DecryptContext::metadata_context(&metadata_key).unwrap();
+        let pt2 = dctx.decrypt_data(&ct).unwrap();
+        assert_eq!(pt2, [1, 2, 3]);
+        let mut dctx = DecryptContext::metadata_context(&master_key).unwrap();
+        let pt3 = dctx.decrypt_data(&ct).unwrap();
+        assert_eq!(pt3, [1, 2, 3]);
     }
 }

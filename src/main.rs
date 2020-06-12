@@ -286,7 +286,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     let key = keys::Key::load_from_file(&key)?;
-
+    let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
     let key = match key {
         keys::Key::MasterKeyV1(mk) => mk,
         _ => failure::bail!("the provided key is a not a master decryption key"),
@@ -307,56 +307,55 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut query_cache = matches_to_query_cache(&matches)?;
 
     let warned_wrong_key = &mut false;
-    let mut f = |id: i64, metadata: itemset::ItemMetadata| {
-        if metadata.encrypt_header.master_key_id() != key.id {
-            if !*warned_wrong_key {
-                *warned_wrong_key = true;
-                eprintln!("NOTE: Search skipping items encrypted with different master key.")
+    let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
+        itemset::VersionedItemMetadata::V1(metadata) => {
+            if metadata.master_key_id != key.id {
+                if !*warned_wrong_key {
+                    *warned_wrong_key = true;
+                    eprintln!("NOTE: Search skipping items encrypted with different master key.")
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
-        let tags = ctx.decrypt_data(
-            &metadata.encrypted_tags, /* XXX copying here seems pointless */
-        )?;
+            let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
 
-        let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+            let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
 
-        let doprint = match query {
-            Some(ref query) => tquery::query_matches(query, &tags),
-            None => true,
-        };
+            let doprint = match query {
+                Some(ref query) => tquery::query_matches(query, &tags),
+                None => true,
+            };
 
-        let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
-        tags.sort_by(|(k1, _), (k2, _)| k1.partial_cmp(k2).unwrap());
+            let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+            tags.sort_by(|(k1, _), (k2, _)| k1.partial_cmp(k2).unwrap());
 
-        if doprint {
-            match list_format {
-                ListFormat::Human => {
-                    print!("{}:", id);
-                    for (k, v) in tags {
-                        print!(" {}", k);
-                        match v {
-                            Some(v) => {
-                                print!("=\"{}\"", v.replace("\\", "\\\\").replace("\"", "\\\""))
+            if doprint {
+                match list_format {
+                    ListFormat::Human => {
+                        print!("{}:", id);
+                        for (k, v) in tags {
+                            print!(" {}", k);
+                            match v {
+                                Some(v) => {
+                                    print!("=\"{}\"", v.replace("\\", "\\\\").replace("\"", "\\\""))
+                                }
+                                None => (),
                             }
-                            None => (),
                         }
+                        println!("");
                     }
-                    println!("");
-                }
-                ListFormat::Jsonl => {
-                    let jsonl = ToJsonl {
-                        id,
-                        tags: tags.into_iter().collect(),
-                    };
-                    println!("{}", serde_json::to_string(&jsonl)?);
+                    ListFormat::Jsonl => {
+                        let jsonl = ToJsonl {
+                            id,
+                            tags: tags.into_iter().collect(),
+                        };
+                        println!("{}", serde_json::to_string(&jsonl)?);
+                    }
                 }
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     };
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
@@ -437,8 +436,6 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     }
 
-    let encrypt_ctx = crypto::EncryptContext::new(&key);
-
     // TODO XXX make cli option.
     const SEND_SEQUENCE_MEMORY: i64 = 3;
 
@@ -468,7 +465,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         client::SendOptions {
             compression: !matches.opt_present("no-compression"),
         },
-        &encrypt_ctx,
+        &key,
         &mut send_log,
         &mut serve_out,
         &mut serve_in,
@@ -505,7 +502,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     let key = keys::Key::load_from_file(&key)?;
-
+    let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
     let key = match key {
         keys::Key::MasterKeyV1(mk) => mk,
         _ => failure::bail!("the provided key is a not a master decryption key"),
@@ -529,19 +526,20 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             let mut n_matches: u64 = 0;
             let mut id = -1;
 
-            let mut f = |qid: i64, metadata: itemset::ItemMetadata| {
-                if metadata.encrypt_header.master_key_id() != key.id {
-                    return Ok(());
-                }
+            let mut f = |qid: i64, metadata: itemset::VersionedItemMetadata| match metadata {
+                itemset::VersionedItemMetadata::V1(metadata) => {
+                    if metadata.master_key_id != key.id {
+                        return Ok(());
+                    }
 
-                let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
-                let tags = ctx.decrypt_data(&metadata.encrypted_tags)?;
-                let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
-                if tquery::query_matches(&query, &tags) {
-                    n_matches += 1;
-                    id = qid;
+                    let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
+                    let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    if tquery::query_matches(&query, &tags) {
+                        n_matches += 1;
+                        id = qid;
+                    }
+                    Ok(())
                 }
-                Ok(())
             };
 
             let mut tx = query_cache.transaction()?;
@@ -609,6 +607,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             };
 
             let key = keys::Key::load_from_file(&key)?;
+            let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
             let key = match key {
                 keys::Key::MasterKeyV1(mk) => mk,
                 _ => failure::bail!("the provided key is a not a master decryption key"),
@@ -616,17 +615,18 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut ids = Vec::new();
 
-            let mut f = |id: i64, metadata: itemset::ItemMetadata| {
-                if metadata.encrypt_header.master_key_id() != key.id {
-                    return Ok(());
+            let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
+                itemset::VersionedItemMetadata::V1(metadata) => {
+                    if metadata.master_key_id != key.id {
+                        return Ok(());
+                    }
+                    let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
+                    let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    if tquery::query_matches(&query, &tags) {
+                        ids.push(id);
+                    }
+                    Ok(())
                 }
-                let mut ctx = crypto::DecryptContext::open(&key, &metadata.encrypt_header)?;
-                let tags = ctx.decrypt_data(&metadata.encrypted_tags)?;
-                let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
-                if tquery::query_matches(&query, &tags) {
-                    ids.push(id);
-                }
-                Ok(())
             };
             let mut tx = query_cache.transaction()?;
             tx.walk_items(&mut f)?;

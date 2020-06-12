@@ -69,38 +69,38 @@ fn is_value_char(c: char) -> bool {
 
 macro_rules! impl_binop {
     ($name:ident, $opi:ident, $ops:literal , $sub:ident) => {
-    fn $name(&mut self) -> Result<Query, ParseError> {
-        let op = $ops;
-        let mut l: Query;
-        self.skip_insignificant();
-        let (_, start_pos) = self.peek();
-        l = self.$sub()?;
-        loop {
-          self.skip_insignificant();
-          if !self.lookahead_with_ws_or_sep(op) {
-            return Ok(l);
-          }
-          self.advance(op.len()+1);
-          self.skip_insignificant();
+        fn $name(&mut self) -> Result<Query, ParseError> {
+            let op = $ops;
+            let mut l: Query;
+            self.skip_insignificant();
+            let (_, start_pos) = self.peek();
+            l = self.$sub()?;
+            loop {
+                self.skip_insignificant();
+                if !self.lookahead_with_ws_or_sep(op) {
+                    return Ok(l);
+                }
+                self.advance(op.len() + 1);
+                self.skip_insignificant();
 
-          if self.is_eof() {
-            return Err(ParseError::SyntaxError {
+                if self.is_eof() {
+                    return Err(ParseError::SyntaxError {
                         query: self.query_chars.iter().collect(),
                         msg: format!("operator '{}' expects a value", op),
-                        span: (self.offset-1, self.offset-1),
-                    })
-          }
-          let r = self.$sub()?;
-          let (_, end_pos) = self.peek();
-          l = Query::Binop{
-            op: Binop::$opi,
-            span: (start_pos, end_pos),
-            left: Box::new(l),
-            right: Box::new(r),
-          }
+                        span: (self.offset - 1, self.offset - 1),
+                    });
+                }
+                let r = self.$sub()?;
+                let (_, end_pos) = self.peek();
+                l = Query::Binop {
+                    op: Binop::$opi,
+                    span: (start_pos, end_pos),
+                    left: Box::new(l),
+                    right: Box::new(r),
+                }
+            }
         }
-    }
-  };
+    };
 }
 
 struct Parser {

@@ -1,18 +1,25 @@
 use super::address::*;
-use super::crypto;
+use super::keys;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ItemMetadata {
     pub tree_height: usize,
-    pub encrypt_header: crypto::VersionedEncryptionHeader,
-    pub encrypted_tags: Vec<u8>,
+    pub master_key_id: [u8; keys::KEYID_SZ],
     pub address: Address,
+    pub hash_key_part_2a: [u8; keys::PARTIAL_HASH_KEY_SZ],
+    pub hash_key_part_2b: [u8; keys::PARTIAL_HASH_KEY_SZ],
+    pub encrypted_tags: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub enum VersionedItemMetadata {
+    V1(ItemMetadata),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum LogOp {
-    AddItem(ItemMetadata),
+    AddItem(VersionedItemMetadata),
     // Note: There is an asymmetry here in that we can delete many items with one log op.
     // This is because batch deleting is possible, but batch makes less sense.
     RemoveItems(Vec<i64>),
@@ -87,7 +94,7 @@ pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
 pub fn lookup_item_by_id(
     tx: &rusqlite::Transaction,
     id: i64,
-) -> Result<Option<ItemMetadata>, failure::Error> {
+) -> Result<Option<VersionedItemMetadata>, failure::Error> {
     match tx.query_row("select 1 from Items where LogOpId = ?;", &[id], |_row| {
         Ok(true)
     }) {
@@ -108,7 +115,7 @@ pub fn lookup_item_by_id(
 
 pub fn walk_items(
     tx: &rusqlite::Transaction,
-    f: &mut dyn FnMut(i64, ItemMetadata) -> Result<(), failure::Error>,
+    f: &mut dyn FnMut(i64, VersionedItemMetadata) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
     let mut stmt =
         tx.prepare("select Id, OpData from ItemOpLog where id in (select LogOpId from Items);")?;
@@ -119,7 +126,7 @@ pub fn walk_items(
                 let id: i64 = row.get(0)?;
                 let opdata: Vec<u8> = row.get(1)?;
                 let logop: LogOp = bincode::deserialize(&opdata)?;
-                let metadata: ItemMetadata = match logop {
+                let metadata: VersionedItemMetadata = match logop {
                     LogOp::AddItem(metadata) => metadata,
                     _ => failure::bail!("itemset/item log is corrupt"),
                 };

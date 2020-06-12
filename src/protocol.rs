@@ -33,7 +33,7 @@ pub struct RequestData {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AckRequestData {
-    pub metadata: Option<itemset::ItemMetadata>,
+    pub metadata: Option<itemset::VersionedItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -157,6 +157,7 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure
     Ok(())
 }
 
+//XXX FIXME TODO packet kind is redundant with bincode encoding.
 pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), failure::Error> {
     match pkt {
         Packet::Chunk(ref v) => {
@@ -168,8 +169,6 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.data)?;
             w.write_all(&v.address.bytes)?;
         }
-        // XXX Refactor somehow. Generic, macro?
-        // Only the chunk packet needs special treatment.
         Packet::ServerInfo(ref v) => {
             let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
@@ -240,7 +239,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
 
 #[cfg(test)]
 mod tests {
-    use super::super::crypto;
+
     use super::super::keys;
     use super::*;
 
@@ -255,33 +254,37 @@ mod tests {
             Packet::AckSend(AckSend {
                 gc_generation: "blah".to_owned(),
             }),
-            Packet::LogOp(itemset::LogOp::AddItem(itemset::ItemMetadata {
-                address: Address::default(),
-                tree_height: 3,
-                encrypt_header: {
-                    let master_key = keys::MasterKey::gen();
-                    let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    ectx.encryption_header()
-                },
-                encrypted_tags: vec![1, 2, 3],
-            })),
+            {
+                let master_key = keys::MasterKey::gen();
+                Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
+                    itemset::ItemMetadata {
+                        address: Address::default(),
+                        tree_height: 3,
+                        master_key_id: master_key.id,
+                        hash_key_part_2a: master_key.hash_key_part_2a,
+                        hash_key_part_2b: master_key.hash_key_part_2b,
+                        encrypted_tags: vec![1, 2, 3],
+                    },
+                )))
+            },
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
             }),
             Packet::RequestData(RequestData { id: 153534 }),
-            Packet::AckRequestData(AckRequestData {
-                metadata: {
-                    let master_key = keys::MasterKey::gen();
-                    let ectx = crypto::EncryptContext::new(&keys::Key::MasterKeyV1(master_key));
-                    Some(itemset::ItemMetadata {
+            {
+                let master_key = keys::MasterKey::gen();
+                Packet::AckRequestData(AckRequestData {
+                    metadata: Some(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
                         address: Address::default(),
                         tree_height: 1234,
-                        encrypt_header: ectx.encryption_header(),
+                        master_key_id: master_key.id,
+                        hash_key_part_2a: master_key.hash_key_part_2a,
+                        hash_key_part_2b: master_key.hash_key_part_2b,
                         encrypted_tags: vec![1, 2, 3],
-                    })
-                },
-            }),
+                    })),
+                })
+            },
             Packet::StartGC(StartGC {}),
             Packet::GCComplete(GCComplete {
                 stats: repository::GCStats {

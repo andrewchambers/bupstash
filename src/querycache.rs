@@ -138,7 +138,7 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn walk_items(
         self: &mut Self,
-        f: &mut dyn FnMut(i64, itemset::ItemMetadata) -> Result<(), failure::Error>,
+        f: &mut dyn FnMut(i64, itemset::VersionedItemMetadata) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         itemset::walk_items(&mut self.tx, f)
     }

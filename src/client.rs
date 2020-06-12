@@ -9,6 +9,7 @@ use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
+use std::convert::{From, TryFrom};
 
 use failure::Fail;
 use std::collections::HashMap;
@@ -64,13 +65,18 @@ pub struct SendOptions {
 
 pub fn send(
     opts: SendOptions,
-    ctx: &crypto::EncryptContext,
+    key: &keys::Key,
     send_log: &mut sendlog::SendLog,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tags: &HashMap<String, Option<String>>,
     data: &mut dyn std::io::Read,
 ) -> Result<i64, failure::Error> {
+    /* Create the various crypto contexts first so we can error early */
+    let hash_ctx = crypto::KeyedHashContext::try_from(key)?;
+    let metadata_ctx = crypto::EncryptContext::metadata_context(&key);
+    let data_ctx = crypto::EncryptContext::data_context(&key)?;
+
     write_packet(w, &Packet::BeginSend(BeginSend {}))?;
 
     let gc_generation = match read_packet(r)? {
@@ -88,7 +94,17 @@ pub fn send(
         // XXX We divide send up into two parts to make the
         // lifetime easier to deal. Theres a good chance
         // it can be factored better, but this works for now.
-        send_result = send2(opts, ctx, r, &mut filtered_conn, tags, data);
+        send_result = send2(
+            opts,
+            key,
+            &hash_ctx,
+            &metadata_ctx,
+            &data_ctx,
+            r,
+            &mut filtered_conn,
+            tags,
+            data,
+        );
     }
 
     let id = match send_result {
@@ -103,7 +119,10 @@ pub fn send(
 
 fn send2(
     opts: SendOptions,
-    ctx: &crypto::EncryptContext,
+    key: &keys::Key,
+    hash_ctx: &crypto::KeyedHashContext,
+    metadata_ctx: &crypto::EncryptContext,
+    data_ctx: &crypto::EncryptContext,
     r: &mut dyn std::io::Read,
     filtered_conn: &mut FilteredConnection,
     tags: &HashMap<String, Option<String>>,
@@ -125,8 +144,8 @@ fn send2(
         match data.read(&mut buf) {
             Ok(0) => {
                 let chunk_data = chunker.finish();
-                let addr = ctx.keyed_content_address(&chunk_data);
-                tw.add(&addr, ctx.encrypt_data(opts.compression, chunk_data))?;
+                let addr = hash_ctx.content_address(&chunk_data);
+                tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
                 let (height, address) = tw.finish()?;
                 tree_height = height;
                 root_address = address;
@@ -138,8 +157,8 @@ fn send2(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        let addr = ctx.keyed_content_address(&chunk_data);
-                        tw.add(&addr, ctx.encrypt_data(opts.compression, chunk_data))?;
+                        let addr = hash_ctx.content_address(&chunk_data);
+                        tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
                     }
                 }
             }
@@ -147,14 +166,24 @@ fn send2(
         }
     }
 
+    let (hk_2a, hk_2b) = match key {
+        keys::Key::MasterKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
+        keys::Key::SendKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
+        _ => panic!("unreachable"), /* We wouldn't be able to have a HashContext in these cases */
+    };
+
     write_packet(
         filtered_conn.w,
-        &Packet::LogOp(itemset::LogOp::AddItem(itemset::ItemMetadata {
-            address: root_address,
-            tree_height,
-            encrypt_header: ctx.encryption_header(),
-            encrypted_tags: ctx.encrypt_data(true, bincode::serialize(&tags)?),
-        })),
+        &Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
+            itemset::ItemMetadata {
+                tree_height,
+                address: root_address,
+                master_key_id: key.master_key_id(),
+                hash_key_part_2a: hk_2a,
+                hash_key_part_2b: hk_2b,
+                encrypted_tags: metadata_ctx.encrypt_data(true, bincode::serialize(&tags)?),
+            },
+        ))),
     )?;
 
     match read_packet(r)? {
@@ -198,29 +227,35 @@ pub fn request_data_stream(
         _ => failure::bail!("protocol error, expected ack request packet"),
     };
 
-    if key.id != metadata.encrypt_header.master_key_id() {
-        failure::bail!("decryption key does not match master key used for encryption");
-    }
-
-    let mut ctx = crypto::DecryptContext::open(key, &metadata.encrypt_header)?;
-    let mut sv = StreamVerifier { r: r };
-    let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
-
-    loop {
-        match tr.next_chunk(&mut sv)? {
-            Some((addr, encrypted_chunk_data)) => {
-                let data = ctx.decrypt_data(&encrypted_chunk_data)?;
-                if addr != ctx.keyed_content_address(&data) {
-                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                }
-                out.write_all(&data)?;
+    match metadata {
+        itemset::VersionedItemMetadata::V1(metadata) => {
+            if key.id != metadata.master_key_id {
+                failure::bail!("decryption key does not match master key used for encryption");
             }
-            None => break,
+
+            let hash_ctx = crypto::KeyedHashContext::from(key);
+            let mut decrypt_ctx =
+                crypto::DecryptContext::data_context(&keys::Key::MasterKeyV1(key.clone()))?;
+            let mut sv = StreamVerifier { r: r };
+            let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
+
+            loop {
+                match tr.next_chunk(&mut sv)? {
+                    Some((addr, encrypted_chunk_data)) => {
+                        let data = decrypt_ctx.decrypt_data(&encrypted_chunk_data)?;
+                        if addr != hash_ctx.content_address(&data) {
+                            return Err(ClientError::CorruptOrTamperedDataError.into());
+                        }
+                        out.write_all(&data)?;
+                    }
+                    None => break,
+                }
+            }
+
+            out.flush()?;
+            Ok(())
         }
     }
-
-    out.flush()?;
-    Ok(())
 }
 
 pub fn gc(

@@ -291,7 +291,7 @@ impl Repo {
     pub fn lookup_item_by_id(
         &mut self,
         id: i64,
-    ) -> Result<Option<itemset::ItemMetadata>, failure::Error> {
+    ) -> Result<Option<itemset::VersionedItemMetadata>, failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::lookup_item_by_id(&tx, id)
     }
@@ -322,21 +322,23 @@ impl Repo {
 
             itemset::compact(&tx)?;
 
-            itemset::walk_items(&tx, &mut |_id, metadata| {
-                let addr = &metadata.address;
-                if !reachable.contains(&addr) {
-                    let mut tr = htree::TreeReader::new(metadata.tree_height, addr);
-                    while let Some((height, addr)) = tr.next_addr()? {
-                        if !reachable.contains(&addr) {
-                            reachable.insert(addr);
-                            if height != 0 {
-                                let data = storage_engine.get_chunk(&addr)?;
-                                tr.push_level(height - 1, data)?;
+            itemset::walk_items(&tx, &mut |_id, metadata| match metadata {
+                itemset::VersionedItemMetadata::V1(metadata) => {
+                    let addr = &metadata.address;
+                    if !reachable.contains(&addr) {
+                        let mut tr = htree::TreeReader::new(metadata.tree_height, addr);
+                        while let Some((height, addr)) = tr.next_addr()? {
+                            if !reachable.contains(&addr) {
+                                reachable.insert(addr);
+                                if height != 0 {
+                                    let data = storage_engine.get_chunk(&addr)?;
+                                    tr.push_level(height - 1, data)?;
+                                }
                             }
                         }
                     }
+                    Ok(())
                 }
-                Ok(())
             })?;
         }
 
