@@ -30,7 +30,10 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
         "create table if not exists ItemOpLog(Id INTEGER PRIMARY KEY AUTOINCREMENT, OpData);",
         rusqlite::NO_PARAMS,
     )?;
-    tx.execute("create table if not exists Items(LogOpId, Unique(LogOpId), FOREIGN KEY(LogOpId) REFERENCES ItemOpLog(Id));", rusqlite::NO_PARAMS)?;
+    tx.execute(
+        "create table if not exists Items(LogOpId, Unique(LogOpId), FOREIGN KEY(LogOpId) REFERENCES ItemOpLog(Id));",
+        rusqlite::NO_PARAMS,
+    )?;
     Ok(())
 }
 

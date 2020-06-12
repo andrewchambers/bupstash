@@ -142,7 +142,7 @@ fn send(
                 storage_engine.get_chunk_async(&chunk_address),
             );
 
-            // XXX
+            // Idea:
             // we could use a queue with N values, initially filled with noops to utilize N workers
             // worth of lookahead. The tradeoff is we can have a peak memory usage of N*MaxChunkSize.
             loop {

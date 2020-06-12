@@ -124,7 +124,12 @@ fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt("m", "master-key", "master key to derive send key from.", "PATH");
+    opts.reqopt(
+        "m",
+        "master-key",
+        "master key to derive send key from.",
+        "PATH",
+    );
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
@@ -139,7 +144,12 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt("m", "master-key", "master key to derive metadata key from.", "PATH");
+    opts.reqopt(
+        "m",
+        "master-key",
+        "master key to derive metadata key from.",
+        "PATH",
+    );
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
