@@ -157,7 +157,6 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure
     Ok(())
 }
 
-//XXX FIXME TODO packet kind is redundant with bincode encoding.
 pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), failure::Error> {
     match pkt {
         Packet::Chunk(ref v) => {

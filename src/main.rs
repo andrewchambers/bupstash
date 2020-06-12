@@ -124,7 +124,7 @@ fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt("m", "master-key", "master key to derive key from.", "PATH");
+    opts.reqopt("m", "master-key", "master key to derive send key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
@@ -133,7 +133,22 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
             let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&master_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
-        _ => failure::bail!("key specified is not a master key"),
+        _ => failure::bail!("key is not a master key"),
+    }
+}
+
+fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.reqopt("m", "master-key", "master key to derive metadata key from.", "PATH");
+    opts.reqopt("o", "output", "output file.", "PATH");
+    let matches = default_parse_opts(opts, &args[..]);
+    let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
+    match k {
+        keys::Key::MasterKeyV1(master_key) => {
+            let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&master_key));
+            send_key.write_to_file(&matches.opt_str("o").unwrap())
+        }
+        _ => failure::bail!("key is not a master key"),
     }
 }
 
@@ -750,6 +765,7 @@ fn main() {
         "init" => init_main(args),
         "new-master-key" => new_master_key_main(args),
         "new-send-key" => new_send_key_main(args),
+        "new-metadata-key" => new_metadata_key_main(args),
         "list" => list_main(args),
         "send" => send_main(args),
         "get" => get_main(args),

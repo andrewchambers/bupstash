@@ -73,30 +73,46 @@ pub enum Key {
     MetadataKeyV1(MetadataKey),
 }
 
+fn pem_tag(k: &Key) -> &str {
+    match k {
+        Key::MasterKeyV1(_) => "Archivist Master Key",
+        Key::SendKeyV1(_) => "Archivist Send Key",
+        Key::MetadataKeyV1(_) => "Archivist Metadata Key",
+    }
+}
+
 impl Key {
     pub fn write_to_file(&self, path: &str) -> Result<(), Error> {
-        let mut file = OpenOptions::new()
+        let mut f = OpenOptions::new()
             .mode(0o600)
             .write(true)
             .create_new(true)
             .open(path)
             .with_context(|e| format!("error opening {}: {}", path, e))?; // Give read/write for owner and read for others.
-        let j = serde_json::to_string(self)?;
-        file.write_all(j.as_bytes())
+
+        let pem_data = pem::encode(&pem::Pem {
+            tag: String::from(pem_tag(self)),
+            contents: bincode::serialize(self)?,
+        });
+
+        f.write_all(pem_data.as_bytes())
             .with_context(|e| format!("writing key file failed: {}", e))?;
         Ok(())
     }
 
     pub fn load_from_file(path: &str) -> Result<Key, Error> {
-        let mut file = OpenOptions::new()
-            .mode(0o600)
+        let mut f = OpenOptions::new()
             .read(true)
             .open(path)
-            .with_context(|e| format!("error opening {}: {}", path, e))?; // Give read/write for owner and read for others.
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)
-            .with_context(|e| format!("reading key file failed: {}", e))?;
-        let k: Key = serde_json::from_str(&contents)?;
+            .with_context(|e| format!("error opening {}: {}", path, e))?;
+
+        let mut pem_data = Vec::new();
+        f.read_to_end(&mut pem_data)?;
+        let pem_data = pem::parse(pem_data)?;
+        let k: Key = bincode::deserialize(&pem_data.contents)?;
+        if pem_tag(&k) != pem_data.tag {
+            failure::bail!("key type does not match pem tag")
+        }
         Ok(k)
     }
 
