@@ -19,7 +19,6 @@ pub mod tquery;
 
 use failure::Fail;
 use getopts::{Matches, Options};
-use serde::Serialize;
 use std::collections::HashMap;
 
 fn die(s: String) -> ! {
@@ -181,33 +180,19 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
 
 fn matches_to_id_and_query(
     matches: &Matches,
-) -> Result<(Option<i64>, Option<tquery::Query>), failure::Error> {
-    let id: Option<i64> = match matches.opt_str("id") {
-        Some(id) => match id.parse::<i64>() {
-            Ok(id) => Some(id),
-            Err(err) => return Err(err.context("--id invalid").into()),
-        },
-        _ => None,
-    };
-
-    let query: Option<tquery::Query> = if matches.free.len() != 0 {
+) -> Result<(Option<i64>, tquery::Query), failure::Error> {
+    let query: tquery::Query = if matches.free.len() != 0 {
         match tquery::parse(&matches.free.join("•")) {
-            Ok(query) => Some(query),
+            Ok(query) => query,
             Err(e) => {
                 tquery::report_parse_error(e);
-                std::process::exit(1);
+                failure::bail!("query parse error");
             }
         }
     } else {
-        None
+        failure::bail!("you must specify a query");
     };
-
-    match (id, &query) {
-        (Some(_), _) => (),
-        (_, Some(_)) => (),
-        _ => failure::bail!("you must specify either --id or query arguments"),
-    };
-
+    let id = tquery::get_id_query(&query);
     Ok((id, query))
 }
 
@@ -261,12 +246,6 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
 enum ListFormat {
     Human,
     Jsonl,
-}
-
-#[derive(Serialize)]
-struct ToJsonl {
-    id: i64,
-    tags: std::collections::BTreeMap<String, Option<String>>,
 }
 
 fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
@@ -343,8 +322,8 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             }
 
             let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
-
-            let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+            let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+            tags.insert("id".to_string(), Some(id.to_string()));
 
             let doprint = match query {
                 Some(ref query) => tquery::query_matches(query, &tags),
@@ -352,14 +331,17 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             };
 
             let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
-            tags.sort_by(|(k1, _), (k2, _)| k1.partial_cmp(k2).unwrap());
+            tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
+                ("id", _) => std::cmp::Ordering::Greater,
+                (_, "id") => std::cmp::Ordering::Less,
+                _ => k1.partial_cmp(k2).unwrap(),
+            });
 
             if doprint {
                 match list_format {
                     ListFormat::Human => {
-                        print!("{}:", id);
                         for (k, v) in tags {
-                            print!(" {}", k);
+                            print!("{}", k);
                             match v {
                                 Some(v) => {
                                     print!("=\"{}\"", v.replace("\\", "\\\\").replace("\"", "\\\""))
@@ -370,11 +352,22 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                         println!("");
                     }
                     ListFormat::Jsonl => {
-                        let jsonl = ToJsonl {
-                            id,
-                            tags: tags.into_iter().collect(),
-                        };
-                        println!("{}", serde_json::to_string(&jsonl)?);
+                        print!("{{");
+                        for i in 0..tags.len() {
+                            let (k, v) = &tags[i];
+                            if i != 0 {
+                                print!(", ");
+                            }
+                            match v {
+                                Some(v) => print!(
+                                    "{}:{}",
+                                    serde_json::to_string(&k)?,
+                                    serde_json::to_string(&v)?
+                                ),
+                                None => print!("{} : true", serde_json::to_string(&k)?),
+                            }
+                        }
+                        println!("}}");
                     }
                 }
             }
@@ -514,7 +507,6 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     query_cache_opt(&mut opts);
-    opts.optopt("", "id", "ID of entry to fetch.", "ID");
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -543,7 +535,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let id = match (id, query) {
         (Some(id), _) => id,
-        (_, Some(query)) => {
+        (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
 
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
@@ -558,7 +550,8 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                     }
 
                     let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
-                    let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    tags.insert("id".to_string(), Some(qid.to_string()));
                     if tquery::query_matches(&query, &tags) {
                         n_matches += 1;
                         id = qid;
@@ -578,7 +571,6 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             }
             id
         }
-        _ => panic!(),
     };
 
     client::request_data_stream(
@@ -602,7 +594,6 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     query_cache_opt(&mut opts);
-    opts.optopt("", "id", "ID of entry to delete.", "ID");
     opts.optopt("k", "key", "decryption key for querying.", "PATH");
     opts.optflag("", "all", "remove every item matching query.");
 
@@ -618,7 +609,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let ids: Vec<i64> = match (id, query) {
         (Some(id), _) => vec![id],
-        (_, Some(query)) => {
+        (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
 
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
@@ -646,7 +637,8 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         return Ok(());
                     }
                     let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
-                    let tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    tags.insert("id".to_string(), Some(id.to_string()));
                     if tquery::query_matches(&query, &tags) {
                         ids.push(id);
                     }
@@ -665,7 +657,6 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             ids
         }
-        _ => panic!(),
     };
 
     for ids in ids.chunks(128) {

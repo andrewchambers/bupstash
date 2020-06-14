@@ -445,6 +445,17 @@ pub fn query_matches(q: &Query, tagset: &HashMap<String, Option<String>>) -> boo
     }
 }
 
+pub fn get_id_query(q: &Query) -> Option<i64> {
+    match q {
+        Query::Glob { tag, pattern, .. }
+            if tag == "id" && pattern.as_str().chars().all(char::is_numeric) =>
+        {
+            Some(pattern.as_str().parse::<i64>().unwrap_or(0))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +493,12 @@ mod tests {
                 span: (0, 7),
             }
         );
+    }
+
+    #[test]
+    fn test_is_id_query() {
+        assert_eq!(get_id_query(&parse("id=123").unwrap()), Some(123));
+        assert_eq!(get_id_query(&parse("foo=123").unwrap()), None);
     }
 
     #[test]
@@ -616,7 +633,7 @@ mod tests {
         assert!(query_matches(&parse("foo=*; and bar").unwrap(), &tagset));
         assert!(query_matches(&parse("~foo=xxx").unwrap(), &tagset));
         assert!(query_matches(&parse("foo==123; and bar").unwrap(), &tagset));
-        assert!(!query_matches(&parse("!foo==123").unwrap(), &tagset));
+        assert!(!query_matches(&parse("~foo==123").unwrap(), &tagset));
         assert!(!query_matches(&parse("foo==*;").unwrap(), &tagset));
     }
 }

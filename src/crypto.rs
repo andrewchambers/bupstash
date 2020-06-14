@@ -8,7 +8,6 @@ const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
 const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
 
 pub struct EncryptContext {
-    pub k: keys::Key, // FIXME remove this?
     pub session_tx_key: [u8; hydrogen::KX_SESSIONKEYBYTES],
     pub packet1: [u8; hydrogen::KX_N_PACKET1BYTES],
 }
@@ -93,7 +92,6 @@ impl EncryptContext {
         };
         let (session_tx_key, _session_rx_key, packet1) = hydrogen::kx_n_1(&psk, &pk);
         Ok(EncryptContext {
-            k: k.clone(),
             session_tx_key,
             packet1,
         })
@@ -107,7 +105,6 @@ impl EncryptContext {
         };
         let (session_tx_key, _session_rx_key, packet1) = hydrogen::kx_n_1(&psk, &pk);
         EncryptContext {
-            k: k.clone(),
             session_tx_key,
             packet1,
         }
