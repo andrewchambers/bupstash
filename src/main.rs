@@ -291,11 +291,6 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = keys::Key::load_from_file(&key)?;
     let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
-    let key = match key {
-        keys::Key::MasterKeyV1(mk) => mk,
-        _ => failure::bail!("the provided key is a not a master decryption key"),
-    };
-
     let mut query: Option<tquery::Query> = None;
 
     if matches.free.len() != 0 {
@@ -313,7 +308,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if metadata.master_key_id != key.id {
+            if metadata.master_key_id != key.master_key_id() {
                 if !*warned_wrong_key {
                     *warned_wrong_key = true;
                     eprintln!("NOTE: Search skipping items encrypted with different master key.")
@@ -401,6 +396,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     opts.optopt("f", "file", "Save a file.", "PATH");
+    opts.optopt("d", "dir", "Save a directory as a tarball.", "PATH");
     opts.optflag(
         "",
         "no-compression",
@@ -433,8 +429,11 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
             Box::new(std::fs::File::open(f)?)
         };
         client::SendSource::Readable(f)
+    } else if matches.opt_present("dir") {
+        let dir = matches.opt_str("dir").unwrap();
+        client::SendSource::Directory(std::convert::From::from(dir))
     } else {
-        failure::bail!("please set --file to the data you are sending")
+        failure::bail!("please set --file or --dir")
     };
 
     let mut tags = HashMap::<String, Option<String>>::new();
@@ -624,16 +623,11 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let key = keys::Key::load_from_file(&key)?;
             let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
-            let key = match key {
-                keys::Key::MasterKeyV1(mk) => mk,
-                _ => failure::bail!("the provided key is a not a master decryption key"),
-            };
-
             let mut ids = Vec::new();
 
             let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.master_key_id != key.id {
+                    if metadata.master_key_id != key.master_key_id() {
                         return Ok(());
                     }
                     let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;

@@ -4,6 +4,7 @@ export SCRATCH="$BATS_TMPDIR/archivist-test-scratch"
 export REPO="$SCRATCH/archivist-test-repo"
 export MASTER_KEY="$SCRATCH/archivist-test-master.key"
 export SEND_KEY="$SCRATCH/archivist-test-send.key"
+export METADATA_KEY="$SCRATCH/archivist-test-metadata.key"
 export ARCHIVIST_REPOSITORY="$REPO"
 export ARCHIVIST_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export ARCHIVIST_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
@@ -13,6 +14,7 @@ setup () {
   archivist init "$REPO"
   archivist new-master-key -o "$MASTER_KEY"
   archivist new-send-key -m "$MASTER_KEY" -o "$SEND_KEY"
+  archivist new-metadata-key -m "$MASTER_KEY" -o "$METADATA_KEY"
 }
 
 teardown () {
@@ -26,6 +28,7 @@ teardown () {
   test -f "$REPO/gc.lock"
   test -f "$MASTER_KEY"
   test -f "$SEND_KEY"
+  test -f "$METADATA_KEY"
 }
 
 @test "simple send recv master key" {
@@ -120,28 +123,40 @@ _concurrent_send_test_worker () {
   do
     archivist send -k "$MASTER_KEY" -f <(echo $i) "i=$i"
   done
-
-  test 100 = $(archivist list -k "$MASTER_KEY" | wc -l)
-  test 1 = $(archivist list -k "$MASTER_KEY" i=100 | wc -l)
-  test 0 = $(archivist list -k "$MASTER_KEY" i=101 | wc -l)
+  for k in $MASTER_KEY $METADATA_KEY
+  do
+    test 100 = $(archivist list -k "$k" | wc -l)
+    test 1 = $(archivist list -k "$k" i=100 | wc -l)
+    test 0 = $(archivist list -k "$k" i=101 | wc -l)
+  done
 }
 
 @test "rm and gc" {
+  archivist list -k "$MASTER_KEY"
+  test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(archivist send -k "$MASTER_KEY" -f <(echo hello1))"
   id2="$(archivist send -k "$MASTER_KEY" -f <(echo hello2))"
+  archivist list -k "$MASTER_KEY"
+  test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
   test 2 = "$(ls "$REPO/data" | wc -l)"
   archivist rm id=$id1
+  archivist list -k "$MASTER_KEY"
+  test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 3 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
   test 2 = "$(ls "$REPO/data" | wc -l)"
   archivist gc
+  archivist list -k "$MASTER_KEY"
+  test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
   test 1 = "$(ls "$REPO/data" | wc -l)"
   archivist rm id=$id2
   archivist gc
+  archivist list -k "$MASTER_KEY"
+  test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 0 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
   test 0 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
   test 0 = "$(ls "$REPO/data" | wc -l)"
@@ -180,7 +195,7 @@ _concurrent_send_test_worker () {
   fi
   archivist rm -k "$MASTER_KEY" "foo=bar"
   test 2 = $(archivist list -k "$MASTER_KEY" | wc -l)
-  archivist rm --all -k "$MASTER_KEY" "foo=*"
+  archivist rm --all -k "$METADATA_KEY" "foo=*"
   test 0 = $(archivist list -k "$MASTER_KEY" | wc -l)
 }
 

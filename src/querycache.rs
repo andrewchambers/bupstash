@@ -83,7 +83,7 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn current_gc_generation(&mut self) -> Result<Option<String>, failure::Error> {
         match self.tx.query_row(
-            "select value from QueryCacheMeta where key = 'gc_generation';",
+            "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
             |r| {
                 let generation: String = r.get(0)?;
@@ -98,7 +98,7 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn start_sync(self: &mut Self, gc_generation: String) -> Result<(), failure::Error> {
         match self.tx.query_row(
-            "select value from QueryCacheMeta where key = 'gc_generation';",
+            "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
             |r| {
                 let generation: String = r.get(0)?;
@@ -109,7 +109,7 @@ impl<'a> QueryCacheTx<'a> {
                 if gc_generation != old_generation {
                     self.clear()?;
                     self.tx.execute(
-                        "update QueryCacheMeta set Value = ? where Key = 'gc_generation';",
+                        "update QueryCacheMeta set Value = ? where Key = 'gc-generation';",
                         &[&gc_generation],
                     )?;
                 }
@@ -117,7 +117,7 @@ impl<'a> QueryCacheTx<'a> {
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 self.clear()?;
                 self.tx.execute(
-                    "insert into QueryCacheMeta(Key, Value) values('gc_generation', ?);",
+                    "insert into QueryCacheMeta(Key, Value) values('gc-generation', ?);",
                     &[&gc_generation],
                 )?;
             }

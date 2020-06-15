@@ -316,7 +316,7 @@ impl Repo {
         let tx = self.conn.transaction()?;
         {
             tx.execute(
-                "update RepositoryMeta set value = ? where key = 'gc_generation';",
+                "update RepositoryMeta set value = ? where key = 'gc-generation';",
                 rusqlite::params![new_random_token()],
             )?;
 

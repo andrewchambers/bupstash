@@ -76,7 +76,7 @@ impl SendLog {
         let tx = self.conn.transaction()?;
 
         match tx.query_row(
-            "select value from LogMeta where key = 'gc_generation';",
+            "select value from LogMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
             |r| {
                 let generation: String = r.get(0)?;
@@ -87,7 +87,7 @@ impl SendLog {
                 if gc_generation != old_generation {
                     tx.execute("delete from sent;", rusqlite::NO_PARAMS)?;
                     tx.execute(
-                        "update LogMeta set Value = ? where Key = 'gc_generation';",
+                        "update LogMeta set Value = ? where Key = 'gc-generation';",
                         &[&gc_generation],
                     )?;
                 }
@@ -95,7 +95,7 @@ impl SendLog {
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute("delete from sent;", rusqlite::NO_PARAMS)?;
                 tx.execute(
-                    "insert into LogMeta(Key, Value) values('gc_generation', ?);",
+                    "insert into LogMeta(Key, Value) values('gc-generation', ?);",
                     &[&gc_generation],
                 )?;
             }
@@ -182,7 +182,7 @@ mod tests {
         drop(tx);
         drop(sendlog);
 
-        // Since the gc_generation changed, address should not
+        // Since the gc-generation changed, address should not
         // be there anymore.
         let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();

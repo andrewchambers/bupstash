@@ -9,10 +9,10 @@ use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
-use std::convert::{From, TryFrom};
-
 use failure::Fail;
 use std::collections::HashMap;
+use std::convert::{From, TryFrom, TryInto};
+use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Fail)]
 pub enum ClientError {
@@ -143,9 +143,12 @@ fn send2(
 
     match data {
         SendSource::Readable(mut data) => {
-            send_chunks(&opts, data_ctx, hash_ctx, &mut chunker, &mut tw, &mut data)?
+            send_chunks(&opts, data_ctx, hash_ctx, &mut chunker, &mut tw, &mut data)?;
+            ()
         }
-        SendSource::Directory(_path) => panic!("todo"),
+        SendSource::Directory(path) => {
+            send_dir(&opts, data_ctx, hash_ctx, &mut chunker, &mut tw, &path)?
+        }
     }
 
     let chunk_data = chunker.finish();
@@ -186,13 +189,13 @@ fn send_chunks(
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
-) -> Result<(), failure::Error> {
+) -> Result<usize, failure::Error> {
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
-
+    let mut n_written: usize = 0;
     loop {
         match data.read(&mut buf) {
             Ok(0) => {
-                return Ok(());
+                return Ok(n_written);
             }
             Ok(n_read) => {
                 let mut n_chunked = 0;
@@ -204,10 +207,80 @@ fn send_chunks(
                         tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
                     }
                 }
+                n_written += n_read;
             }
             Err(err) => return Err(err.into()),
         }
     }
+}
+
+fn send_dir(
+    opts: &SendOptions,
+    data_ctx: &crypto::EncryptContext,
+    hash_ctx: &crypto::KeyedHashContext,
+    chunker: &mut chunker::RollsumChunker,
+    tw: &mut htree::TreeWriter,
+    path: &std::path::PathBuf,
+) -> Result<(), failure::Error> {
+    for entry in walkdir::WalkDir::new(path) {
+        let entry = entry.unwrap();
+        let metadata = entry.metadata()?;
+        let ft = metadata.file_type();
+        {
+            let mut hdr = tar::Header::new_ustar();
+            hdr.set_path(entry.path())?;
+            hdr.set_uid(metadata.uid().into());
+            hdr.set_gid(metadata.gid().into());
+            hdr.set_mtime(metadata.mtime().try_into()?);
+            hdr.set_mode(metadata.mode());
+            if ft.is_file() {
+                hdr.set_entry_type(tar::EntryType::Regular);
+                hdr.set_size(metadata.len());
+            } else if ft.is_dir() {
+                hdr.set_entry_type(tar::EntryType::Directory);
+                hdr.set_size(0);
+            } else if ft.is_symlink() {
+                hdr.set_entry_type(tar::EntryType::Symlink);
+                hdr.set_size(0);
+                let target = std::fs::read_link(entry.path())?;
+                hdr.set_link_name(target)?;
+            } else {
+                failure::bail!("unsupported file entry at {}", entry.path().display());
+            }
+            hdr.set_cksum();
+            let hdr_bytes = hdr.as_bytes();
+            let hdr_bytes = &hdr_bytes[..];
+            let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
+            send_chunks(opts, data_ctx, hash_ctx, chunker, tw, &mut hdr_cursor)?;
+        }
+
+        if ft.is_file() {
+            let mut f = std::fs::File::open(entry.path())?;
+            let len = send_chunks(opts, data_ctx, hash_ctx, chunker, tw, &mut f)?;
+            /* Tar entries are rounded to 512 bytes */
+            let remaining = 512 - (len % 512);
+            if remaining < 512 {
+                let buf = [0; 512];
+                let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
+                send_chunks(opts, data_ctx, hash_ctx, chunker, tw, &mut hdr_cursor)?;
+            }
+            if len != metadata.len() as usize {
+                failure::bail!(
+                    "file length of {} changed while sending data",
+                    entry.path().display()
+                );
+            }
+        }
+
+        if let Some(chunk_data) = chunker.force_split() {
+            let addr = hash_ctx.content_address(&chunk_data);
+            tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?
+        }
+    }
+    let buf = [0; 1024];
+    let mut trailer_cursor = std::io::Cursor::new(&buf[..]);
+    send_chunks(opts, data_ctx, hash_ctx, chunker, tw, &mut trailer_cursor)?;
+    Ok(())
 }
 
 struct StreamVerifier<'a> {
