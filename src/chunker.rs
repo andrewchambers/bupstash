@@ -47,13 +47,17 @@ impl RollsumChunker {
             n_bytes -= overshoot;
             debug_assert!(self.cur_vec.len() + n_bytes <= self.max_sz);
         }
+
         if self.spare_capacity() < n_bytes {
             let mut growth = self.max_sz / 3;
+            if growth == 0 {
+                growth = 1;
+            }
             if self.cur_vec.capacity() + growth > self.max_sz {
                 growth = self.max_sz - self.cur_vec.capacity();
             }
             self.cur_vec.reserve(growth);
-            debug_assert!(self.cur_vec.capacity() <= self.max_sz);
+            debug_assert!(self.spare_capacity() >= n_bytes);
         }
         let mut n_added = 0;
         for b in buf[0..n_bytes].iter() {
@@ -66,6 +70,16 @@ impl RollsumChunker {
             }
         }
         (n_added, None)
+    }
+
+    pub fn force_split(&mut self) -> Option<Vec<u8>> {
+        self.rs.reset();
+        let v = self.swap_vec();
+        if v.len() == 0 {
+            return None;
+        } else {
+            return Some(v);
+        }
     }
 
     pub fn finish(self) -> Vec<u8> {
@@ -94,4 +108,20 @@ fn test_add_bytes() {
     }
 
     assert_eq!(ch.finish(), b"c");
+}
+
+#[test]
+fn test_force_split_bytes() {
+    let rs = Rollsum::new();
+    let mut ch = RollsumChunker::new(rs, 10, 100);
+    assert_eq!(ch.force_split(), None);
+    ch.add_bytes(b"abc");
+
+    match ch.force_split() {
+        Some(v) => assert_eq!(v, b"abc"),
+        None => panic!("fail!"),
+    }
+    assert_eq!(ch.force_split(), None);
+    ch.add_bytes(b"def");
+    assert_eq!(ch.finish(), b"def");
 }
