@@ -425,14 +425,14 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = keys::Key::load_from_file(&key)?;
 
-    let mut data = if matches.opt_present("file") {
+    let data = if matches.opt_present("file") {
         let f = matches.opt_str("file").unwrap();
         let f: Box<dyn std::io::Read> = if f == "-" {
             Box::new(std::io::stdin())
         } else {
             Box::new(std::fs::File::open(f)?)
         };
-        f
+        client::SendSource::Readable(f)
     } else {
         failure::bail!("please set --file to the data you are sending")
     };
@@ -488,7 +488,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut serve_out,
         &mut serve_in,
         &tags,
-        &mut data,
+        data,
     )?;
     client::hangup(&mut serve_in)?;
 

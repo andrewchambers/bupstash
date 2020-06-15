@@ -63,6 +63,11 @@ pub struct SendOptions {
     pub compression: bool,
 }
 
+pub enum SendSource {
+    Readable(Box<dyn std::io::Read>),
+    Directory(std::path::PathBuf),
+}
+
 pub fn send(
     opts: SendOptions,
     key: &keys::Key,
@@ -70,7 +75,7 @@ pub fn send(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tags: &HashMap<String, Option<String>>,
-    data: &mut dyn std::io::Read,
+    data: SendSource,
 ) -> Result<i64, failure::Error> {
     /* Create the various crypto contexts first so we can error early */
     let hash_ctx = crypto::KeyedHashContext::try_from(key)?;
@@ -126,11 +131,8 @@ fn send2(
     r: &mut dyn std::io::Read,
     filtered_conn: &mut FilteredConnection,
     tags: &HashMap<String, Option<String>>,
-    data: &mut dyn std::io::Read,
+    data: SendSource,
 ) -> Result<i64, failure::Error> {
-    let tree_height: usize;
-    let root_address: Address;
-
     let min_size = 1024;
     let max_size = 8 * 1024 * 1024;
     let chunk_mask = 0x000f_ffff;
@@ -138,18 +140,59 @@ fn send2(
     let rs = rollsum::Rollsum::new_with_chunk_mask(chunk_mask);
     let mut chunker = chunker::RollsumChunker::new(rs, min_size, max_size);
     let mut tw = htree::TreeWriter::new(filtered_conn, max_size, chunk_mask);
+
+    match data {
+        SendSource::Readable(mut data) => {
+            send_chunks(&opts, data_ctx, hash_ctx, &mut chunker, &mut tw, &mut data)?
+        }
+        SendSource::Directory(_path) => panic!("todo"),
+    }
+
+    let chunk_data = chunker.finish();
+    let addr = hash_ctx.content_address(&chunk_data);
+    tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
+    let (tree_height, tree_address) = tw.finish()?;
+
+    let (hk_2a, hk_2b) = match key {
+        keys::Key::MasterKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
+        keys::Key::SendKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
+        _ => panic!("unreachable"), /* We wouldn't be able to have a HashContext in these cases */
+    };
+
+    write_packet(
+        filtered_conn.w,
+        &Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
+            itemset::ItemMetadata {
+                tree_height,
+                address: tree_address,
+                master_key_id: key.master_key_id(),
+                hash_key_part_2a: hk_2a,
+                hash_key_part_2b: hk_2b,
+                encrypted_tags: metadata_ctx.encrypt_data(true, bincode::serialize(&tags)?),
+            },
+        ))),
+    )?;
+
+    match read_packet(r)? {
+        Packet::AckLogOp(id) => Ok(id),
+        _ => failure::bail!("protocol error, expected begin ack packet"),
+    }
+}
+
+fn send_chunks(
+    opts: &SendOptions,
+    data_ctx: &crypto::EncryptContext,
+    hash_ctx: &crypto::KeyedHashContext,
+    chunker: &mut chunker::RollsumChunker,
+    tw: &mut htree::TreeWriter,
+    data: &mut dyn std::io::Read,
+) -> Result<(), failure::Error> {
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
 
     loop {
         match data.read(&mut buf) {
             Ok(0) => {
-                let chunk_data = chunker.finish();
-                let addr = hash_ctx.content_address(&chunk_data);
-                tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
-                let (height, address) = tw.finish()?;
-                tree_height = height;
-                root_address = address;
-                break;
+                return Ok(());
             }
             Ok(n_read) => {
                 let mut n_chunked = 0;
@@ -164,31 +207,6 @@ fn send2(
             }
             Err(err) => return Err(err.into()),
         }
-    }
-
-    let (hk_2a, hk_2b) = match key {
-        keys::Key::MasterKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
-        keys::Key::SendKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
-        _ => panic!("unreachable"), /* We wouldn't be able to have a HashContext in these cases */
-    };
-
-    write_packet(
-        filtered_conn.w,
-        &Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
-            itemset::ItemMetadata {
-                tree_height,
-                address: root_address,
-                master_key_id: key.master_key_id(),
-                hash_key_part_2a: hk_2a,
-                hash_key_part_2b: hk_2b,
-                encrypted_tags: metadata_ctx.encrypt_data(true, bincode::serialize(&tags)?),
-            },
-        ))),
-    )?;
-
-    match read_packet(r)? {
-        Packet::AckLogOp(id) => Ok(id),
-        _ => failure::bail!("protocol error, expected begin ack packet"),
     }
 }
 
