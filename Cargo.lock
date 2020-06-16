@@ -40,6 +40,7 @@ dependencies = [
  "getopts",
  "glob",
  "libc",
+ "path-clean",
  "pem",
  "rand 0.7.3",
  "regex",
@@ -1097,6 +1098,12 @@ dependencies = [
  "smallvec",
  "winapi 0.3.8",
 ]
+
+[[package]]
+name = "path-clean"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecba01bf2678719532c5e3059e0b5f0811273d94b397088b82e3bd0a78c78fdd"
 
 [[package]]
 name = "peeking_take_while"

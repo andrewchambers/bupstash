@@ -20,7 +20,7 @@ impl Address {
         Address { bytes: *bytes }
     }
 
-    pub fn from_str(s: &str) -> Result<Address, failure::Error> {
+    pub fn from_hex_str(s: &str) -> Result<Address, failure::Error> {
         if s.len() != ADDRESS_SZ * 2 {
             failure::bail!("invalid address '{}', length is not {} ", s, ADDRESS_SZ * 2);
         }

@@ -119,12 +119,12 @@ impl<'a> StatCacheTx<'a> {
         Ok(())
     }
 
-     pub fn lookup(&mut self, p: &Path, hash: &[u8],) -> Result<Option<Vec<u8>>, failure::Error> {
+    pub fn lookup(&mut self, p: &Path, hash: &[u8]) -> Result<Option<Vec<u8>>, failure::Error> {
         let p = p.to_str();
-        
-        let mut stmt = self.tx.prepare_cached(
-            "select Addresses from StatCache where Path = ? and Hash = ?;",
-        )?;
+
+        let mut stmt = self
+            .tx
+            .prepare_cached("select Addresses from StatCache where Path = ? and Hash = ?;")?;
 
         let addresses = match stmt.query_row(rusqlite::params![p, hash], |r| Ok(r.get(0)?)) {
             Ok(addresses) => addresses,
@@ -132,9 +132,9 @@ impl<'a> StatCacheTx<'a> {
             Err(err) => return Err(err.into()),
         };
 
-        let mut stmt = self.tx.prepare_cached(
-            "update StatCache set Seq = ? where Path = ? and Hash = ?;",
-        )?;
+        let mut stmt = self
+            .tx
+            .prepare_cached("update StatCache set Seq = ? where Path = ? and Hash = ?;")?;
 
         stmt.execute(rusqlite::params![self.sequence + 1, p, hash])?;
 
@@ -158,10 +158,9 @@ mod tests {
         let mut tx = stat_cache.transaction().unwrap();
         let hash = &[0; 32][..];
         let addresses = &[0; 64][..];
-        tx.add(&PathBuf::from("/foo"), hash, addresses)
-            .unwrap();
+        tx.add(&PathBuf::from("/foo"), hash, addresses).unwrap();
 
-        let addresses2 : &[u8] = &tx.lookup(&PathBuf::from("/foo"), hash).unwrap().unwrap();
+        let addresses2: &[u8] = &tx.lookup(&PathBuf::from("/foo"), hash).unwrap().unwrap();
         assert_eq!(addresses, addresses2);
 
         tx.commit().unwrap();

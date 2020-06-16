@@ -8,6 +8,7 @@ export METADATA_KEY="$SCRATCH/archivist-test-metadata.key"
 export ARCHIVIST_REPOSITORY="$REPO"
 export ARCHIVIST_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export ARCHIVIST_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
+export ARCHIVIST_STAT_CACHE="$SCRATCH/stat-cache.sqlite3"
 
 setup () {
   mkdir "$SCRATCH"
@@ -197,5 +198,18 @@ _concurrent_send_test_worker () {
   test 2 = $(archivist list -k "$MASTER_KEY" | wc -l)
   archivist rm --all -k "$METADATA_KEY" "foo=*"
   test 0 = $(archivist list -k "$MASTER_KEY" | wc -l)
+}
+
+@test "send directory sanity" {
+  mkdir "$SCRATCH/foo"
+  echo a > "$SCRATCH/foo/a.txt"
+  echo b > "$SCRATCH/foo/b.txt"
+  mkdir "$SCRATCH/foo/bar"
+  echo c > "$SCRATCH/foo/bar/c.txt"
+  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
+  # Test again to excercise stat caching.
+  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
 }
 

@@ -1,7 +1,8 @@
+use path_clean::PathClean;
 use rand::Rng;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn create_empty_file(p: &Path) -> Result<(), std::io::Error> {
     let f = fs::OpenOptions::new()
@@ -40,4 +41,20 @@ pub fn atomic_add_file(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> 
     tmp_file.sync_all()?;
     std::fs::rename(temp_path, p)?;
     Ok(())
+}
+
+// Get an absolute path without resolving symlinks or touching the fs.
+pub fn absolute_path<P>(path: P) -> std::io::Result<PathBuf>
+where
+    P: AsRef<Path>,
+{
+    let path = path.as_ref();
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    }
+    .clean();
+
+    Ok(absolute_path)
 }

@@ -81,7 +81,7 @@ impl<'a> TreeWriter<'a> {
         Ok(())
     }
 
-    fn add_addr(&mut self, level: usize, addr: &Address) -> Result<(), failure::Error> {
+    pub fn add_addr(&mut self, level: usize, addr: &Address) -> Result<(), failure::Error> {
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
             self.rollsums

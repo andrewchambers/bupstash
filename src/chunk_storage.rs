@@ -191,7 +191,7 @@ impl Engine for LocalStorage {
         };
         for e in std::fs::read_dir(&self.data_dir)? {
             let e = e?;
-            match Address::from_str(&e.file_name().to_string_lossy()) {
+            match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
                     if !should_keep(&addr) {
                         if let Ok(md) = e.metadata() {
@@ -438,7 +438,7 @@ impl Engine for S3Storage {
                 for o in contents {
                     match o.key {
                         Some(key) => {
-                            if let Ok(addr) = Address::from_str(&key[self.prefix.len()..]) {
+                            if let Ok(addr) = Address::from_hex_str(&key[self.prefix.len()..]) {
                                 if !should_keep(&addr) {
                                     to_delete.push(addr);
                                     stats.chunks_freed += 1;

@@ -179,6 +179,48 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
     }
 }
 
+fn matches_to_stat_cache(matches: &Matches) -> Result<statcache::StatCache, failure::Error> {
+    // TODO XXX make cli option/env
+    const STAT_CACHE_MEMORY: i64 = 3;
+    match matches.opt_str("stat-cache") {
+        Some(send_log) => {
+            statcache::StatCache::open(&std::path::PathBuf::from(send_log), STAT_CACHE_MEMORY)
+        }
+        None => match std::env::var_os("ARCHIVIST_STAT_CACHE") {
+            Some(send_log) => {
+                statcache::StatCache::open(&std::path::PathBuf::from(send_log), STAT_CACHE_MEMORY)
+            }
+            None => {
+                let mut p = cache_dir()?;
+                std::fs::create_dir_all(&p)?;
+                p.push("stat-cache.sqlite3");
+                statcache::StatCache::open(&p, STAT_CACHE_MEMORY)
+            }
+        },
+    }
+}
+
+fn matches_to_send_log(matches: &Matches) -> Result<sendlog::SendLog, failure::Error> {
+    // TODO XXX make cli option/env
+    const SEND_SEQUENCE_MEMORY: i64 = 3;
+    match matches.opt_str("send-log") {
+        Some(send_log) => {
+            sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)
+        }
+        None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
+            Some(send_log) => {
+                sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)
+            }
+            None => {
+                let mut p = cache_dir()?;
+                std::fs::create_dir_all(&p)?;
+                p.push("send-log.sqlite3");
+                sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)
+            }
+        },
+    }
+}
+
 fn matches_to_id_and_query(
     matches: &Matches,
 ) -> Result<(Option<i64>, tquery::Query), failure::Error> {
@@ -409,6 +451,12 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "Use send log to avoid resending data that was sent previously.",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "stat-cache",
+        "Use stat cache when sending a directory to avoid reading unchanged files.",
+        "PATH",
+    );
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -432,7 +480,8 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         client::SendSource::Readable(f)
     } else if matches.opt_present("dir") {
         let dir = matches.opt_str("dir").unwrap();
-        client::SendSource::Directory(std::convert::From::from(dir))
+        let stat_cache = matches_to_stat_cache(&matches)?;
+        client::SendSource::Directory((stat_cache, std::convert::From::from(dir)))
     } else {
         failure::bail!("please set --file or --dir")
     };
@@ -454,26 +503,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     }
 
-    // TODO XXX make cli option.
-    const SEND_SEQUENCE_MEMORY: i64 = 3;
-
-    let mut send_log = match matches.opt_str("send-log") {
-        Some(send_log) => {
-            sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)?
-        }
-        None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
-            Some(send_log) => {
-                sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)?
-            }
-            None => {
-                let mut p = cache_dir()?;
-                std::fs::create_dir_all(&p)?;
-                p.push("send-log.sqlite3");
-                sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)?
-            }
-        },
-    };
-
+    let mut send_log = matches_to_send_log(&matches)?;
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
