@@ -15,6 +15,7 @@ pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
+pub mod statcache;
 pub mod tquery;
 
 use failure::Fail;
