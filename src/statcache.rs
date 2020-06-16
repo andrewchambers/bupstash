@@ -75,8 +75,38 @@ impl StatCache {
         Ok(StatCache { conn, remember })
     }
 
-    pub fn transaction<'a>(self: &'a mut Self) -> Result<StatCacheTx<'a>, failure::Error> {
+    pub fn transaction<'a>(
+        self: &'a mut Self,
+        gc_generation: &str,
+    ) -> Result<StatCacheTx<'a>, failure::Error> {
         let tx = self.conn.transaction()?;
+
+        match tx.query_row(
+            "select value from StatCacheMeta where key = 'gc-generation';",
+            rusqlite::NO_PARAMS,
+            |r| {
+                let generation: String = r.get(0)?;
+                Ok(generation)
+            },
+        ) {
+            Ok(old_generation) => {
+                if gc_generation != old_generation {
+                    tx.execute("delete from StatCache;", rusqlite::NO_PARAMS)?;
+                    tx.execute(
+                        "update StatCacheMeta set Value = ? where Key = 'gc-generation';",
+                        &[&gc_generation],
+                    )?;
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                tx.execute("delete from StatCache;", rusqlite::NO_PARAMS)?;
+                tx.execute(
+                    "insert into StatCacheMeta(Key, Value) values('gc-generation', ?);",
+                    &[&gc_generation],
+                )?;
+            }
+            Err(err) => return Err(err.into()),
+        }
 
         let sequence = tx.query_row(
             "select Value from StatCacheMeta where Key = 'sequence-number';",
@@ -155,7 +185,7 @@ mod tests {
             d
         };
         let mut stat_cache = StatCache::open(&log_path, 1).unwrap();
-        let mut tx = stat_cache.transaction().unwrap();
+        let mut tx = stat_cache.transaction("abc").unwrap();
         let hash = &[0; 32][..];
         let addresses = &[0; 64][..];
         tx.add(&PathBuf::from("/foo"), hash, addresses).unwrap();

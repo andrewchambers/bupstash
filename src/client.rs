@@ -92,64 +92,25 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    let send_result: Result<i64, failure::Error>;
     let mut send_log_tx = send_log.transaction(&gc_generation)?;
-    {
-        let mut filtered_conn = FilteredConnection {
-            tx: &mut send_log_tx,
-            w: w,
-        };
-        // XXX We divide send up into two parts to make the
-        // lifetime easier to deal. Theres a good chance
-        // it can be factored better, and feel free to try.
-        send_result = send2(
-            opts,
-            key,
-            &hash_ctx,
-            &metadata_ctx,
-            &data_ctx,
-            r,
-            &mut filtered_conn,
-            tags,
-            data,
-        );
-    }
-
-    let id = match send_result {
-        Ok(id) => {
-            send_log_tx.commit()?;
-            id
-        }
-        Err(err) => return Err(err.into()),
+    let mut filtered_conn = FilteredConnection {
+        tx: &mut send_log_tx,
+        w: w,
     };
-    Ok(id)
-}
-
-fn send2(
-    opts: SendOptions,
-    key: &keys::Key,
-    hash_ctx: &crypto::KeyedHashContext,
-    metadata_ctx: &crypto::EncryptContext,
-    data_ctx: &crypto::EncryptContext,
-    r: &mut dyn std::io::Read,
-    filtered_conn: &mut FilteredConnection,
-    tags: &HashMap<String, Option<String>>,
-    data: SendSource,
-) -> Result<i64, failure::Error> {
     let min_size = 1024;
     let max_size = 8 * 1024 * 1024;
     let chunk_mask = 0x000f_ffff;
     // XXX TODO these chunk parameters need to be investigated and tuned.
     let rs = rollsum::Rollsum::new_with_chunk_mask(chunk_mask);
     let mut chunker = chunker::RollsumChunker::new(rs, min_size, max_size);
-    let mut tw = htree::TreeWriter::new(filtered_conn, max_size, chunk_mask);
+    let mut tw = htree::TreeWriter::new(&mut filtered_conn, max_size, chunk_mask);
 
     match data {
         SendSource::Readable(mut data) => {
             send_chunks(
                 &opts,
-                data_ctx,
-                hash_ctx,
+                &data_ctx,
+                &hash_ctx,
                 &mut chunker,
                 &mut tw,
                 &mut data,
@@ -157,15 +118,19 @@ fn send2(
             )?;
             ()
         }
-        SendSource::Directory((mut statcache, path)) => send_dir(
-            &opts,
-            data_ctx,
-            hash_ctx,
-            &mut chunker,
-            &mut tw,
-            &mut statcache,
-            &path,
-        )?,
+        SendSource::Directory((mut stat_cache, path)) => {
+            let mut stat_cache_tx = stat_cache.transaction(&gc_generation)?;
+            send_dir(
+                &opts,
+                &data_ctx,
+                &hash_ctx,
+                &mut chunker,
+                &mut tw,
+                &mut stat_cache_tx,
+                &path,
+            )?;
+            stat_cache_tx.commit()?;
+        }
     }
 
     let chunk_data = chunker.finish();
@@ -194,8 +159,11 @@ fn send2(
     )?;
 
     match read_packet(r)? {
-        Packet::AckLogOp(id) => Ok(id),
-        _ => failure::bail!("protocol error, expected begin ack packet"),
+        Packet::AckLogOp(id) => {
+            send_log_tx.commit()?;
+            Ok(id)
+        }
+        _ => failure::bail!("protocol error, expected ack packet"),
     }
 }
 
@@ -242,10 +210,9 @@ fn send_dir(
     hash_ctx: &crypto::KeyedHashContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
-    stat_cache: &mut statcache::StatCache,
+    stat_cache_tx: &mut statcache::StatCacheTx,
     path: &std::path::PathBuf,
 ) -> Result<(), failure::Error> {
-    let mut stat_cache_tx = stat_cache.transaction()?;
     let mut addresses: Vec<u8> = Vec::with_capacity(1024 * 128);
     let path = fsutil::absolute_path(&path)?;
 
@@ -371,8 +338,6 @@ fn send_dir(
         &mut trailer_cursor,
         None,
     )?;
-
-    stat_cache_tx.commit()?;
     Ok(())
 }
 

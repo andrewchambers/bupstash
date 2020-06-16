@@ -213,3 +213,13 @@ _concurrent_send_test_worker () {
   test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
 }
 
+@test "stat cache invalidated" {
+  mkdir "$SCRATCH/foo"
+  echo a > "$SCRATCH/foo/a.txt"
+  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  archivist rm -k "$MASTER_KEY" id=$id
+  archivist gc
+  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  archivist get -k "$MASTER_KEY" id=$id > /dev/null
+}
+
