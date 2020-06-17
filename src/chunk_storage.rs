@@ -245,7 +245,6 @@ impl Engine for LocalStorage {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

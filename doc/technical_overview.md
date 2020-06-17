@@ -98,6 +98,11 @@ storage-engine=$SPEC
 The `ItemOpLog` is an append only ledger of the following structure:
 
 ```
+
+pub struct Address {
+    pub bytes: [u8; ADDRESS_SZ],
+}
+
 pub struct ItemMetadata {
     pub tree_height: usize,
     pub master_key_id: [u8; keys::KEYID_SZ],
@@ -117,15 +122,16 @@ pub enum LogOp {
 }
 ```
 
-Each element in the ItemOpLog table is a [bincoded](https://github.com/servo/bincode) LogOp. This structure is defined in itemset.rs. It is important to note, all metadata like search tags are stored encrypted and are not 
+Each element in the ItemOpLog table is a [bincoded](https://github.com/servo/bincode) LogOp. It is important to note, all metadata like search tags are stored encrypted and are not 
 readable without a master key or metadata key.
 
-The `Items` table is the set of Items that have not been marked for garbage collection via a RemoveItems LogOp. 
+The `Items` table is an aggregated view of current items which have not be marked for removal.
 
 ### data directory
 
-This directory contains a set of encrypted and deduplicated data chunks. The name of the file corresponds to
-the an HMAC hash of the unencrypted contents.
+This directory contains a set of encrypted and deduplicated data chunks.
+The name of the file corresponds to the an HMAC hash of the unencrypted contents, as such
+if two chunks are added to the repository with the same hmac, they only need to be stored once.
 
 This directory is not used when the repository is configured for external data storage.
 

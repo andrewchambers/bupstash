@@ -247,7 +247,7 @@ impl Repo {
                 // XXX fixme, how many workers do we want?
                 // configurable?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
-            },
+            }
         };
 
         Ok(storage_engine)

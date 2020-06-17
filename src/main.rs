@@ -370,15 +370,19 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
             tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
-                ("id", _) => std::cmp::Ordering::Greater,
-                (_, "id") => std::cmp::Ordering::Less,
+                ("id", _) => std::cmp::Ordering::Less,
+                (_, "id") => std::cmp::Ordering::Greater,
                 _ => k1.partial_cmp(k2).unwrap(),
             });
 
             if doprint {
                 match list_format {
                     ListFormat::Human => {
-                        for (k, v) in tags {
+                        for i in 0..tags.len() {
+                            let (k, v) = &tags[i];
+                            if i != 0 {
+                                print!(" ");
+                            }
                             print!("{}", k);
                             match v {
                                 Some(v) => {
