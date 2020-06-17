@@ -45,7 +45,9 @@ $ pgdump ... |  archivist put date=$(date +%Y/%m/%d) name=db.sql --file - -k ./s
 $ archivist list -k ./metadata.key
 ```
 
+
 N.B. The following cli interface will almost certainly change.
+
 N.B. Archivist can operate over ssh with ssh:// style repositories.
 
 ## Repository
