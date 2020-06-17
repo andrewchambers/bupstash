@@ -54,7 +54,7 @@ N.B. Archivist can operate over ssh with ssh:// style repositories.
 
 The most important part of archivist is the repository. It is where all data is stored, in a mostly
 encrypted form. The archivist client interacts via the repository over stdin/stdout of the archivist
-server process. This may be locally, or via a protocol such as ssh.
+serve process. This may be locally, or via a protocol such as ssh.
 
 Because most data is encrypted, the repository structure is quite simple.
 
@@ -65,7 +65,7 @@ repo/
 ├── archivist.db
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
-│   └── 65788abd667d544781ea99132b8d4f6b34e10ad63cd928d031f2cee0e99978fb
+│   └── ...
 └── gc.lock
 ```
 
