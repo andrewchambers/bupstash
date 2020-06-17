@@ -625,7 +625,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     );
     query_cache_opt(&mut opts);
     opts.optopt("k", "key", "decryption key for querying.", "PATH");
-    opts.optflag("", "all", "remove every item matching query.");
+    opts.optflag("", "allow-many", "Allow multiple removals.");
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -673,7 +673,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let mut tx = query_cache.transaction()?;
             tx.walk_items(&mut f)?;
 
-            if ids.len() != 1 && !matches.opt_present("all") {
+            if ids.len() != 1 && !matches.opt_present("allow-many") {
                 failure::bail!(
                     "the provided query matched {} items, need a single match unless --all is specified",
                     ids.len()

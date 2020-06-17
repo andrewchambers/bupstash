@@ -196,7 +196,7 @@ _concurrent_send_test_worker () {
   fi
   archivist rm -k "$MASTER_KEY" "foo=bar"
   test 2 = $(archivist list -k "$MASTER_KEY" | wc -l)
-  archivist rm --all -k "$METADATA_KEY" "foo=*"
+  archivist rm --allow-many -k "$METADATA_KEY" "foo=*"
   test 0 = $(archivist list -k "$MASTER_KEY" | wc -l)
 }
 
