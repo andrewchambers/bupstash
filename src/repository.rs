@@ -30,11 +30,6 @@ pub enum RepoError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
     Local,
-    S3 {
-        endpoint: String,
-        bucket: String,
-        prefix: String,
-    },
 }
 
 #[derive(Clone)]
@@ -252,14 +247,7 @@ impl Repo {
                 // XXX fixme, how many workers do we want?
                 // configurable?
                 Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
-            }
-            StorageEngineSpec::S3 {
-                endpoint,
-                bucket,
-                prefix,
-            } => Box::new(chunk_storage::S3Storage::new(
-                &endpoint, &bucket, &prefix, 4,
-            )),
+            },
         };
 
         Ok(storage_engine)
