@@ -4,9 +4,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ItemMetadata {
+    // XXX TODO FIXME, all unencrypted metadata 
+    // could be bound to the address via some sort of authentication code.
     pub tree_height: usize,
     pub master_key_id: [u8; keys::KEYID_SZ],
     pub address: Address,
+    // XXX TODO FIXME this hash_key could be encrypted?
+    // instead of split? The only person who needs access
+    // to the hash key is the master key.
     pub hash_key_part_2a: [u8; keys::PARTIAL_HASH_KEY_SZ],
     pub hash_key_part_2b: [u8; keys::PARTIAL_HASH_KEY_SZ],
     pub encrypted_tags: Vec<u8>,

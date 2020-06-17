@@ -1,11 +1,7 @@
-XXX TODO
 
-The write log needs to reference/multiplex on the repository id if we want to allow multiple repos.
+The write log could to reference/multiplex on the repository id if we want to allow multiple repos.
 
-The write log should probably allow more than a single a/b cycle. We could cap by some counter instead.
+We should use libsodium and optimise our usage authentication to prevent excessive 
+hashing.
 
-The keys should have a magic number so we can present nicer error messages.
-
-We should explain defaults of sendlog and query-cache.
-
-Prefetch/pipeline in get. We should be fetching the next item while sending the current one.
+Design a storage engine plugin protocol/interface.

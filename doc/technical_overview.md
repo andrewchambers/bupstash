@@ -46,7 +46,7 @@ $ archivist list -k ./metadata.key
 ```
 
 
-N.B. The following cli interface will almost certainly change.
+N.B. The cli interface will almost certainly change in the future.
 
 N.B. Archivist can operate over ssh with ssh:// style repositories.
 
@@ -95,7 +95,9 @@ gc-generation=$RANDOM_UNIQUE_ID
 storage-engine=$SPEC 
 ```
 
-The `ItemOpLog` is an append only ledger of the following structure:
+The `ItemOpLog` is an append only ledger where each OpData entry is is a [bincoded](https://github.com/servo/bincode) LogOp
+of the following format:
+
 
 ```
 
@@ -122,7 +124,7 @@ pub enum LogOp {
 }
 ```
 
-Each element in the ItemOpLog table is a [bincoded](https://github.com/servo/bincode) LogOp. It is important to note, all metadata like search tags are stored encrypted and are not 
+It is important to note, all metadata like search tags are stored encrypted and are not 
 readable without a master key or metadata key.
 
 The `Items` table is an aggregated view of current items which have not be marked for removal.
@@ -148,56 +150,98 @@ Archivist stores arbitrary streams of data in the repository by splitting the st
 hmac addressing the chunks, then compressing and encrypting the chunks with the a public key portion of a master key.
 Each chunk is then stored in the data directory.
 
-Once there is a list of chunks with a corresponding hmac address,
-we can build a tree structure out of these chunks. Leaf nodes of the tree are simply the encrypted data. 
+As we generate a sequence of chunks with a corresponding hmac addresses,
+we can build a tree structure out of these addresses. Leaf nodes of the tree are simply the encrypted data. 
 Other nodes in the tree are simply unencrypted lists of hashes, which may point to encrypted leaf nodes,
 or other subtrees. The key idea behind the hash tree, is we can convert an arbitrary stream of data
-into a single HMAC address. When multiple hash trees are added to the repository,
-they automatically share structure saving space.
+into a single HMAC address with approximately equal sized chunks.
+When multiple hash trees are added to the repository, they share structure and enable deduplication.
 
 This addressing and encryption scheme has some important properties:
 
-- The repository owner *cannot* guess chunk contents as the HMAC key is unknown.
+- The repository owner *cannot* guess chunk contents as the HMAC key is unknown to him.
 - The repository owner *cannot* decrypt leaves of the hash tree, as they are encrypted.
 - The repository owner *can* iterate the hash tree for garbage collection purposes.
 - The repository owner *can* run garbage collection without retrieving the leaf nodes from cold storage.
 - The repository owner *can* push stream a hash tree to a client with no network round trips.
 
 These properties are desirable for enabling high performance garbage collection and data streaming
-with prefetch, that many other backup tools are missing.
+with prefetch on the repository side.
 
 ## Chunking and deduplication
 
 Data is deduplicated by splitting a data stream into small chunks, and never storing the same chunk twice.
 The performance of this deduplication is thus determined by how chunks split points are defined.
 
-One way to chunk data would be to split the data stream every N bytes, though
+One way to chunk data would be to split the data stream every N bytes, this works in some cases, but
 you will find your data is not deduplicated when similar, but offset data streams are chunked. The
 chunks will often not match up as data insertion/removal quickly desynchronizes the chunk streams.
+A good example of this problem is inserting a file into the middle of a tarball. No deduplication
+will occur after that file, as the data streams have been shifted by an offset.
 
 To avoid this problem we need to find a way to resync the chunk streams when they diverge from eachother,
-one way to do this is via content defined chunking.
-
+but then reconverge. One way to do this is via content defined chunking.
 The most intuitive way to think about content defined chunking is splitting a tarball into a chunk
-representing every file, this means storing the same in multiple tarballs will only ever be stored in the repository once.
-This is one form of content defined chunking, though not the only one.
+representing every file, this means storing the same file in multiple tarballs will only ever be stored in the
+repository once.
 
-Another way to do content defined chunking might be to split ever time you see the byte 0xff in your data stream.
-Your chunks streams will always resync on the 0xff byte after diverging, but relies on your data containing 0xff in
-appropriate evently spaced places. What we really want is a way to pseudorandomly
+Another way to do content defined chunking might be to split every time you see the sequence 0xffff in your data stream.
+Your chunks streams will always resync on the 0xffff byte after diverging, but relies on your data containing 0xffff in
+ evenly spaced places. What we really want is a way to pseudorandomly
 detect good split points, so the chunking does not really depend on byte values within the chunk. Luckily we have such 
 functions, they are called hash functions. If we split a chunk whenever the hash of the last N bytes is 0xff, we might
 get a good enough pseudorandom set of chunks, which also resynchronize with mostly similar data.
 
 So what does archivist use? Archivist uses a combination of tar splitting and content defined chunking when uploading a
-directory directly, and purely content defined chunking with a hash function when uploading arbitrary data.
+directory directly, and purely content defined chunking with a hash function when chunking arbitrary data.
 
 It should be noted the chunking algorithms can be changed and mixed at any time and will 
 not affect the archivist repository or reading data streams back.
 
 ## Chunk formats
 
-TODO... Describe the exact byte layout of the 2 chunk types.
+Chunks in the database are one of the following types, in general we know the type of a chunk
+based on the item metadata and the hash tree height.
+
+### Encrypted data chunk
+
+These chunks form the roots of our hash trees, they contain encrypted data. They contain
+a key exchange packet, with enough information for the master key to derive the epemeral key.
+
+```
+KEY_EXCHANGE_PACKET1_BYTES[PACKET1_SZ] || ENCRYPTED_BYTES[...]
+```
+
+After decryption, the chunk is optionally compressed, so is either compressed data, or data with a null footer byte.
+
+```
+COMPRESSED_DATA[...] || DECOMPRESSED_SIZE[4] || COMPRESSION_FLAGS[1]
+```
+
+or 
+
+```
+DATA[...] || 0x00
+```
+
+Valid compression flags are:
+
+- 1 << 0 == zstd compression.
+
+### Hash tree node chunk
+
+These chunks form non leaf nodes in our hash tree, and consist of an array of addresses.
+
+```
+ADDRESS[ADDRESS_SZ]
+ADDRESS[ADDRESS_SZ]
+ADDRESS[ADDRESS_SZ]
+ADDRESS[ADDRESS_SZ]
+...
+```
+
+These addresses must be recursively followed to read our data chunks, these addresses correspond
+to data chunks when the tree height is 0.
 
 ## Key files
 
@@ -207,18 +251,25 @@ keeping the decryption key offline. It does this by having three distinct (but o
 ### Master key
 
 A key capable of encrypting/decrypting chunk data, encrypting/decrypting metdata. A master
-key can be used in any role, but can also be kept in offline storage.
+key can be used in any role.
+
+For the secure backup use case, we often want to store the master decryption key offline where it 
+cannot be stolen.
 
 ### Metadata key
 
-A key derived from a master key only capable of reading/writing metadata. These keys are primarily used
-for things like automated backup rotation without 
+A key derived from a master key, but only capable of reading/writing metadata. These keys are primarily used
+for things like automated backup rotation without exposing the contents of our backups. This key can
+be used to execute queries or alter metadata.
 
 ### Send key
 
-A send key is always derived and is capable of only encrypting chunk data and encrypting metdata. 
+A send key is derived from a master key and is only capable of encryption. 
 Any data encrypted with a send key can only be decrypted by a master key.
 Metadata encrypted by a send key can be decrypted by a metadata key and a master key.
+
+The most common use for send keys is to perform one way, append only backups to a remote host or external drive
+without exposing our sensitive master key to attackers.
 
 ### Key disk format
 
@@ -290,7 +341,7 @@ Archivist uses ssh forced commands to enforce permissions on a per ssh key basis
 The `archivist serve` command and be passed flags --allow-add, --allow-edit, --allow-gc, --allow-read 
 to control what actions an ssh key can perform.
 
-As an example, a send key, sending data to a repository where the --allow-add option has been set, means
+As an example, a send key, sending data to a repository, where the --allow-add option has been set, means
 only new backups can be made, and none can be deleted.
 
 ## Send logging
@@ -307,8 +358,8 @@ to override the send log path when they with to optimize cache invalidation.
 ## Stat caching
 
 When storing directories as tarballs in the repository, archivist attempts to avoid rereading the contents
-of files on disk when contructing the tarball hash tree.
-It accompishes this by maintaining a stat cache, which is a lookup table of absolute path and stat information 
+of files on disk when constructing the tarball hash tree.
+archivist accompishes this by maintaining a stat cache, which is a lookup table of absolute path and stat information 
 to a list of HMAC addresses representing the chunked tarball contents for that simple file.
 On cache hit archivist is able to skip sending a tar header, or file contents, instead directly adding those chunk addresses
 to the hash tree that is being written.
@@ -321,12 +372,8 @@ to override the stat cache path when they with to optimize cache invalidation.
 All repository search and query is performed via a small query language. The query language performs
 filtering on item metadata based on a simply grammar.
 
-example query:
-```
-archivist list date=2018/* and hostname=mypc
-```
-
-The question then arises, if all metadata is encrypted, how does search work?  The answer is that we are able to sync the encrypted ItemLogOp ledger to the client machine, and perform search and decryption there.
+The question then arises, if all metadata is encrypted, how does search work?  The answer is that we are able to sync the encrypted ItemLogOp ledger to the client machine, and perform search and decryption client side without exposing our metadata key to
+the repository owner.
 
 By default the synced query cache resides at `$HOME/.cache/archivist/query-cache.sqlite3`. But users are given the ability
 to override the query cache path when they with to optimize cache invalidation.
@@ -334,5 +381,5 @@ to override the query cache path when they with to optimize cache invalidation.
 ## Forward secrecy
 
 When encrypting data chunks, archivist uses an ephemeral key, that only the master key can recover. This ephemeral
-key is deleted by a send client on 'put' completion, so a client cannot decrypt historic data. This protects users
-from compromised malicious clients that wish to read historic backups from a repository stored on the same computer.
+key is deleted by a send client on completion, so a client cannot decrypt historic data. This protects users
+from compromised malicious clients that wish to read historic backups, and thus preventing 'undeletion' of sensitive deleted.
