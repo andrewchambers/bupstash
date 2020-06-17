@@ -157,11 +157,11 @@ they automatically share structure saving space.
 
 This addressing and encryption scheme has some important properties:
 
-- The storage server *cannot* guess chunk contents as the HMAC key is unknown.
-- The storage server *cannot* decrypt leaves of the hash tree, as they are encrypted.
-- The storage server *can* iterate the hash tree for garbage collection purposes.
-- The storage server *can* run garbage collection without retrieving the leaf nodes from cold storage.
-- The storage server *can* push stream a hash tree to a client with no network round trips.
+- The repository owner *cannot* guess chunk contents as the HMAC key is unknown.
+- The repository owner *cannot* decrypt leaves of the hash tree, as they are encrypted.
+- The repository owner *can* iterate the hash tree for garbage collection purposes.
+- The repository owner *can* run garbage collection without retrieving the leaf nodes from cold storage.
+- The repository owner *can* push stream a hash tree to a client with no network round trips.
 
 These properties are desirable for enabling high performance garbage collection and data streaming
 with prefetch, that many other backup tools are missing.
