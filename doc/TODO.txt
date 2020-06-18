@@ -5,3 +5,7 @@ We should use libsodium and optimise our usage authentication to prevent excessi
 hashing.
 
 Design a storage engine plugin protocol/interface.
+
+Remove dependency on codemap? We should be able to have a small simple version.
+
+Querying tags is allowed to span multiple cli args, but setting them is not, this seems inconsistent.

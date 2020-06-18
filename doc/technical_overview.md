@@ -42,9 +42,10 @@ $ shred master.key
 $ pgdump ... |  archivist put date=$(date +%Y/%m/%d) name=db.sql --file - -k ./send.key
 
 # We can only list/rm with the metadata key, not decrypt or put.
-$ archivist list -k ./metadata.key
+$ archivist list --format=jsonl -k ./metadata.key
+{"id":"2","date":"2020/06/17","name":"db.dql"}
+{"id":"3","date":"2020/06/17","name":"db.dql"}
 ```
-
 
 N.B. The cli interface will almost certainly change in the future.
 
