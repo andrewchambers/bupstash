@@ -1,5 +1,6 @@
 use super::address::*;
 use super::chunk_storage;
+use super::local_chunk_storage;
 
 use super::fsutil;
 use super::hex;
@@ -246,7 +247,7 @@ impl Repo {
                 data_dir.push("data");
                 // XXX fixme, how many workers do we want?
                 // configurable?
-                Box::new(chunk_storage::LocalStorage::new(&data_dir, 4))
+                Box::new(local_chunk_storage::LocalStorage::new(&data_dir, 4))
             }
         };
 
@@ -334,7 +335,7 @@ impl Repo {
         // deleting any chunks.
         tx.commit()?;
 
-        let stats = storage_engine.gc(&|addr| reachable.contains(&addr))?;
+        let stats = storage_engine.gc(reachable)?;
         Ok(stats)
     }
 }

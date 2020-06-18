@@ -23,10 +23,10 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
+pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<Identify, failure::Error> {
     match read_packet(r)? {
-        Packet::ServerInfo(info) => {
-            if info.protocol != "0" {
+        Packet::Identify(info) => {
+            if info.protocol != "repo-0" {
                 failure::bail!("remote protocol version mismatch");
             };
             Ok(info)

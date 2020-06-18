@@ -7,9 +7,9 @@ use std::convert::TryInto;
 const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct ServerInfo {
+pub struct Identify {
     pub protocol: String,
-    pub repo_id: String,
+    pub ident: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -57,7 +57,7 @@ pub struct AckItemSync {
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
-    ServerInfo(ServerInfo),
+    Identify(Identify),
     BeginSend(BeginSend),
     AckSend(AckSend),
     Chunk(Chunk),
@@ -70,10 +70,12 @@ pub enum Packet {
     RequestItemSync(RequestItemSync),
     AckItemSync(AckItemSync),
     SyncLogOps(Vec<(i64, itemset::LogOp)>),
+    RequestChunk(Address),
+    AckRequestChunk(Vec<u8>),
     EndOfTransmission,
 }
 
-const PACKET_KIND_SERVER_INFO: u8 = 0;
+const PACKET_KIND_IDENTIFY: u8 = 0;
 const PACKET_KIND_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_ACK_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
@@ -86,11 +88,13 @@ const PACKET_KIND_GC_COMPLETE: u8 = 9;
 const PACKET_KIND_REQUEST_ITEM_SYNC: u8 = 10;
 const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
-const PACKET_KIND_END_OF_TRANSMISSION: u8 = 13;
+const PACKET_KIND_REQUEST_CHUNK: u8 = 13;
+const PACKET_KIND_ACK_REQUEST_CHUNK: u8 = 14;
+const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
-        failure::bail!("repository disconnected");
+        failure::bail!("remote disconnected");
     };
     Ok(())
 }
@@ -117,7 +121,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
     };
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(bincode::deserialize(&buf)?),
+        PACKET_KIND_IDENTIFY => Packet::Identify(bincode::deserialize(&buf)?),
         PACKET_KIND_BEGIN_SEND => Packet::BeginSend(bincode::deserialize(&buf)?),
         PACKET_KIND_ACK_SEND => Packet::AckSend(bincode::deserialize(&buf)?),
         PACKET_KIND_CHUNK => {
@@ -140,6 +144,8 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(bincode::deserialize(&buf)?),
         PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(bincode::deserialize(&buf)?),
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
+        PACKET_KIND_REQUEST_CHUNK => Packet::RequestChunk(bincode::deserialize(&buf)?),
+        PACKET_KIND_ACK_REQUEST_CHUNK => Packet::AckRequestChunk(buf),
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
@@ -168,9 +174,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.data)?;
             w.write_all(&v.address.bytes)?;
         }
-        Packet::ServerInfo(ref v) => {
+        Packet::Identify(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_IDENTIFY, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::BeginSend(ref v) => {
@@ -228,6 +234,15 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
+        Packet::RequestChunk(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_REQUEST_CHUNK, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::AckRequestChunk(ref v) => {
+            send_hdr(w, PACKET_KIND_ACK_REQUEST_CHUNK, v.len().try_into()?)?;
+            w.write_all(&v)?;
+        }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
         }
@@ -245,8 +260,8 @@ mod tests {
     #[test]
     fn send_recv() {
         let packets = vec![
-            Packet::ServerInfo(ServerInfo {
-                repo_id: "abc".to_string(),
+            Packet::Identify(Identify {
+                ident: "abc".to_string(),
                 protocol: "foobar".to_owned(),
             }),
             Packet::BeginSend(BeginSend {}),
@@ -301,6 +316,8 @@ mod tests {
                 gc_generation: "123".to_owned(),
             }),
             Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
+            Packet::RequestChunk(Address::default()),
+            Packet::AckRequestChunk(vec![1, 2, 3]),
             Packet::EndOfTransmission,
         ];
 

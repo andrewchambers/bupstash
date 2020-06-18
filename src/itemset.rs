@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ItemMetadata {
-    // XXX TODO FIXME, all unencrypted metadata 
+    // XXX TODO FIXME, all unencrypted metadata
     // could be bound to the address via some sort of authentication code.
     pub tree_height: usize,
     pub master_key_id: [u8; keys::KEYID_SZ],
