@@ -85,12 +85,14 @@ impl ExternalStorage {
                                     Ok(protocol::Packet::AckRequestChunk(data)) => {
                                         let _ = tx.send(Ok(data));
                                     }
-                                    Ok(_) => tx
-                                        .send(Err(failure::format_err!(
+                                    Ok(_) => {
+                                        let _ = tx.send(Err(failure::format_err!(
                                             "storage engine protocol error"
-                                        )))
-                                        .unwrap(),
-                                    Err(err) => tx.send(Err(err.into())).unwrap(),
+                                        )));
+                                    }
+                                    Err(err) => {
+                                        let _ = tx.send(Err(err.into()));
+                                    }
                                 }
                             }
                             Ok(WorkerMsg::AddChunk((addr, buf))) => {
