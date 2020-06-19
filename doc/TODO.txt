@@ -1,11 +1,27 @@
+External storage garbage collection.
 
-The write log could to reference/multiplex on the repository id if we want to allow multiple repos.
+We should use libsodium and optimise our authentication to prevent excessive hashing. Rework how crypto/keys work to be more efficient.
 
-We should use libsodium and optimise our usage authentication to prevent excessive 
-hashing.
+Finalize external storage engine parameters. ident -> path ?
 
-Design a storage engine plugin protocol/interface.
+Shift storage engine spec out of sqlite database for easier editing.
 
 Remove dependency on codemap? We should be able to have a small simple version.
 
 Querying tags is allowed to span multiple cli args, but setting them is not, this seems inconsistent.
+
+In storage backends, way to avoid starting unused worker threads?
+
+repository and cache vacuuming.
+
+rename .db file to .sqlite3 ?
+
+think of different name.
+
+Reconsider if we always want a write log, or if it should be optional.
+
+A way to truly disable the write log and stat cache?
+
+Rename send -> put ?
+
+Finalize send/put cli syntax. stdin/file/command output.
