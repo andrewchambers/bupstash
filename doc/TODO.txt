@@ -25,3 +25,7 @@ A way to truly disable the write log and stat cache?
 Rename send -> put ?
 
 Finalize send/put cli syntax. stdin/file/command output.
+
+Post quantum crypto.
+
+Ways to tune chunking algorithm. Fixed size/others? Min size/max size?
