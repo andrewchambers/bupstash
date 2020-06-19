@@ -92,7 +92,7 @@ impl Key {
 
         let pem_data = pem::encode(&pem::Pem {
             tag: String::from(pem_tag(self)),
-            contents: bincode::serialize(self)?,
+            contents: bincode::config().big_endian().serialize(self)?,
         });
 
         f.write_all(pem_data.as_bytes())
@@ -109,7 +109,9 @@ impl Key {
         let mut pem_data = Vec::new();
         f.read_to_end(&mut pem_data)?;
         let pem_data = pem::parse(pem_data)?;
-        let k: Key = bincode::deserialize(&pem_data.contents)?;
+        let k: Key = bincode::config()
+            .big_endian()
+            .deserialize(&pem_data.contents)?;
         if pem_tag(&k) != pem_data.tag {
             failure::bail!("key type does not match pem tag")
         }

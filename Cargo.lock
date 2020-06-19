@@ -32,6 +32,7 @@ dependencies = [
  "fs2",
  "getopts",
  "glob",
+ "lazy_static",
  "libc",
  "path-clean",
  "pem",

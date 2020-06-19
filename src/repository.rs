@@ -1,12 +1,12 @@
 use super::address::*;
 use super::chunk_storage;
-use super::local_chunk_storage;
-
+use super::external_chunk_storage;
 use super::fsutil;
 use super::hex;
 use super::htree;
 use super::hydrogen;
 use super::itemset;
+use super::local_chunk_storage;
 use failure::Fail;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,7 @@ pub enum RepoError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
     Local,
+    External { socket_path: String, ident: String },
 }
 
 #[derive(Clone)]
@@ -248,6 +249,15 @@ impl Repo {
                 // XXX fixme, how many workers do we want?
                 // configurable?
                 Box::new(local_chunk_storage::LocalStorage::new(&data_dir, 4))
+            }
+
+            StorageEngineSpec::External { socket_path, ident } => {
+                let socket_path = PathBuf::from(socket_path);
+                Box::new(external_chunk_storage::ExternalStorage::new(
+                    &socket_path,
+                    ident,
+                    4,
+                )?)
             }
         };
 

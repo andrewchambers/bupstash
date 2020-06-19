@@ -3,6 +3,8 @@ use super::chunk_storage::Engine;
 use super::fsutil;
 use super::repository;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 enum WorkerMsg {
     AddChunk((Address, Vec<u8>)),
@@ -17,6 +19,7 @@ enum WorkerMsg {
 }
 
 pub struct LocalStorage {
+    had_io_error: Arc<AtomicBool>,
     data_dir: PathBuf,
     worker_handles: Vec<std::thread::JoinHandle<()>>,
     dispatch: crossbeam::channel::Sender<WorkerMsg>,
@@ -26,10 +29,10 @@ pub struct LocalStorage {
 impl Drop for LocalStorage {
     fn drop(&mut self) {
         for _i in 0..self.worker_handles.len() {
-            self.dispatch.send(WorkerMsg::Exit).unwrap();
+            let _ = self.dispatch.send(WorkerMsg::Exit);
         }
         for h in self.worker_handles.drain(..) {
-            h.join().unwrap();
+            let _ = h.join();
         }
     }
 }
@@ -39,28 +42,29 @@ impl LocalStorage {
         if nworkers == 0 {
             nworkers = 1
         }
-        let mut worker_handles = Vec::new();
 
+        let mut worker_handles = Vec::new();
+        let had_io_error = Arc::new(AtomicBool::new(false));
         let (dispatch, rx) = crossbeam::channel::bounded(0);
         let (ack_barrier, rendezvous) = crossbeam::channel::bounded(0);
 
         for _i in 0..nworkers {
             // Quite a small stack for these workers.
             let builder = std::thread::Builder::new().stack_size(256 * 1024);
-            let mut worker_data_dir = path.to_path_buf();
-
-            let worker_rx = rx.clone();
-            let worker_ack_barrier = ack_barrier.clone();
+            let mut data_dir = path.to_path_buf();
+            let had_io_error = had_io_error.clone();
+            let rx = rx.clone();
+            let ack_barrier = ack_barrier.clone();
 
             let worker = builder
                 .spawn(move || {
                     let mut write_err: Option<failure::Error> = None;
                     loop {
-                        match worker_rx.recv() {
+                        match rx.recv() {
                             Ok(WorkerMsg::GetChunk((addr, tx))) => {
-                                worker_data_dir.push(addr.as_hex_addr().as_str());
-                                let result = std::fs::read(worker_data_dir.as_path());
-                                worker_data_dir.pop();
+                                data_dir.push(addr.as_hex_addr().as_str());
+                                let result = std::fs::read(data_dir.as_path());
+                                data_dir.pop();
                                 let result = match result {
                                     Ok(data) => Ok(data),
                                     Err(err) => Err(err.into()),
@@ -68,14 +72,15 @@ impl LocalStorage {
                                 let _ = tx.send(result);
                             }
                             Ok(WorkerMsg::AddChunk((addr, buf))) => {
-                                worker_data_dir.push(addr.as_hex_addr().as_str());
-                                let result = if !worker_data_dir.exists() {
-                                    fsutil::atomic_add_file(worker_data_dir.as_path(), &buf)
+                                data_dir.push(addr.as_hex_addr().as_str());
+                                let result = if !data_dir.exists() {
+                                    fsutil::atomic_add_file(data_dir.as_path(), &buf)
                                 } else {
                                     Ok(())
                                 };
-                                worker_data_dir.pop();
+                                data_dir.pop();
                                 if let Err(err) = result {
+                                    had_io_error.store(true, Ordering::SeqCst);
                                     if write_err.is_none() {
                                         write_err = Some(err.into());
                                     }
@@ -84,12 +89,11 @@ impl LocalStorage {
                             Ok(WorkerMsg::Barrier) => {
                                 let mut err = None;
                                 std::mem::swap(&mut write_err, &mut err);
-                                worker_ack_barrier.send(err).unwrap();
+                                ack_barrier.send(err).unwrap();
                             }
-                            Ok(WorkerMsg::Exit) => {
+                            Ok(WorkerMsg::Exit) | Err(_) => {
                                 return;
                             }
-                            Err(_) => return,
                         }
                     }
                 })
@@ -102,6 +106,38 @@ impl LocalStorage {
             worker_handles,
             dispatch,
             rendezvous,
+            had_io_error,
+        }
+    }
+
+    fn sync_workers(&mut self) -> Result<(), failure::Error> {
+        for _i in 0..self.worker_handles.len() {
+            self.dispatch.send(WorkerMsg::Barrier).unwrap();
+        }
+        let mut write_error: Option<failure::Error> = None;
+        for _i in 0..self.worker_handles.len() {
+            if let Some(err) = self.rendezvous.recv().unwrap() {
+                if write_error.is_none() {
+                    write_error = Some(err)
+                }
+            }
+        }
+        // fsync regardless
+        fsutil::sync_dir(&self.data_dir)?;
+        if let Some(err) = write_error {
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn check_worker_io_errors(&mut self) -> Result<(), failure::Error> {
+        if self.had_io_error.load(Ordering::SeqCst) {
+            match self.sync_workers() {
+                Ok(()) => Err(failure::format_err!("io error")),
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(())
         }
     }
 
@@ -125,6 +161,8 @@ impl LocalStorage {
 
 impl Engine for LocalStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+        // Abort upload early on any io errors.
+        self.check_worker_io_errors()?;
         self.dispatch
             .send(WorkerMsg::AddChunk((*addr, buf)))
             .unwrap();
@@ -179,25 +217,7 @@ impl Engine for LocalStorage {
     }
 
     fn sync(&mut self) -> Result<(), failure::Error> {
-        for _i in 0..self.worker_handles.len() {
-            self.dispatch.send(WorkerMsg::Barrier).unwrap();
-        }
-        let mut write_error: Option<failure::Error> = None;
-        for _i in 0..self.worker_handles.len() {
-            if let Some(err) = self.rendezvous.recv().unwrap() {
-                if write_error.is_none() {
-                    write_error = Some(err)
-                }
-            }
-        }
-
-        // Sync regardless
-        fsutil::sync_dir(&self.data_dir)?;
-
-        if let Some(err) = write_error {
-            return Err(err);
-        }
-        Ok(())
+        self.sync_workers()
     }
 }
 

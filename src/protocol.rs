@@ -72,6 +72,8 @@ pub enum Packet {
     SyncLogOps(Vec<(i64, itemset::LogOp)>),
     RequestChunk(Address),
     AckRequestChunk(Vec<u8>),
+    WriteBarrier,
+    AckWriteBarrier,
     EndOfTransmission,
 }
 
@@ -90,7 +92,13 @@ const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
 const PACKET_KIND_REQUEST_CHUNK: u8 = 13;
 const PACKET_KIND_ACK_REQUEST_CHUNK: u8 = 14;
+const PACKET_KIND_WRITE_BARRIER: u8 = 15;
+const PACKET_KIND_ACK_WRITE_BARRIER: u8 = 16;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
+
+lazy_static::lazy_static! {
+    static ref BINCODE_CFG: bincode::Config = bincode::config().big_endian().clone();
+}
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -113,39 +121,47 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
 
     let kind = hdr[4];
 
+    /* special case chunks, bypass serde */
+    if kind == PACKET_KIND_CHUNK {
+        if sz < ADDRESS_SZ {
+            failure::bail!("protocol error, chunk smaller than address");
+        }
+
+        let mut address = Address { bytes: [0; 32] };
+        read_from_remote(r, &mut address.bytes[..])?;
+        let sz = sz - ADDRESS_SZ;
+        let mut data: Vec<u8> = Vec::with_capacity(sz);
+        unsafe {
+            data.set_len(sz);
+        };
+
+        read_from_remote(r, &mut data)?;
+        return Ok(Packet::Chunk(Chunk { address, data }));
+    }
+
     let mut buf: Vec<u8> = Vec::with_capacity(sz);
-    // We just created buf with capacity sz and u8 is a primitive type.
-    // This means we don't need to write the buffer memory twice.
     unsafe {
         buf.set_len(sz);
     };
+
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_IDENTIFY => Packet::Identify(bincode::deserialize(&buf)?),
-        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_ACK_SEND => Packet::AckSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_CHUNK => {
-            if buf.len() < ADDRESS_SZ {
-                failure::bail!("protocol error, chunk smaller than address");
-            }
-
-            let mut address = Address { bytes: [0; 32] };
-
-            address.bytes[..].clone_from_slice(&buf[buf.len() - ADDRESS_SZ..]);
-            buf.truncate(buf.len() - ADDRESS_SZ);
-            Packet::Chunk(Chunk { address, data: buf })
-        }
-        PACKET_KIND_LOG_OP => Packet::LogOp(bincode::deserialize(&buf)?),
-        PACKET_KIND_ACK_LOG_OP => Packet::AckLogOp(bincode::deserialize(&buf)?),
-        PACKET_KIND_REQUEST_DATA => Packet::RequestData(bincode::deserialize(&buf)?),
-        PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(bincode::deserialize(&buf)?),
-        PACKET_KIND_START_GC => Packet::StartGC(bincode::deserialize(&buf)?),
-        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(bincode::deserialize(&buf)?),
-        PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(bincode::deserialize(&buf)?),
-        PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(bincode::deserialize(&buf)?),
-        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
-        PACKET_KIND_REQUEST_CHUNK => Packet::RequestChunk(bincode::deserialize(&buf)?),
+        PACKET_KIND_IDENTIFY => Packet::Identify(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_ACK_SEND => Packet::AckSend(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_LOG_OP => Packet::LogOp(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_ACK_LOG_OP => Packet::AckLogOp(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_REQUEST_DATA => Packet::RequestData(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_START_GC => Packet::StartGC(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_REQUEST_CHUNK => Packet::RequestChunk(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_ACK_REQUEST_CHUNK => Packet::AckRequestChunk(buf),
+        PACKET_KIND_WRITE_BARRIER => Packet::WriteBarrier,
+        PACKET_KIND_ACK_WRITE_BARRIER => Packet::AckWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
@@ -171,77 +187,83 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
                 PACKET_KIND_CHUNK,
                 (v.data.len() + ADDRESS_SZ).try_into()?,
             )?;
-            w.write_all(&v.data)?;
             w.write_all(&v.address.bytes)?;
+            w.write_all(&v.data)?;
         }
         Packet::Identify(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_IDENTIFY, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::BeginSend(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::AckSend(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::LogOp(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::AckLogOp(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RequestData(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::AckRequestData(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::StartGC(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_START_GC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::GCComplete(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RequestItemSync(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::AckItemSync(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_ACK_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::SyncLogOps(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RequestChunk(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = BINCODE_CFG.serialize(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_CHUNK, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::AckRequestChunk(ref v) => {
             send_hdr(w, PACKET_KIND_ACK_REQUEST_CHUNK, v.len().try_into()?)?;
             w.write_all(&v)?;
+        }
+        Packet::WriteBarrier => {
+            send_hdr(w, PACKET_KIND_WRITE_BARRIER, 0)?;
+        }
+        Packet::AckWriteBarrier => {
+            send_hdr(w, PACKET_KIND_ACK_WRITE_BARRIER, 0)?;
         }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
@@ -318,6 +340,8 @@ mod tests {
             Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
             Packet::RequestChunk(Address::default()),
             Packet::AckRequestChunk(vec![1, 2, 3]),
+            Packet::WriteBarrier,
+            Packet::AckWriteBarrier,
             Packet::EndOfTransmission,
         ];
 
