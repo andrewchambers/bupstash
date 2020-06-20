@@ -31,7 +31,7 @@ pub enum RepoError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
     Local,
-    External { socket_path: String, ident: String },
+    External { socket_path: String, path: String },
 }
 
 #[derive(Clone)]
@@ -252,11 +252,11 @@ impl Repo {
                 Box::new(local_chunk_storage::LocalStorage::new(&data_dir, 4))
             }
 
-            StorageEngineSpec::External { socket_path, ident } => {
+            StorageEngineSpec::External { socket_path, path } => {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
-                    ident,
+                    path,
                     4,
                 )?)
             }

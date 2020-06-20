@@ -39,7 +39,7 @@ impl Drop for ExternalStorage {
 impl ExternalStorage {
     pub fn new(
         socket_path: &std::path::Path,
-        ident: String,
+        path: String,
         mut nworkers: usize,
     ) -> Result<Self, failure::Error> {
         if nworkers == 0 {
@@ -62,9 +62,9 @@ impl ExternalStorage {
 
             protocol::write_packet(
                 &mut sock,
-                &protocol::Packet::Identify(protocol::Identify {
+                &protocol::Packet::StorageConnect(protocol::StorageConnect {
                     protocol: "storage-0".to_string(),
-                    ident: ident.clone(),
+                    path: path.clone(),
                 }),
             )?;
 

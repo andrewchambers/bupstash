@@ -19,8 +19,8 @@ pub fn serve(
     let mut repo = repository::Repo::open(&cfg.repo_path)?;
     write_packet(
         w,
-        &Packet::Identify(Identify {
-            ident: repo.id()?,
+        &Packet::ServerInfo(ServerInfo {
+            repo_id: repo.id()?,
             protocol: "repo-0".to_string(),
         }),
     )?;

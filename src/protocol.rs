@@ -7,9 +7,9 @@ use std::convert::TryInto;
 const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct Identify {
+pub struct ServerInfo {
     pub protocol: String,
-    pub ident: String,
+    pub repo_id: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -55,9 +55,15 @@ pub struct AckItemSync {
     pub gc_generation: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct StorageConnect {
+    pub protocol: String,
+    pub path: String,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Packet {
-    Identify(Identify),
+    ServerInfo(ServerInfo),
     BeginSend(BeginSend),
     AckSend(AckSend),
     Chunk(Chunk),
@@ -74,10 +80,11 @@ pub enum Packet {
     AckRequestChunk(Vec<u8>),
     WriteBarrier,
     AckWriteBarrier,
+    StorageConnect(StorageConnect),
     EndOfTransmission,
 }
 
-const PACKET_KIND_IDENTIFY: u8 = 0;
+const PACKET_KIND_SERVER_INFO: u8 = 0;
 const PACKET_KIND_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_ACK_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
@@ -94,6 +101,7 @@ const PACKET_KIND_REQUEST_CHUNK: u8 = 13;
 const PACKET_KIND_ACK_REQUEST_CHUNK: u8 = 14;
 const PACKET_KIND_WRITE_BARRIER: u8 = 15;
 const PACKET_KIND_ACK_WRITE_BARRIER: u8 = 16;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 17;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 lazy_static::lazy_static! {
@@ -146,7 +154,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
 
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_IDENTIFY => Packet::Identify(BINCODE_CFG.deserialize(&buf)?),
+        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_BEGIN_SEND => Packet::BeginSend(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_ACK_SEND => Packet::AckSend(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_LOG_OP => Packet::LogOp(BINCODE_CFG.deserialize(&buf)?),
@@ -160,6 +168,7 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_REQUEST_CHUNK => Packet::RequestChunk(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_ACK_REQUEST_CHUNK => Packet::AckRequestChunk(buf),
+        PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(BINCODE_CFG.deserialize(&buf)?),
         PACKET_KIND_WRITE_BARRIER => Packet::WriteBarrier,
         PACKET_KIND_ACK_WRITE_BARRIER => Packet::AckWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
@@ -190,9 +199,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.address.bytes)?;
             w.write_all(&v.data)?;
         }
-        Packet::Identify(ref v) => {
+        Packet::ServerInfo(ref v) => {
             let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_IDENTIFY, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::BeginSend(ref v) => {
@@ -259,6 +268,11 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_ACK_REQUEST_CHUNK, v.len().try_into()?)?;
             w.write_all(&v)?;
         }
+        Packet::StorageConnect(ref v) => {
+            let b = BINCODE_CFG.serialize(&v)?;
+            send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
         Packet::WriteBarrier => {
             send_hdr(w, PACKET_KIND_WRITE_BARRIER, 0)?;
         }
@@ -282,8 +296,8 @@ mod tests {
     #[test]
     fn send_recv() {
         let packets = vec![
-            Packet::Identify(Identify {
-                ident: "abc".to_string(),
+            Packet::ServerInfo(ServerInfo {
+                repo_id: "abc".to_string(),
                 protocol: "foobar".to_owned(),
             }),
             Packet::BeginSend(BeginSend {}),
@@ -340,6 +354,10 @@ mod tests {
             Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
             Packet::RequestChunk(Address::default()),
             Packet::AckRequestChunk(vec![1, 2, 3]),
+            Packet::StorageConnect(StorageConnect {
+                protocol: "foobar".to_owned(),
+                path: "abc".to_string(),
+            }),
             Packet::WriteBarrier,
             Packet::AckWriteBarrier,
             Packet::EndOfTransmission,

@@ -1,8 +1,6 @@
 External storage garbage collection.
 
-We should use libsodium and optimise our authentication to prevent excessive hashing. Rework how crypto/keys work to be more efficient.
-
-Finalize external storage engine parameters. ident -> path ?
+We should use libsodium and optimise our authentication to prevent excessive hashing (We already authenticate data via hmac, we don't need authentication of data, only metadata.). Rework how crypto/keys work to be more efficient.
 
 Shift storage engine spec out of sqlite database for easier editing.
 
@@ -29,3 +27,7 @@ Finalize send/put cli syntax. stdin/file/command output.
 Post quantum crypto.
 
 Ways to tune chunking algorithm. Fixed size/others? Min size/max size?
+
+ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com/archivist serve"
+
+Little endian for bincode? seems less pain to just use the bincode default.
