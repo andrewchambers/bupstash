@@ -19,6 +19,9 @@ enum WorkerMsg {
 }
 
 pub struct ExternalStorage {
+    socket_path: std::path::PathBuf,
+    // Perhaps a misnomer, but 'path' can be anything the backend wants.
+    path: String,
     had_io_error: Arc<AtomicBool>,
     worker_handles: Vec<std::thread::JoinHandle<()>>,
     dispatch: crossbeam::channel::Sender<WorkerMsg>,
@@ -34,6 +37,21 @@ impl Drop for ExternalStorage {
             let _ = h.join();
         }
     }
+}
+
+fn socket_connect(
+    socket_path: &std::path::Path,
+    path: &String,
+) -> Result<UnixStream, failure::Error> {
+    let mut sock = UnixStream::connect(socket_path)?;
+    protocol::write_packet(
+        &mut sock,
+        &protocol::Packet::StorageConnect(protocol::StorageConnect {
+            protocol: "storage-0".to_string(),
+            path: path.clone(),
+        }),
+    )?;
+    Ok(sock)
 }
 
 impl ExternalStorage {
@@ -58,15 +76,7 @@ impl ExternalStorage {
             let had_io_error = had_io_error.clone();
             let rx = rx.clone();
             let ack_barrier = ack_barrier.clone();
-            let mut sock = UnixStream::connect(socket_path)?;
-
-            protocol::write_packet(
-                &mut sock,
-                &protocol::Packet::StorageConnect(protocol::StorageConnect {
-                    protocol: "storage-0".to_string(),
-                    path: path.clone(),
-                }),
-            )?;
+            let mut sock = socket_connect(socket_path, &path)?;
 
             let worker = builder
                 .spawn(move || {
@@ -76,13 +86,16 @@ impl ExternalStorage {
                             Ok(WorkerMsg::GetChunk((addr, tx))) => {
                                 match protocol::write_packet(
                                     &mut sock,
-                                    &protocol::Packet::RequestChunk(addr),
+                                    &protocol::Packet::TRequestChunk(addr),
                                 ) {
                                     Ok(()) => (),
                                     Err(err) => tx.send(Err(err.into())).unwrap(),
                                 }
-                                match protocol::read_packet(&mut sock) {
-                                    Ok(protocol::Packet::AckRequestChunk(data)) => {
+                                match protocol::read_packet(
+                                    &mut sock,
+                                    protocol::DEFAULT_MAX_PACKET_SIZE,
+                                ) {
+                                    Ok(protocol::Packet::RRequestChunk(data)) => {
                                         let _ = tx.send(Ok(data));
                                     }
                                     Ok(_) => {
@@ -117,7 +130,7 @@ impl ExternalStorage {
 
                                 match protocol::write_packet(
                                     &mut sock,
-                                    &protocol::Packet::WriteBarrier,
+                                    &protocol::Packet::TStorageWriteBarrier,
                                 ) {
                                     Ok(()) => (),
                                     Err(err) => {
@@ -127,8 +140,11 @@ impl ExternalStorage {
                                     }
                                 }
 
-                                match protocol::read_packet(&mut sock) {
-                                    Ok(protocol::Packet::AckWriteBarrier) => (),
+                                match protocol::read_packet(
+                                    &mut sock,
+                                    protocol::DEFAULT_MAX_PACKET_SIZE,
+                                ) {
+                                    Ok(protocol::Packet::TStorageWriteBarrier) => (),
                                     Ok(_) => {
                                         if maybe_err.is_none() {
                                             maybe_err =
@@ -160,6 +176,8 @@ impl ExternalStorage {
         }
 
         Ok(ExternalStorage {
+            socket_path: socket_path.to_path_buf(),
+            path,
             had_io_error,
             worker_handles,
             dispatch,
@@ -200,17 +218,27 @@ impl ExternalStorage {
 impl Engine for ExternalStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         self.check_worker_io_errors()?;
-        self.dispatch
-            .send(WorkerMsg::AddChunk((*addr, buf)))
-            .unwrap();
+        self.dispatch.send(WorkerMsg::AddChunk((*addr, buf)))?;
         Ok(())
     }
 
     fn gc(
         &mut self,
-        _reachable: std::collections::HashSet<Address>,
+        reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error> {
-        failure::bail!("TODO");
+        let mut sock = socket_connect(&self.socket_path, &self.path)?;
+        protocol::write_packet(
+            &mut sock,
+            &protocol::Packet::TStorageGC(protocol::TStorageGC { reachable }),
+        )?;
+        match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+            Ok(protocol::Packet::RStorageGC(stats)) => {
+                let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
+                Ok(stats)
+            }
+            Ok(_) => failure::bail!("unexpected packet response"),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn get_chunk_async(

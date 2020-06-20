@@ -26,37 +26,37 @@ pub fn serve(
     )?;
 
     loop {
-        match read_packet(r)? {
-            Packet::BeginSend(_) => {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::TBeginSend(_) => {
                 if !cfg.allow_add {
                     failure::bail!("server has add writing data for this client")
                 }
                 recv(&mut repo, r, w)?;
             }
-            Packet::RequestData(req) => {
+            Packet::TRequestData(req) => {
                 if !cfg.allow_read {
                     failure::bail!("server has disabled reading data for this client")
                 }
                 send(&mut repo, req.id, w)?;
             }
-            Packet::StartGC(_) => {
+            Packet::TGc(_) => {
                 if !cfg.allow_gc {
                     failure::bail!("server has disabled garbage collection for this client")
                 }
                 gc(&mut repo, w)?;
             }
-            Packet::RequestItemSync(req) => {
+            Packet::TRequestItemSync(req) => {
                 if !cfg.allow_read {
                     failure::bail!("server has disabled query and search for this client")
                 }
                 item_sync(&mut repo, req.after, req.gc_generation, w)?;
             }
-            Packet::LogOp(op) => {
+            Packet::TLogOp(op) => {
                 if !cfg.allow_edit {
                     failure::bail!("server has disabled delete/edit for this client")
                 }
                 let id = repo.do_op(op)?;
-                write_packet(w, &Packet::AckLogOp(id))?;
+                write_packet(w, &Packet::RLogOp(id))?;
             }
             Packet::EndOfTransmission => break Ok(()),
             _ => failure::bail!("protocol error, unexpected packet kind"),
@@ -71,7 +71,7 @@ fn recv(
 ) -> Result<(), failure::Error> {
     write_packet(
         w,
-        &Packet::AckSend(AckSend {
+        &Packet::RBeginSend(RBeginSend {
             gc_generation: repo.gc_generation()?,
         }),
     )?;
@@ -79,16 +79,16 @@ fn recv(
     let mut store_engine = repo.storage_engine()?;
 
     loop {
-        match read_packet(r)? {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
                 store_engine.add_chunk(&chunk.address, chunk.data)?;
             }
-            Packet::LogOp(op) => {
+            Packet::TLogOp(op) => {
                 store_engine.sync()?;
                 match op {
                     itemset::LogOp::AddItem(_) => {
                         let id = repo.do_op(op)?;
-                        write_packet(w, &Packet::AckLogOp(id))?;
+                        write_packet(w, &Packet::RLogOp(id))?;
                     }
                     _ => failure::bail!("protocol error, expected add item log op"),
                 }
@@ -110,17 +110,14 @@ fn send(
         Some(metadata) => {
             write_packet(
                 w,
-                &Packet::AckRequestData(AckRequestData {
+                &Packet::RRequestData(RRequestData {
                     metadata: Some(metadata.clone()),
                 }),
             )?;
             metadata
         }
         None => {
-            write_packet(
-                w,
-                &Packet::AckRequestData(AckRequestData { metadata: None }),
-            )?;
+            write_packet(w, &Packet::RRequestData(RRequestData { metadata: None }))?;
             return Ok(());
         }
     };
@@ -189,7 +186,7 @@ fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), fai
     let stats = repo.gc();
     repo.alter_gc_lock_mode(repository::GCLockMode::Shared);
     let stats = stats?;
-    write_packet(w, &Packet::GCComplete(GCComplete { stats }))?;
+    write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())
 }
 
@@ -208,7 +205,7 @@ fn item_sync(
 
     write_packet(
         w,
-        &Packet::AckItemSync(AckItemSync {
+        &Packet::RRequestItemSync(RRequestItemSync {
             gc_generation: current_generation,
         }),
     )?;

@@ -24,7 +24,7 @@ pub enum ClientError {
 }
 
 pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
-    match read_packet(r)? {
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ServerInfo(info) => {
             if info.protocol != "repo-0" {
                 failure::bail!("remote protocol version mismatch");
@@ -85,10 +85,10 @@ pub fn send(
     let metadata_ctx = crypto::EncryptContext::metadata_context(&key);
     let data_ctx = crypto::EncryptContext::data_context(&key)?;
 
-    write_packet(w, &Packet::BeginSend(BeginSend {}))?;
+    write_packet(w, &Packet::TBeginSend(TBeginSend {}))?;
 
-    let gc_generation = match read_packet(r)? {
-        Packet::AckSend(ack) => ack.gc_generation,
+    let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RBeginSend(ack) => ack.gc_generation,
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
@@ -146,7 +146,7 @@ pub fn send(
 
     write_packet(
         filtered_conn.w,
-        &Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
+        &Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
             itemset::ItemMetadata {
                 tree_height,
                 address: tree_address,
@@ -158,8 +158,8 @@ pub fn send(
         ))),
     )?;
 
-    match read_packet(r)? {
-        Packet::AckLogOp(id) => {
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RLogOp(id) => {
             send_log_tx.commit()?;
             Ok(id)
         }
@@ -347,7 +347,7 @@ struct StreamVerifier<'a> {
 
 impl<'a> htree::Source for StreamVerifier<'a> {
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
-        match read_packet(self.r)? {
+        match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
                 if *addr != chunk.address {
                     return Err(ClientError::CorruptOrTamperedDataError.into());
@@ -366,10 +366,10 @@ pub fn request_data_stream(
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::RequestData(RequestData { id }))?;
+    write_packet(w, &Packet::TRequestData(TRequestData { id }))?;
 
-    let metadata = match read_packet(r)? {
-        Packet::AckRequestData(req) => match req.metadata {
+    let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RRequestData(req) => match req.metadata {
             Some(metadata) => metadata,
             None => failure::bail!("no stored items with the requested id"),
         },
@@ -411,9 +411,9 @@ pub fn gc(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<repository::GCStats, failure::Error> {
-    write_packet(w, &Packet::StartGC(StartGC {}))?;
-    let stats = match read_packet(r)? {
-        Packet::GCComplete(gccomplete) => gccomplete.stats,
+    write_packet(w, &Packet::TGc(TGc {}))?;
+    let stats = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RGc(rgc) => rgc.stats,
         _ => failure::bail!("protocol error, expected gc complete packet"),
     };
     Ok(stats)
@@ -431,21 +431,21 @@ pub fn sync(
 
     write_packet(
         w,
-        &Packet::RequestItemSync(RequestItemSync {
+        &Packet::TRequestItemSync(TRequestItemSync {
             after,
             gc_generation,
         }),
     )?;
 
-    let gc_generation = match read_packet(r)? {
-        Packet::AckItemSync(ack) => ack.gc_generation,
+    let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RRequestItemSync(ack) => ack.gc_generation,
         _ => failure::bail!("protocol error, expected items packet"),
     };
 
     tx.start_sync(gc_generation)?;
 
     loop {
-        match read_packet(r)? {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::SyncLogOps(ops) => {
                 if ops.is_empty() {
                     break;
@@ -467,9 +467,9 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::LogOp(itemset::LogOp::RemoveItems(ids)))?;
-    match read_packet(r)? {
-        Packet::AckLogOp(_) => {}
+    write_packet(w, &Packet::TLogOp(itemset::LogOp::RemoveItems(ids)))?;
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RLogOp(_) => {}
         _ => failure::bail!("protocol error, expected ack log op packet"),
     }
     Ok(())

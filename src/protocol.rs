@@ -4,7 +4,7 @@ use super::repository;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
-const MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
+pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ServerInfo {
@@ -19,39 +19,39 @@ pub struct Chunk {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct BeginSend {}
+pub struct TBeginSend {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct AckSend {
+pub struct RBeginSend {
     pub gc_generation: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RequestData {
+pub struct TRequestData {
     pub id: i64,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct AckRequestData {
+pub struct RRequestData {
     pub metadata: Option<itemset::VersionedItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct StartGC {}
+pub struct TGc {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct GCComplete {
+pub struct RGc {
     pub stats: repository::GCStats,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RequestItemSync {
+pub struct TRequestItemSync {
     pub after: i64,
     pub gc_generation: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct AckItemSync {
+pub struct RRequestItemSync {
     pub gc_generation: String,
 }
 
@@ -61,52 +61,57 @@ pub struct StorageConnect {
     pub path: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct TStorageGC {
+    pub reachable: std::collections::HashSet<Address>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Packet {
     ServerInfo(ServerInfo),
-    BeginSend(BeginSend),
-    AckSend(AckSend),
+    TBeginSend(TBeginSend),
+    RBeginSend(RBeginSend),
     Chunk(Chunk),
-    LogOp(itemset::LogOp),
-    AckLogOp(i64),
-    RequestData(RequestData),
-    AckRequestData(AckRequestData),
-    StartGC(StartGC),
-    GCComplete(GCComplete),
-    RequestItemSync(RequestItemSync),
-    AckItemSync(AckItemSync),
+    TLogOp(itemset::LogOp),
+    RLogOp(i64),
+    TRequestData(TRequestData),
+    RRequestData(RRequestData),
+    TGc(TGc),
+    RGc(RGc),
+    TRequestItemSync(TRequestItemSync),
+    RRequestItemSync(RRequestItemSync),
     SyncLogOps(Vec<(i64, itemset::LogOp)>),
-    RequestChunk(Address),
-    AckRequestChunk(Vec<u8>),
-    WriteBarrier,
-    AckWriteBarrier,
+    TRequestChunk(Address),
+    RRequestChunk(Vec<u8>),
+    TStorageWriteBarrier,
+    RStorageWriteBarrier,
     StorageConnect(StorageConnect),
+    TStorageGC(TStorageGC),
+    RStorageGC(repository::GCStats),
     EndOfTransmission,
 }
 
 const PACKET_KIND_SERVER_INFO: u8 = 0;
-const PACKET_KIND_BEGIN_SEND: u8 = 1;
-const PACKET_KIND_ACK_SEND: u8 = 2;
+const PACKET_KIND_T_BEGIN_SEND: u8 = 1;
+const PACKET_KIND_R_BEGIN_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
-const PACKET_KIND_LOG_OP: u8 = 4;
-const PACKET_KIND_ACK_LOG_OP: u8 = 5;
-const PACKET_KIND_REQUEST_DATA: u8 = 6;
-const PACKET_KIND_ACK_REQUEST_DATA: u8 = 7;
-const PACKET_KIND_START_GC: u8 = 8;
-const PACKET_KIND_GC_COMPLETE: u8 = 9;
-const PACKET_KIND_REQUEST_ITEM_SYNC: u8 = 10;
-const PACKET_KIND_ACK_ITEM_SYNC: u8 = 11;
+const PACKET_KIND_T_LOG_OP: u8 = 4;
+const PACKET_KIND_R_LOG_OP: u8 = 5;
+const PACKET_KIND_T_REQUEST_DATA: u8 = 6;
+const PACKET_KIND_R_REQUEST_DATA: u8 = 7;
+const PACKET_KIND_T_GC: u8 = 8;
+const PACKET_KIND_R_GC: u8 = 9;
+const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 10;
+const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 11;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
-const PACKET_KIND_REQUEST_CHUNK: u8 = 13;
-const PACKET_KIND_ACK_REQUEST_CHUNK: u8 = 14;
-const PACKET_KIND_WRITE_BARRIER: u8 = 15;
-const PACKET_KIND_ACK_WRITE_BARRIER: u8 = 16;
+const PACKET_KIND_T_REQUEST_CHUNK: u8 = 13;
+const PACKET_KIND_R_REQUEST_CHUNK: u8 = 14;
+const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 15;
+const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 16;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 17;
+const PACKET_T_STORAGE_GC: u8 = 18;
+const PACKET_KIND_R_STORAGE_GC: u8 = 19;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
-
-lazy_static::lazy_static! {
-    static ref BINCODE_CFG: bincode::Config = bincode::config().big_endian().clone();
-}
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
     if let Err(_) = r.read_exact(buf) {
@@ -115,24 +120,27 @@ fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), fai
     Ok(())
 }
 
-pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> {
+pub fn read_packet(
+    r: &mut dyn std::io::Read,
+    max_packet_size: usize,
+) -> Result<Packet, failure::Error> {
     let mut hdr: [u8; 5] = [0; 5];
     read_from_remote(r, &mut hdr[..])?;
-    let sz = (hdr[0] as usize) << 24
-        | (hdr[1] as usize) << 16
-        | (hdr[2] as usize) << 8
-        | (hdr[3] as usize);
+    let kind = hdr[4];
 
-    if sz > MAX_PACKET_SIZE {
+    let sz = (hdr[3] as usize) << 24
+        | (hdr[2] as usize) << 16
+        | (hdr[1] as usize) << 8
+        | (hdr[0] as usize);
+
+    if sz > max_packet_size {
         failure::bail!("packet too large");
     }
-
-    let kind = hdr[4];
 
     /* special case chunks, bypass serde */
     if kind == PACKET_KIND_CHUNK {
         if sz < ADDRESS_SZ {
-            failure::bail!("protocol error, chunk smaller than address");
+            failure::bail!("protocol error, packet smaller than address");
         }
 
         let mut address = Address { bytes: [0; 32] };
@@ -154,23 +162,33 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
 
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_BEGIN_SEND => Packet::BeginSend(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_ACK_SEND => Packet::AckSend(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_LOG_OP => Packet::LogOp(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_ACK_LOG_OP => Packet::AckLogOp(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_REQUEST_DATA => Packet::RequestData(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_ACK_REQUEST_DATA => Packet::AckRequestData(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_START_GC => Packet::StartGC(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_GC_COMPLETE => Packet::GCComplete(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_REQUEST_ITEM_SYNC => Packet::RequestItemSync(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_ACK_ITEM_SYNC => Packet::AckItemSync(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_REQUEST_CHUNK => Packet::RequestChunk(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_ACK_REQUEST_CHUNK => Packet::AckRequestChunk(buf),
-        PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(BINCODE_CFG.deserialize(&buf)?),
-        PACKET_KIND_WRITE_BARRIER => Packet::WriteBarrier,
-        PACKET_KIND_ACK_WRITE_BARRIER => Packet::AckWriteBarrier,
+        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_LOG_OP => Packet::TLogOp(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_LOG_OP => Packet::RLogOp(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_GC => Packet::TGc(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_GC => Packet::RGc(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(bincode::deserialize(&buf)?),
+        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
+        PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(bincode::deserialize(&buf)?),
+        PACKET_T_STORAGE_GC => {
+            let mut address = Address { bytes: [0; 32] };
+            let mut reachable = std::collections::HashSet::new();
+            for a in buf.chunks(ADDRESS_SZ) {
+                address.bytes.clone_from_slice(a);
+                reachable.insert(address.clone());
+            }
+            Packet::TStorageGC(TStorageGC { reachable })
+        }
+        PACKET_KIND_R_STORAGE_GC => Packet::RStorageGC(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
+        PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
@@ -179,11 +197,11 @@ pub fn read_packet(r: &mut dyn std::io::Read) -> Result<Packet, failure::Error> 
 
 fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure::Error> {
     let mut hdr: [u8; 5] = [0; 5];
-    hdr[0] = ((sz & 0xff00_0000) >> 24) as u8;
-    hdr[1] = ((sz & 0x00ff_0000) >> 16) as u8;
-    hdr[2] = ((sz & 0x0000_ff00) >> 8) as u8;
-    hdr[3] = (sz & 0x0000_00ff) as u8;
     hdr[4] = kind;
+    hdr[3] = ((sz & 0xff00_0000) >> 24) as u8;
+    hdr[2] = ((sz & 0x00ff_0000) >> 16) as u8;
+    hdr[1] = ((sz & 0x0000_ff00) >> 8) as u8;
+    hdr[0] = (sz & 0x0000_00ff) as u8;
     w.write_all(&hdr[..])?;
     Ok(())
 }
@@ -200,84 +218,101 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.data)?;
         }
         Packet::ServerInfo(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::BeginSend(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_BEGIN_SEND, b.len().try_into()?)?;
+        Packet::TBeginSend(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckSend(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ACK_SEND, b.len().try_into()?)?;
+        Packet::RBeginSend(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::LogOp(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_LOG_OP, b.len().try_into()?)?;
+        Packet::TLogOp(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckLogOp(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ACK_LOG_OP, b.len().try_into()?)?;
+        Packet::RLogOp(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_LOG_OP, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::RequestData(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
+        Packet::TRequestData(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckRequestData(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ACK_REQUEST_DATA, b.len().try_into()?)?;
+        Packet::RRequestData(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::StartGC(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_START_GC, b.len().try_into()?)?;
+        Packet::TGc(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_GC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::GCComplete(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_GC_COMPLETE, b.len().try_into()?)?;
+        Packet::RGc(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_GC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::RequestItemSync(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
+        Packet::TRequestItemSync(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckItemSync(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_ACK_ITEM_SYNC, b.len().try_into()?)?;
+        Packet::RRequestItemSync(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::SyncLogOps(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::RequestChunk(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
-            send_hdr(w, PACKET_KIND_REQUEST_CHUNK, b.len().try_into()?)?;
+        Packet::TRequestChunk(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::AckRequestChunk(ref v) => {
-            send_hdr(w, PACKET_KIND_ACK_REQUEST_CHUNK, v.len().try_into()?)?;
+        Packet::RRequestChunk(ref v) => {
+            send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK, v.len().try_into()?)?;
             w.write_all(&v)?;
         }
         Packet::StorageConnect(ref v) => {
-            let b = BINCODE_CFG.serialize(&v)?;
+            let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::WriteBarrier => {
-            send_hdr(w, PACKET_KIND_WRITE_BARRIER, 0)?;
+        Packet::TStorageGC(TStorageGC { reachable }) => {
+            let len = reachable.len() * ADDRESS_SZ;
+            // FIXME, excessive (2x) memory usage.
+            let mut buf = Vec::<u8>::with_capacity(len);
+            for addr in reachable.iter() {
+                buf.extend_from_slice(&addr.bytes);
+            }
+            std::mem::drop(reachable);
+
+            send_hdr(w, PACKET_T_STORAGE_GC, len.try_into()?)?;
+            w.write_all(&buf)?;
         }
-        Packet::AckWriteBarrier => {
-            send_hdr(w, PACKET_KIND_ACK_WRITE_BARRIER, 0)?;
+        Packet::RStorageGC(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_GC, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::TStorageWriteBarrier => {
+            send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
+        }
+        Packet::RStorageWriteBarrier => {
+            send_hdr(w, PACKET_KIND_R_STRORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
@@ -300,13 +335,13 @@ mod tests {
                 repo_id: "abc".to_string(),
                 protocol: "foobar".to_owned(),
             }),
-            Packet::BeginSend(BeginSend {}),
-            Packet::AckSend(AckSend {
+            Packet::TBeginSend(TBeginSend {}),
+            Packet::RBeginSend(RBeginSend {
                 gc_generation: "blah".to_owned(),
             }),
             {
                 let master_key = keys::MasterKey::gen();
-                Packet::LogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
+                Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
                     itemset::ItemMetadata {
                         address: Address::default(),
                         tree_height: 3,
@@ -317,14 +352,15 @@ mod tests {
                     },
                 )))
             },
+            Packet::RLogOp(123),
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
             }),
-            Packet::RequestData(RequestData { id: 153534 }),
+            Packet::TRequestData(TRequestData { id: 153534 }),
             {
                 let master_key = keys::MasterKey::gen();
-                Packet::AckRequestData(AckRequestData {
+                Packet::RRequestData(RRequestData {
                     metadata: Some(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
                         address: Address::default(),
                         tree_height: 1234,
@@ -335,8 +371,8 @@ mod tests {
                     })),
                 })
             },
-            Packet::StartGC(StartGC {}),
-            Packet::GCComplete(GCComplete {
+            Packet::TGc(TGc {}),
+            Packet::RGc(RGc {
                 stats: repository::GCStats {
                     chunks_remaining: 1,
                     chunks_freed: 123,
@@ -344,22 +380,27 @@ mod tests {
                     bytes_remaining: 678,
                 },
             }),
-            Packet::RequestItemSync(RequestItemSync {
+            Packet::TRequestItemSync(TRequestItemSync {
                 after: 123,
                 gc_generation: Some("123".to_owned()),
             }),
-            Packet::AckItemSync(AckItemSync {
+            Packet::RRequestItemSync(RRequestItemSync {
                 gc_generation: "123".to_owned(),
             }),
             Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
-            Packet::RequestChunk(Address::default()),
-            Packet::AckRequestChunk(vec![1, 2, 3]),
+            Packet::TRequestChunk(Address::default()),
+            Packet::RRequestChunk(vec![1, 2, 3]),
             Packet::StorageConnect(StorageConnect {
                 protocol: "foobar".to_owned(),
                 path: "abc".to_string(),
             }),
-            Packet::WriteBarrier,
-            Packet::AckWriteBarrier,
+            {
+                let mut reachable = std::collections::HashSet::new();
+                reachable.insert(Address::default());
+                Packet::TStorageGC(TStorageGC { reachable })
+            },
+            Packet::TStorageWriteBarrier,
+            Packet::RStorageWriteBarrier,
             Packet::EndOfTransmission,
         ];
 
@@ -368,7 +409,7 @@ mod tests {
             write_packet(&mut c1, p1).unwrap();
             let b = c1.into_inner();
             let mut c2 = std::io::Cursor::new(b);
-            let p2 = read_packet(&mut c2).unwrap();
+            let p2 = read_packet(&mut c2, DEFAULT_MAX_PACKET_SIZE).unwrap();
             assert!(p1 == &p2);
         }
     }
