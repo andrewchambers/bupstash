@@ -30,4 +30,7 @@ Ways to tune chunking algorithm. Fixed size/others? Min size/max size?
 
 ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com/archivist serve"
 
-Little endian for bincode? seems less pain to just use the bincode default.
+Prefetch system should also work for non leaf tree nodes. htree peek api?
+
+Rewrite external backend? Only use a single socket for all requests? Are we sure of the benefit?
+Fewer sockets, potentially more complicated code?

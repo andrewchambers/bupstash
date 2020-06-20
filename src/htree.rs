@@ -242,9 +242,6 @@ impl TreeReader {
 mod tests {
     use super::*;
 
-    // XXX Consider making tests table based, lots of repetition?
-    // Sometimes explicit tests are nice for line numbers and test names.
-
     #[test]
     fn test_write_no_level() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
