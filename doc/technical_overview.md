@@ -19,7 +19,7 @@ $ archivist put date=$(date +%Y/%m/%d) host=$(hostname) --dir ./my-files -k ./ma
 # Store a backup of a postgres database
 $ pgdump ... |  archivist put date=$(date +%Y/%m/%d) name=db.sql --file - -k ./master.key
 
-# list backups
+# List backups
 $ archivist list -k ./master.key date=2020/* and name=*.sql
 id="2" date="2020/06/17" "name=db.dql"
 

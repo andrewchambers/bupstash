@@ -179,6 +179,8 @@ impl Engine for LocalStorage {
             bytes_freed: 0,
             bytes_remaining: 0,
         };
+
+        // XXX TODO iterate while delete ok on all filesystems/implementations of read_dir?
         for e in std::fs::read_dir(&self.data_dir)? {
             let e = e?;
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
