@@ -171,8 +171,6 @@ impl Repo {
             rusqlite::params![serde_json::to_string(&engine)?],
         )?;
 
-        // TODO XXX validate storage engine works.
-
         itemset::init_tables(&tx)?;
 
         tx.commit()?;

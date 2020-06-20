@@ -53,7 +53,7 @@ N.B. Archivist can operate over ssh with ssh:// style repositories.
 
 ## Repository
 
-The most important part of archivist is the repository. It is where all data is stored, in a mostly
+The most important part of archivist is the repository. It is where all data is stored in a mostly
 encrypted form. The archivist client interacts via the repository over stdin/stdout of the archivist
 serve process. This may be locally, or via a protocol such as ssh.
 
@@ -149,11 +149,10 @@ all other operations.
 
 Archivist stores arbitrary streams of data in the repository by splitting the stream into chunks,
 hmac addressing the chunks, then compressing and encrypting the chunks with the a public key portion of a master key.
-Each chunk is then stored in the data directory.
-
+Each chunk is then stored in the data directory in a file named after the hmac hash of the contents.
 As we generate a sequence of chunks with a corresponding hmac addresses,
 we can build a tree structure out of these addresses. Leaf nodes of the tree are simply the encrypted data. 
-Other nodes in the tree are simply unencrypted lists of hashes, which may point to encrypted leaf nodes,
+Other nodes in the tree are simply unencrypted lists of hmac hashes, which may point to encrypted leaf nodes,
 or other subtrees. The key idea behind the hash tree, is we can convert an arbitrary stream of data
 into a single HMAC address with approximately equal sized chunks.
 When multiple hash trees are added to the repository, they share structure and enable deduplication.
@@ -165,6 +164,8 @@ This addressing and encryption scheme has some important properties:
 - The repository owner *can* iterate the hash tree for garbage collection purposes.
 - The repository owner *can* run garbage collection without retrieving the leaf nodes from cold storage.
 - The repository owner *can* push stream a hash tree to a client with no network round trips.
+- A client *can* send data streams to a repository without sharing the encryption key.
+- A client *can* retrieve and verify a datastream by checking hmacs.
 
 These properties are desirable for enabling high performance garbage collection and data streaming
 with prefetch on the repository side.
@@ -180,7 +181,7 @@ chunks will often not match up as data insertion/removal quickly desynchronizes 
 A good example of this problem is inserting a file into the middle of a tarball. No deduplication
 will occur after that file, as the data streams have been shifted by an offset.
 
-To avoid this problem we need to find a way to resync the chunk streams when they diverge from eachother,
+To avoid this problem we need to find a way to resync the chunk streams when they diverge from eachother
 but then reconverge. One way to do this is via content defined chunking.
 The most intuitive way to think about content defined chunking is splitting a tarball into a chunk
 representing every file, this means storing the same file in multiple tarballs will only ever be stored in the
@@ -207,7 +208,7 @@ based on the item metadata and the hash tree height.
 ### Encrypted data chunk
 
 These chunks form the roots of our hash trees, they contain encrypted data. They contain
-a key exchange packet, with enough information for the master key to derive the epemeral key.
+a key exchange packet, with enough information for the master key to derive the ephemeral key.
 
 ```
 KEY_EXCHANGE_PACKET1_BYTES[PACKET1_SZ] || ENCRYPTED_BYTES[...]
@@ -349,7 +350,8 @@ only new backups can be made, and none can be deleted.
 
 Archivist attempts to avoid resending data when it has already been sent. On the client side, archivist
 maintains a cache of the last N hmac addresses that have been sent. On cache hit, we are able to skip the
-sending of the given chunk. This works in practice because during backups, we are often sending the same data many times sequentially.
+sending of the given chunk. This works in practice because during backups, we are often sending the same data many times on
+a fixed schedule with minor variations.
 
 The send log is invalidated when the repository gc-generation changes.
 
@@ -361,7 +363,7 @@ to override the send log path when they with to optimize cache invalidation.
 When storing directories as tarballs in the repository, archivist attempts to avoid rereading the contents
 of files on disk when constructing the tarball hash tree.
 archivist accompishes this by maintaining a stat cache, which is a lookup table of absolute path and stat information 
-to a list of HMAC addresses representing the chunked tarball contents for that simple file.
+to a list of HMAC addresses representing the chunked tarball contents for that tar header and file data.
 On cache hit archivist is able to skip sending a tar header, or file contents, instead directly adding those chunk addresses
 to the hash tree that is being written.
 
