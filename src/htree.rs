@@ -49,7 +49,7 @@ pub struct TreeWriter<'a> {
     rollsums: Vec<rollsum::Rollsum>,
 }
 
-fn tree_block_address(data: &[u8]) -> Address {
+pub fn tree_block_address(data: &[u8]) -> Address {
     let mut addr = Address::default();
     hydrogen::hash(&data, *b"_htree_\0", None, &mut addr.bytes[..]);
     addr
@@ -210,30 +210,6 @@ impl TreeReader {
             *read_offset += ADDRESS_SZ;
 
             return Ok(Some((height, addr)));
-        }
-    }
-
-    pub fn next_chunk<S: Source>(
-        &mut self,
-        source: &mut S,
-    ) -> Result<Option<(Address, Vec<u8>)>, failure::Error> {
-        loop {
-            match self.next_addr()? {
-                Some((height, addr)) => {
-                    let data = source.get_chunk(&addr)?;
-                    if height == 0 {
-                        return Ok(Some((addr, data)));
-                    } else {
-                        if addr != tree_block_address(&data) {
-                            return Err(HTreeError::CorruptOrTamperedDataError.into());
-                        }
-                        self.push_level(height - 1, data)?;
-                    }
-                }
-                None => {
-                    return Ok(None);
-                }
-            }
         }
     }
 }
@@ -404,45 +380,5 @@ mod tests {
         // chunk0, chunk1, chunk3
         assert_eq!(count, 6);
         assert_eq!(leaf_count, 3);
-    }
-
-    #[test]
-    fn test_tree_reader_chunks() {
-        let mut chunks = HashMap::<Address, Vec<u8>>::new();
-        let level: usize;
-        let addr: Address;
-
-        {
-            // Chunks that can only fit two addresses.
-            // Split mask is never successful.
-            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
-            tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-                .unwrap();
-            tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-                .unwrap();
-            tw.add(&Address::from_bytes(&[3; ADDRESS_SZ]), vec![1, 2, 3])
-                .unwrap();
-
-            let result = tw.finish().unwrap();
-            level = result.0;
-            addr = result.1;
-        }
-
-        let mut tr = TreeReader::new(level, &addr);
-
-        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
-        assert_eq!(Address::from_bytes(&[1; ADDRESS_SZ]), addr);
-        let empty: Vec<u8> = vec![];
-        assert_eq!(buf, empty);
-        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
-        assert_eq!(Address::from_bytes(&[2; ADDRESS_SZ]), addr);
-        assert_eq!(buf, vec![0]);
-        let (addr, buf) = tr.next_chunk(&mut chunks).unwrap().unwrap();
-        assert_eq!(Address::from_bytes(&[3; ADDRESS_SZ]), addr);
-        assert_eq!(buf, vec![1, 2, 3]);
-
-        if let Some(_) = tr.next_chunk(&mut chunks).unwrap() {
-            panic!("expected eof")
-        }
     }
 }

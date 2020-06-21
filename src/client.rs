@@ -341,24 +341,6 @@ fn send_dir(
     Ok(())
 }
 
-struct StreamVerifier<'a> {
-    r: &'a mut dyn std::io::Read,
-}
-
-impl<'a> htree::Source for StreamVerifier<'a> {
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
-        match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Chunk(chunk) => {
-                if *addr != chunk.address {
-                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                }
-                return Ok(chunk.data);
-            }
-            _ => failure::bail!("protocol error, expected begin chunk packet"),
-        }
-    }
-}
-
 pub fn request_data_stream(
     key: &keys::MasterKey,
     id: i64,
@@ -385,17 +367,33 @@ pub fn request_data_stream(
             let hash_ctx = crypto::KeyedHashContext::from(key);
             let mut decrypt_ctx =
                 crypto::DecryptContext::data_context(&keys::Key::MasterKeyV1(key.clone()))?;
-            let mut sv = StreamVerifier { r: r };
             let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
 
             loop {
-                match tr.next_chunk(&mut sv)? {
-                    Some((addr, encrypted_chunk_data)) => {
-                        let data = decrypt_ctx.decrypt_data(&encrypted_chunk_data)?;
-                        if addr != hash_ctx.content_address(&data) {
-                            return Err(ClientError::CorruptOrTamperedDataError.into());
+                match tr.next_addr()? {
+                    Some((height, addr)) => {
+                        let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                            Packet::Chunk(chunk) => {
+                                if addr != chunk.address {
+                                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                                }
+                                chunk.data
+                            }
+                            _ => failure::bail!("protocol error, expected begin chunk packet"),
+                        };
+
+                        if height == 0 {
+                            let data = decrypt_ctx.decrypt_data(&data)?;
+                            if addr != hash_ctx.content_address(&data) {
+                                return Err(ClientError::CorruptOrTamperedDataError.into());
+                            }
+                            out.write_all(&data)?;
+                        } else {
+                            if addr != htree::tree_block_address(&data) {
+                                return Err(ClientError::CorruptOrTamperedDataError.into());
+                            }
+                            tr.push_level(height - 1, data)?;
                         }
-                        out.write_all(&data)?;
                     }
                     None => break,
                 }
