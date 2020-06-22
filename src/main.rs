@@ -3,6 +3,7 @@ pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
 pub mod crypto;
+pub mod crypto2;
 pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
@@ -781,6 +782,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn main() {
     unsafe { hydrogen::init() };
+    crypto2::init();
 
     let mut args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();

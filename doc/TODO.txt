@@ -34,3 +34,5 @@ Prefetch system should also work for non leaf tree nodes. htree peek api?
 
 Rewrite external backend? Only use a single socket for all requests? Are we sure of the benefit?
 Fewer sockets, potentially more complicated code?
+
+Allow more than 4gigs of hashes in backend protocol?

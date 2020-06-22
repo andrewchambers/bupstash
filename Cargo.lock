@@ -35,6 +35,7 @@ dependencies = [
  "libc",
  "path-clean",
  "pem",
+ "pkg-config",
  "rand 0.7.3",
  "regex",
  "rusqlite",

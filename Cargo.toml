@@ -35,5 +35,6 @@ zstd = "0.5"
 
 [build-dependencies]
 cc = { version = "1.0"}
+pkg-config = "0.3"
 bindgen = "0.53"
 

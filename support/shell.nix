@@ -6,7 +6,7 @@ in
       
       LIBCLANG_PATH="${pkgs.llvmPackages.libclang}/lib";
 
-      buildInputs =  with pkgs; [ clang clang-tools llvm minio pandoc bats openssl pkg-config ];
+      buildInputs =  with pkgs; [ clang clang-tools llvm minio pandoc bats openssl libsodium pkg-config ];
 
       hardeningDisable = ["all"];
   }
