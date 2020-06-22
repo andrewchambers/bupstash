@@ -383,6 +383,8 @@ to override the query cache path when they with to optimize cache invalidation.
 
 ## Forward secrecy
 
-When encrypting data chunks, archivist uses an ephemeral key, that only the master key can recover. This ephemeral
-key is deleted by a send client on completion, so a client cannot decrypt historic data. This protects users
-from compromised malicious clients that wish to read historic backups, and thus preventing 'undeletion' of sensitive deleted.
+Archivist provides forward secrecy with respect to sending keys, but not the master key. This protects users
+from compromised or malicious clients that wish to read historic backups, and thus preventing 'undeletion' of sensitive deleted.
+
+This works because when encrypting data chunks, archivist uses an ephemeral key,
+that only the master key can recover. This ephemeral key is deleted by the send client on completion. 
