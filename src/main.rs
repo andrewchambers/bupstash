@@ -2,7 +2,7 @@ pub mod address;
 pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
-pub mod crypto2;
+pub mod crypto;
 pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
@@ -337,11 +337,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let master_key_id = key.master_key_id();
     let mut metadata_dctx = match key {
         keys::Key::MasterKeyV1(k) => {
-            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
             metadata_dctx
         }
         keys::Key::MetadataKeyV1(k) => {
-            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
             metadata_dctx
         }
         _ => failure::bail!("provided key is a not a master decryption key"),
@@ -488,15 +488,15 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let master_key_id = key.master_key_id();
     let (hash_key, mut data_ectx, mut metadata_ectx) = match key {
         keys::Key::MasterKeyV1(k) => {
-            let hash_key = crypto2::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto2::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto2::EncryptionContext::new(&k.metadata_pk);
+            let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
             (hash_key, data_ectx, metadata_ectx)
         }
         keys::Key::SendKeyV1(k) => {
-            let hash_key = crypto2::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto2::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto2::EncryptionContext::new(&k.metadata_pk);
+            let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
             (hash_key, data_ectx, metadata_ectx)
         }
         _ => failure::bail!("can only send data with a master key or send key."),
@@ -544,9 +544,9 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let id = client::send(
         client::SendOptions {
             compression: if matches.opt_present("no-compression") {
-                crypto2::DataCompression::None
+                crypto::DataCompression::None
             } else {
-                crypto2::DataCompression::Zstd
+                crypto::DataCompression::Zstd
             },
         },
         &master_key_id,
@@ -591,8 +591,8 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let (hash_key_part_1, mut data_dctx, mut metadata_dctx) = match key {
         keys::Key::MasterKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
-            let data_dctx = crypto2::DecryptionContext::new(k.data_sk.clone());
-            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
         _ => failure::bail!("provided key is a not a master decryption key"),
@@ -701,11 +701,11 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let master_key_id = key.master_key_id();
             let mut metadata_dctx = match key {
                 keys::Key::MasterKeyV1(k) => {
-                    let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+                    let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
                     metadata_dctx
                 }
                 keys::Key::MetadataKeyV1(k) => {
-                    let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+                    let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
                     metadata_dctx
                 }
                 _ => failure::bail!("provided key is a not a master decryption key"),
@@ -830,7 +830,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
 }
 
 fn main() {
-    crypto2::init();
+    crypto::init();
 
     let mut args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();

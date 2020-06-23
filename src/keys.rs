@@ -1,4 +1,4 @@
-use super::crypto2;
+use super::crypto;
 use failure::{Error, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
@@ -21,39 +21,33 @@ pub struct MasterKey {
        The hash key is divided into 2 parts so the server
        and metadata key never knows the hash key and is unable to use this
        to guess file contents.
-
-       FIXME: Each hash key part is divded into parts a/b
-       so rusts trait #derive works. It only works for
-       hard coded sizes. We tested the marshalled key size
-       explicitly so if someone can recombine parts a/b in a pleasant
-       way it will still be backwards compatible.
     */
-    pub hash_key_part_1: crypto2::PartialHashKey,
-    pub hash_key_part_2: crypto2::PartialHashKey,
+    pub hash_key_part_1: crypto::PartialHashKey,
+    pub hash_key_part_2: crypto::PartialHashKey,
     /* Key set used for encrypting data/ */
-    pub data_pk: crypto2::BoxPublicKey,
-    pub data_sk: crypto2::BoxSecretKey,
+    pub data_pk: crypto::BoxPublicKey,
+    pub data_sk: crypto::BoxSecretKey,
     /* Key set used for encrypting metadata. */
-    pub metadata_pk: crypto2::BoxPublicKey,
-    pub metadata_sk: crypto2::BoxSecretKey,
+    pub metadata_pk: crypto::BoxPublicKey,
+    pub metadata_sk: crypto::BoxSecretKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SendKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub hash_key_part_1: crypto2::PartialHashKey,
-    pub hash_key_part_2: crypto2::PartialHashKey,
-    pub data_pk: crypto2::BoxPublicKey,
-    pub metadata_pk: crypto2::BoxPublicKey,
+    pub hash_key_part_1: crypto::PartialHashKey,
+    pub hash_key_part_2: crypto::PartialHashKey,
+    pub data_pk: crypto::BoxPublicKey,
+    pub metadata_pk: crypto::BoxPublicKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MetadataKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub metadata_pk: crypto2::BoxPublicKey,
-    pub metadata_sk: crypto2::BoxSecretKey,
+    pub metadata_pk: crypto::BoxPublicKey,
+    pub metadata_sk: crypto::BoxSecretKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -117,17 +111,17 @@ impl Key {
 
 fn keyid_gen() -> [u8; KEYID_SZ] {
     let mut id = [0; KEYID_SZ];
-    crypto2::randombytes(&mut id[..]);
+    crypto::randombytes(&mut id[..]);
     id
 }
 
 impl MasterKey {
     pub fn gen() -> MasterKey {
         let id = keyid_gen();
-        let hash_key_part_1 = crypto2::PartialHashKey::new();
-        let hash_key_part_2 = crypto2::PartialHashKey::new();
-        let (data_pk, data_sk) = crypto2::box_keypair();
-        let (metadata_pk, metadata_sk) = crypto2::box_keypair();
+        let hash_key_part_1 = crypto::PartialHashKey::new();
+        let hash_key_part_2 = crypto::PartialHashKey::new();
+        let (data_pk, data_sk) = crypto::box_keypair();
+        let (metadata_pk, metadata_sk) = crypto::box_keypair();
         MasterKey {
             id,
             hash_key_part_1,
@@ -142,7 +136,7 @@ impl MasterKey {
 
 impl SendKey {
     pub fn gen(mk: &MasterKey) -> SendKey {
-        let hash_key_part_2 = crypto2::PartialHashKey::new();
+        let hash_key_part_2 = crypto::PartialHashKey::new();
         SendKey {
             id: keyid_gen(),
             master_key_id: mk.id,

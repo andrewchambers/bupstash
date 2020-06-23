@@ -1,6 +1,6 @@
 use super::address::*;
 use super::chunk_storage;
-use super::crypto2;
+use super::crypto;
 use super::external_chunk_storage;
 use super::fsutil;
 use super::hex;
@@ -81,7 +81,7 @@ impl Drop for FileLock {
 
 fn new_random_token() -> String {
     let mut gen: [u8; 32] = [0; 32];
-    crypto2::randombytes(&mut gen);
+    crypto::randombytes(&mut gen);
     hex::easy_encode_to_string(&gen)
 }
 

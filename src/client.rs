@@ -1,6 +1,6 @@
 use super::address::*;
 use super::chunker;
-use super::crypto2;
+use super::crypto;
 use super::fsutil;
 use super::htree;
 use super::itemset;
@@ -62,7 +62,7 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
 
 #[derive(Clone, Copy)]
 pub struct SendOptions {
-    pub compression: crypto2::DataCompression,
+    pub compression: crypto::DataCompression,
 }
 
 pub enum SendSource {
@@ -73,9 +73,9 @@ pub enum SendSource {
 pub fn send(
     opts: SendOptions,
     master_key_id: &[u8; keys::KEYID_SZ],
-    hash_key: &crypto2::HashKey,
-    data_ectx: &mut crypto2::EncryptionContext,
-    metadata_ectx: &mut crypto2::EncryptionContext,
+    hash_key: &crypto::HashKey,
+    data_ectx: &mut crypto::EncryptionContext,
+    metadata_ectx: &mut crypto::EncryptionContext,
     send_log: &mut sendlog::SendLog,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -131,7 +131,7 @@ pub fn send(
     }
 
     let chunk_data = chunker.finish();
-    let addr = crypto2::keyed_content_address(&chunk_data, hash_key);
+    let addr = crypto::keyed_content_address(&chunk_data, hash_key);
     tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?;
     let (tree_height, tree_address) = tw.finish()?;
 
@@ -144,7 +144,7 @@ pub fn send(
                 master_key_id: *master_key_id,
                 hash_key_part_2: hash_key.part2.clone(),
                 encrypted_tags: metadata_ectx
-                    .encrypt_data(bincode::serialize(&tags)?, crypto2::DataCompression::Zstd),
+                    .encrypt_data(bincode::serialize(&tags)?, crypto::DataCompression::Zstd),
             },
         ))),
     )?;
@@ -160,8 +160,8 @@ pub fn send(
 
 fn send_chunks(
     opts: &SendOptions,
-    hash_key: &crypto2::HashKey,
-    data_ectx: &mut crypto2::EncryptionContext,
+    hash_key: &crypto::HashKey,
+    data_ectx: &mut crypto::EncryptionContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
@@ -180,7 +180,7 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        let addr = crypto2::keyed_content_address(&chunk_data, &hash_key);
+                        let addr = crypto::keyed_content_address(&chunk_data, &hash_key);
                         let encrypted_chunk = data_ectx.encrypt_data(chunk_data, opts.compression);
                         if let Some(ref mut on_chunk) = on_chunk {
                             on_chunk(&addr);
@@ -197,8 +197,8 @@ fn send_chunks(
 
 fn send_dir(
     opts: &SendOptions,
-    hash_key: &crypto2::HashKey,
-    data_ectx: &mut crypto2::EncryptionContext,
+    hash_key: &crypto::HashKey,
+    data_ectx: &mut crypto::EncryptionContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     stat_cache_tx: &mut statcache::StatCacheTx,
@@ -208,7 +208,7 @@ fn send_dir(
     let path = fsutil::absolute_path(&path)?;
 
     for entry in walkdir::WalkDir::new(&path) {
-        let mut hash_state = crypto2::HashState::new(Some(&hash_key));
+        let mut hash_state = crypto::HashState::new(Some(&hash_key));
         let entry = entry?;
         let entry_path = fsutil::absolute_path(entry.path())?;
         let mut short_entry_path = entry_path.strip_prefix(&path)?.to_path_buf();
@@ -306,7 +306,7 @@ fn send_dir(
                 }
 
                 if let Some(chunk_data) = chunker.force_split() {
-                    let addr = crypto2::keyed_content_address(&chunk_data, hash_key);
+                    let addr = crypto::keyed_content_address(&chunk_data, hash_key);
                     on_chunk(&addr);
                     tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?
                 }
@@ -333,9 +333,9 @@ fn send_dir(
 
 pub fn request_data_stream(
     master_key_id: &[u8; keys::KEYID_SZ],
-    hash_key_part_1: &crypto2::PartialHashKey,
-    data_dctx: &mut crypto2::DecryptionContext,
-    _metadata_dctx: &mut crypto2::DecryptionContext,
+    hash_key_part_1: &crypto::PartialHashKey,
+    data_dctx: &mut crypto::DecryptionContext,
+    _metadata_dctx: &mut crypto::DecryptionContext,
     id: i64,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -357,7 +357,7 @@ pub fn request_data_stream(
                 failure::bail!("decryption key does not match master key used for encryption");
             }
 
-            let hash_key = crypto2::derive_hash_key(&hash_key_part_1, &metadata.hash_key_part_2);
+            let hash_key = crypto::derive_hash_key(&hash_key_part_1, &metadata.hash_key_part_2);
 
             // TODO XXX FIXME verify the encrypted metadata matches this metadata.
 
@@ -378,7 +378,7 @@ pub fn request_data_stream(
 
                         if height == 0 {
                             let data = data_dctx.decrypt_data(data)?;
-                            if addr != crypto2::keyed_content_address(&data, &hash_key) {
+                            if addr != crypto::keyed_content_address(&data, &hash_key) {
                                 return Err(ClientError::CorruptOrTamperedDataError.into());
                             }
                             out.write_all(&data)?;

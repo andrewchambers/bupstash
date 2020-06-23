@@ -279,56 +279,36 @@ Keys are stored as [bincoded](https://github.com/servo/bincode) byte arrays. Whe
 are pem encoded.
 
 ```
-
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct MasterKey {
     pub id: [u8; KEYID_SZ],
-    /*
-       Hash key is used for content addressing, similar
-       to git, but with an HMAC. This means plaintext
-       does not leak via known hashes. It also means
-       attacks by uploading corrupt chunks won't
-       cause data corruption across client keys because
-       they use different hash keys.
-
-       The hash key is divided into 2 parts so the server
-       never knows the hash key and is unable to use this
-       to guess file contents.
-    */
-    pub hash_key_part_1a: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_1b: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_2a: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_2b: [u8; PARTIAL_HASH_KEY_SZ],
-    /* Key set used for encrypting data/ */
-    pub data_psk: [u8; hydrogen::KX_PSKBYTES],
-    pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    pub data_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
-    /* Key set used for encrypting metadata. */
-    pub metadata_psk: [u8; hydrogen::KX_PSKBYTES],
-    pub metadata_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    pub metadata_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
+    pub hash_key_part_1: crypto::PartialHashKey,
+    pub hash_key_part_2: crypto::PartialHashKey,
+    pub data_pk: crypto::BoxPublicKey,
+    pub data_sk: crypto::BoxSecretKey,
+    pub metadata_pk: crypto::BoxPublicKey,
+    pub metadata_sk: crypto::BoxSecretKey,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SendKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub hash_key_part_1a: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_1b: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_2a: [u8; PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_2b: [u8; PARTIAL_HASH_KEY_SZ],
-    pub data_psk: [u8; hydrogen::KX_PSKBYTES],
-    pub data_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    pub metadata_psk: [u8; hydrogen::KX_PSKBYTES],
-    pub metadata_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
+    pub hash_key_part_1: crypto::PartialHashKey,
+    pub hash_key_part_2: crypto::PartialHashKey,
+    pub data_pk: crypto::BoxPublicKey,
+    pub metadata_pk: crypto::BoxPublicKey,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct MetadataKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub metadata_psk: [u8; hydrogen::KX_PSKBYTES],
-    pub metadata_pk: [u8; hydrogen::KX_PUBLICKEYBYTES],
-    pub metadata_sk: [u8; hydrogen::KX_SECRETKEYBYTES],
+    pub metadata_pk: crypto::BoxPublicKey,
+    pub metadata_sk: crypto::BoxSecretKey,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     MasterKeyV1(MasterKey),
     SendKeyV1(SendKey),

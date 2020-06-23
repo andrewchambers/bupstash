@@ -1,5 +1,5 @@
 use super::address::*;
-use super::crypto2;
+use super::crypto;
 use super::keys;
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +13,7 @@ pub struct ItemMetadata {
     // XXX TODO FIXME this hash_key could be encrypted?
     // instead of split? The only person who needs access
     // to the hash key is the master key.
-    pub hash_key_part_2: crypto2::PartialHashKey,
+    pub hash_key_part_2: crypto::PartialHashKey,
     pub encrypted_tags: Vec<u8>,
 }
 
