@@ -1,9 +1,8 @@
 use super::address::*;
 use super::chunker;
-use super::crypto;
+use super::crypto2;
 use super::fsutil;
 use super::htree;
-use super::hydrogen;
 use super::itemset;
 use super::keys;
 use super::protocol::*;
@@ -14,7 +13,7 @@ use super::sendlog;
 use super::statcache;
 use failure::Fail;
 use std::collections::HashMap;
-use std::convert::{From, TryFrom, TryInto};
+use std::convert::{From, TryInto};
 use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Fail)]
@@ -63,7 +62,7 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
 
 #[derive(Clone, Copy)]
 pub struct SendOptions {
-    pub compression: bool,
+    pub compression: crypto2::DataCompression,
 }
 
 pub enum SendSource {
@@ -73,18 +72,16 @@ pub enum SendSource {
 
 pub fn send(
     opts: SendOptions,
-    key: &keys::Key,
+    master_key_id: &[u8; keys::KEYID_SZ],
+    hash_key: &crypto2::HashKey,
+    data_ectx: &mut crypto2::EncryptionContext,
+    metadata_ectx: &mut crypto2::EncryptionContext,
     send_log: &mut sendlog::SendLog,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tags: &HashMap<String, Option<String>>,
     data: SendSource,
 ) -> Result<i64, failure::Error> {
-    /* Create the various crypto contexts first so we can error early on bad keys */
-    let hash_ctx = crypto::KeyedHashContext::try_from(key)?;
-    let metadata_ctx = crypto::EncryptContext::metadata_context(&key);
-    let data_ctx = crypto::EncryptContext::data_context(&key)?;
-
     write_packet(w, &Packet::TBeginSend(TBeginSend {}))?;
 
     let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -109,8 +106,8 @@ pub fn send(
         SendSource::Readable(mut data) => {
             send_chunks(
                 &opts,
-                &data_ctx,
-                &hash_ctx,
+                hash_key,
+                data_ectx,
                 &mut chunker,
                 &mut tw,
                 &mut data,
@@ -122,8 +119,8 @@ pub fn send(
             let mut stat_cache_tx = stat_cache.transaction(&gc_generation)?;
             send_dir(
                 &opts,
-                &data_ctx,
-                &hash_ctx,
+                hash_key,
+                data_ectx,
                 &mut chunker,
                 &mut tw,
                 &mut stat_cache_tx,
@@ -134,15 +131,9 @@ pub fn send(
     }
 
     let chunk_data = chunker.finish();
-    let addr = hash_ctx.content_address(&chunk_data);
-    tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?;
+    let addr = crypto2::keyed_content_address(&chunk_data, hash_key);
+    tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?;
     let (tree_height, tree_address) = tw.finish()?;
-
-    let (hk_2a, hk_2b) = match key {
-        keys::Key::MasterKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
-        keys::Key::SendKeyV1(k) => (k.hash_key_part_2a, k.hash_key_part_2b),
-        _ => panic!("unreachable"), /* We wouldn't be able to have a HashContext in these cases */
-    };
 
     write_packet(
         filtered_conn.w,
@@ -150,10 +141,10 @@ pub fn send(
             itemset::ItemMetadata {
                 tree_height,
                 address: tree_address,
-                master_key_id: key.master_key_id(),
-                hash_key_part_2a: hk_2a,
-                hash_key_part_2b: hk_2b,
-                encrypted_tags: metadata_ctx.encrypt_data(true, bincode::serialize(&tags)?),
+                master_key_id: *master_key_id,
+                hash_key_part_2: hash_key.part2.clone(),
+                encrypted_tags: metadata_ectx
+                    .encrypt_data(bincode::serialize(&tags)?, crypto2::DataCompression::Zstd),
             },
         ))),
     )?;
@@ -169,8 +160,8 @@ pub fn send(
 
 fn send_chunks(
     opts: &SendOptions,
-    data_ctx: &crypto::EncryptContext,
-    hash_ctx: &crypto::KeyedHashContext,
+    hash_key: &crypto2::HashKey,
+    data_ectx: &mut crypto2::EncryptionContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
@@ -189,8 +180,8 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        let addr = hash_ctx.content_address(&chunk_data);
-                        let encrypted_chunk = data_ctx.encrypt_data(opts.compression, chunk_data);
+                        let addr = crypto2::keyed_content_address(&chunk_data, &hash_key);
+                        let encrypted_chunk = data_ectx.encrypt_data(chunk_data, opts.compression);
                         if let Some(ref mut on_chunk) = on_chunk {
                             on_chunk(&addr);
                         }
@@ -206,8 +197,8 @@ fn send_chunks(
 
 fn send_dir(
     opts: &SendOptions,
-    data_ctx: &crypto::EncryptContext,
-    hash_ctx: &crypto::KeyedHashContext,
+    hash_key: &crypto2::HashKey,
+    data_ectx: &mut crypto2::EncryptionContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     stat_cache_tx: &mut statcache::StatCacheTx,
@@ -217,7 +208,7 @@ fn send_dir(
     let path = fsutil::absolute_path(&path)?;
 
     for entry in walkdir::WalkDir::new(&path) {
-        let mut hash = hydrogen::Hash::init(*b"statcach", Some(&hash_ctx.hash_key));
+        let mut hash_state = crypto2::HashState::new(Some(&hash_key));
         let entry = entry?;
         let entry_path = fsutil::absolute_path(entry.path())?;
         let mut short_entry_path = entry_path.strip_prefix(&path)?.to_path_buf();
@@ -252,11 +243,10 @@ fn send_dir(
         let hdr_bytes = hdr.as_bytes();
         let hdr_bytes = &hdr_bytes[..];
 
-        hash.update(&hdr_bytes);
-        let mut hash_buf = [0; hydrogen::HASH_BYTES];
-        hash.finish(&mut hash_buf[..]);
+        hash_state.update(&hdr_bytes);
+        let hash = hash_state.finish();
 
-        match stat_cache_tx.lookup(&entry_path, &hash_buf)? {
+        match stat_cache_tx.lookup(&entry_path, &hash)? {
             Some(cached_addresses) => {
                 debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
                 let mut address = Address::default();
@@ -273,8 +263,8 @@ fn send_dir(
                 let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
                 send_chunks(
                     opts,
-                    data_ctx,
-                    hash_ctx,
+                    hash_key,
+                    data_ectx,
                     chunker,
                     tw,
                     &mut hdr_cursor,
@@ -285,8 +275,8 @@ fn send_dir(
                     let mut f = std::fs::File::open(&entry_path)?;
                     let len = send_chunks(
                         opts,
-                        data_ctx,
-                        hash_ctx,
+                        hash_key,
+                        data_ectx,
                         chunker,
                         tw,
                         &mut f,
@@ -299,8 +289,8 @@ fn send_dir(
                         let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
                         send_chunks(
                             opts,
-                            data_ctx,
-                            hash_ctx,
+                            hash_key,
+                            data_ectx,
                             chunker,
                             tw,
                             &mut hdr_cursor,
@@ -316,12 +306,12 @@ fn send_dir(
                 }
 
                 if let Some(chunk_data) = chunker.force_split() {
-                    let addr = hash_ctx.content_address(&chunk_data);
+                    let addr = crypto2::keyed_content_address(&chunk_data, hash_key);
                     on_chunk(&addr);
-                    tw.add(&addr, data_ctx.encrypt_data(opts.compression, chunk_data))?
+                    tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?
                 }
 
-                stat_cache_tx.add(&entry_path, &hash_buf[..], &addresses)?;
+                stat_cache_tx.add(&entry_path, &hash[..], &addresses)?;
             }
         }
 
@@ -331,8 +321,8 @@ fn send_dir(
     let mut trailer_cursor = std::io::Cursor::new(&buf[..]);
     send_chunks(
         opts,
-        data_ctx,
-        hash_ctx,
+        hash_key,
+        data_ectx,
         chunker,
         tw,
         &mut trailer_cursor,
@@ -342,7 +332,10 @@ fn send_dir(
 }
 
 pub fn request_data_stream(
-    key: &keys::MasterKey,
+    master_key_id: &[u8; keys::KEYID_SZ],
+    hash_key_part_1: &crypto2::PartialHashKey,
+    data_dctx: &mut crypto2::DecryptionContext,
+    _metadata_dctx: &mut crypto2::DecryptionContext,
     id: i64,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -360,13 +353,14 @@ pub fn request_data_stream(
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if key.id != metadata.master_key_id {
+            if *master_key_id != metadata.master_key_id {
                 failure::bail!("decryption key does not match master key used for encryption");
             }
 
-            let hash_ctx = crypto::KeyedHashContext::from(key);
-            let mut decrypt_ctx =
-                crypto::DecryptContext::data_context(&keys::Key::MasterKeyV1(key.clone()))?;
+            let hash_key = crypto2::derive_hash_key(&hash_key_part_1, &metadata.hash_key_part_2);
+
+            // TODO XXX FIXME verify the encrypted metadata matches this metadata.
+
             let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
 
             loop {
@@ -383,8 +377,8 @@ pub fn request_data_stream(
                         };
 
                         if height == 0 {
-                            let data = decrypt_ctx.decrypt_data(&data)?;
-                            if addr != hash_ctx.content_address(&data) {
+                            let data = data_dctx.decrypt_data(data)?;
+                            if addr != crypto2::keyed_content_address(&data, &hash_key) {
                                 return Err(ClientError::CorruptOrTamperedDataError.into());
                             }
                             out.write_all(&data)?;

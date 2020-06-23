@@ -1,5 +1,5 @@
 use super::address::*;
-use super::hydrogen;
+use super::crypto2;
 use super::rollsum;
 use failure::Fail;
 
@@ -50,9 +50,9 @@ pub struct TreeWriter<'a> {
 }
 
 pub fn tree_block_address(data: &[u8]) -> Address {
-    let mut addr = Address::default();
-    hydrogen::hash(&data, *b"_htree_\0", None, &mut addr.bytes[..]);
-    addr
+    let mut hs = crypto2::HashState::new(None);
+    hs.update(data);
+    Address { bytes: hs.finish() }
 }
 
 impl<'a> TreeWriter<'a> {

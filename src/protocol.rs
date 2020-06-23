@@ -346,8 +346,7 @@ mod tests {
                         address: Address::default(),
                         tree_height: 3,
                         master_key_id: master_key.id,
-                        hash_key_part_2a: master_key.hash_key_part_2a,
-                        hash_key_part_2b: master_key.hash_key_part_2b,
+                        hash_key_part_2: master_key.hash_key_part_2,
                         encrypted_tags: vec![1, 2, 3],
                     },
                 )))
@@ -365,8 +364,7 @@ mod tests {
                         address: Address::default(),
                         tree_height: 1234,
                         master_key_id: master_key.id,
-                        hash_key_part_2a: master_key.hash_key_part_2a,
-                        hash_key_part_2b: master_key.hash_key_part_2b,
+                        hash_key_part_2: master_key.hash_key_part_2,
                         encrypted_tags: vec![1, 2, 3],
                     })),
                 })

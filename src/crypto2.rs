@@ -1,3 +1,4 @@
+use super::address::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
@@ -48,7 +49,7 @@ pub fn memzero(buf: &mut [u8]) {
 }
 
 pub struct BoxNonce {
-    bytes: [u8; BOX_NONCEBYTES as usize],
+    pub bytes: [u8; BOX_NONCEBYTES as usize],
 }
 
 impl BoxNonce {
@@ -69,9 +70,9 @@ impl BoxNonce {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct BoxSecretKey {
-    bytes: [u8; BOX_SECRETKEYBYTES],
+    pub bytes: [u8; BOX_SECRETKEYBYTES],
 }
 
 impl BoxSecretKey {
@@ -84,9 +85,9 @@ impl Drop for BoxSecretKey {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct BoxPublicKey {
-    bytes: [u8; BOX_PUBLICKEYBYTES as usize],
+    pub bytes: [u8; BOX_PUBLICKEYBYTES as usize],
 }
 
 impl BoxPublicKey {
@@ -110,7 +111,7 @@ pub fn box_keypair() -> (BoxPublicKey, BoxSecretKey) {
 }
 
 pub struct BoxKey {
-    bytes: [u8; BOX_BEFORENMBYTES],
+    pub bytes: [u8; BOX_BEFORENMBYTES],
 }
 
 impl BoxSecretKey {
@@ -237,7 +238,8 @@ fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
     Ok(data)
 }
 
-pub enum ChunkCompression {
+#[derive(Clone, Copy)]
+pub enum DataCompression {
     None,
     Zstd,
 }
@@ -260,13 +262,13 @@ impl EncryptionContext {
         }
     }
 
-    pub fn encrypt_chunk(&mut self, mut pt: Vec<u8>, compression: ChunkCompression) -> Vec<u8> {
+    pub fn encrypt_data(&mut self, mut pt: Vec<u8>, compression: DataCompression) -> Vec<u8> {
         let pt = match compression {
-            ChunkCompression::None => {
+            DataCompression::None => {
                 pt.push(CHUNK_FOOTER_NO_COMPRESSION);
                 pt
             }
-            ChunkCompression::Zstd => zstd_compress_chunk(pt),
+            DataCompression::Zstd => zstd_compress_chunk(pt),
         };
         let ct_len = pt.len() + BOX_NONCEBYTES + BOX_MACBYTES + self.ephemeral_pk.bytes.len();
         let mut ct = Vec::with_capacity(ct_len);
@@ -301,7 +303,7 @@ impl DecryptionContext {
         }
     }
 
-    pub fn decrypt_chunk(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
+    pub fn decrypt_data(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
         if ct.len() < BOX_PUBLICKEYBYTES + BOX_NONCEBYTES + BOX_MACBYTES {
             failure::bail!("data chunk corrupt");
         }
@@ -333,12 +335,57 @@ impl DecryptionContext {
     }
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+pub struct PartialHashKey {
+    pub bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize],
+}
+
+impl PartialHashKey {
+    pub fn new() -> Self {
+        let mut bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        randombytes(&mut bytes[..]);
+        PartialHashKey { bytes }
+    }
+}
+
+impl Drop for PartialHashKey {
+    fn drop(&mut self) {
+        memzero(&mut self.bytes[..]);
+    }
+}
+
+pub fn derive_hash_key(part1: &PartialHashKey, part2: &PartialHashKey) -> HashKey {
+    let mut hs = HashState::new(None);
+    hs.update(&part1.bytes[..]);
+    hs.update(&part2.bytes[..]);
+    let bytes = hs.finish();
+    HashKey {
+        part1: part1.clone(),
+        part2: part2.clone(),
+        bytes,
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
+pub struct HashKey {
+    pub part1: PartialHashKey,
+    pub part2: PartialHashKey,
+    pub bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize],
+}
+
+impl Drop for HashKey {
+    fn drop(&mut self) {
+        memzero(&mut self.bytes[..]);
+    }
+}
+
 pub struct HashState {
     st: sodium::crypto_generichash_state,
 }
 
 impl HashState {
-    pub fn new(key: Option<&[u8; sodium::crypto_generichash_KEYBYTES as usize]>) -> HashState {
+    pub fn new(key: Option<&HashKey>) -> HashState {
         let mut h = HashState {
             st: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
         };
@@ -347,12 +394,12 @@ impl HashState {
             sodium::crypto_generichash_init(
                 &mut h.st as *mut sodium::crypto_generichash_state,
                 if let Some(k) = key {
-                    k.as_ptr() as *const u8
+                    k.bytes.as_ptr() as *const u8
                 } else {
                     std::ptr::null()
                 },
                 if let Some(k) = key {
-                    k.len().try_into().unwrap()
+                    k.bytes.len().try_into().unwrap()
                 } else {
                     0
                 },
@@ -396,6 +443,13 @@ impl HashState {
     }
 }
 
+pub fn keyed_content_address(data: &[u8], key: &HashKey) -> Address {
+    let mut hs = HashState::new(Some(key));
+    hs.update(data);
+    let bytes = hs.finish();
+    Address { bytes }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,17 +471,17 @@ mod tests {
     }
 
     #[test]
-    fn chunk_round_trip() {
+    fn data_round_trip() {
         init();
         let (pk, sk) = box_keypair();
         let pt1 = vec![1, 2, 3];
         let mut ectx1 = EncryptionContext::new(&pk);
         let mut ectx2 = EncryptionContext::new(&pk);
-        let ct1 = ectx1.encrypt_chunk(pt1.clone(), ChunkCompression::None);
-        let ct2 = ectx2.encrypt_chunk(pt1.clone(), ChunkCompression::Zstd);
+        let ct1 = ectx1.encrypt_data(pt1.clone(), DataCompression::None);
+        let ct2 = ectx2.encrypt_data(pt1.clone(), DataCompression::Zstd);
         let mut dctx = DecryptionContext::new(sk);
-        let pt2 = dctx.decrypt_chunk(ct1).unwrap();
-        let pt3 = dctx.decrypt_chunk(ct2).unwrap();
+        let pt2 = dctx.decrypt_data(ct1).unwrap();
+        let pt3 = dctx.decrypt_data(ct2).unwrap();
         assert_eq!(pt1, pt2);
         assert_eq!(pt1, pt3);
     }

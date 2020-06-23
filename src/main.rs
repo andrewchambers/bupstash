@@ -2,7 +2,6 @@ pub mod address;
 pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
-pub mod crypto;
 pub mod crypto2;
 pub mod external_chunk_storage;
 pub mod fsutil;
@@ -336,7 +335,18 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     let key = keys::Key::load_from_file(&key)?;
-    let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
+    let master_key_id = key.master_key_id();
+    let mut metadata_dctx = match key {
+        keys::Key::MasterKeyV1(k) => {
+            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            metadata_dctx
+        }
+        keys::Key::MetadataKeyV1(k) => {
+            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            metadata_dctx
+        }
+        _ => failure::bail!("provided key is a not a master decryption key"),
+    };
     let mut query: Option<tquery::Query> = None;
 
     if matches.free.len() != 0 {
@@ -354,7 +364,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if metadata.master_key_id != key.master_key_id() {
+            if metadata.master_key_id != master_key_id {
                 if !*warned_wrong_key {
                     *warned_wrong_key = true;
                     eprintln!("NOTE: Search skipping items encrypted with different master key.")
@@ -362,7 +372,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 return Ok(());
             }
 
-            let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
+            let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
             let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
             tags.insert("id".to_string(), Some(id.to_string()));
 
@@ -476,6 +486,22 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     let key = keys::Key::load_from_file(&key)?;
+    let master_key_id = key.master_key_id();
+    let (hash_key, mut data_ectx, mut metadata_ectx) = match key {
+        keys::Key::MasterKeyV1(k) => {
+            let hash_key = crypto2::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let data_ectx = crypto2::EncryptionContext::new(&k.data_pk);
+            let metadata_ectx = crypto2::EncryptionContext::new(&k.metadata_pk);
+            (hash_key, data_ectx, metadata_ectx)
+        }
+        keys::Key::SendKeyV1(k) => {
+            let hash_key = crypto2::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let data_ectx = crypto2::EncryptionContext::new(&k.data_pk);
+            let metadata_ectx = crypto2::EncryptionContext::new(&k.metadata_pk);
+            (hash_key, data_ectx, metadata_ectx)
+        }
+        _ => failure::bail!("can only send data with a master key or send key."),
+    };
 
     let data = if matches.opt_present("file") {
         let f = matches.opt_str("file").unwrap();
@@ -518,9 +544,16 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     client::handle_server_info(&mut serve_out)?;
     let id = client::send(
         client::SendOptions {
-            compression: !matches.opt_present("no-compression"),
+            compression: if matches.opt_present("no-compression") {
+                crypto2::DataCompression::None
+            } else {
+                crypto2::DataCompression::Zstd
+            },
         },
-        &key,
+        &master_key_id,
+        &hash_key,
+        &mut data_ectx,
+        &mut metadata_ectx,
         &mut send_log,
         &mut serve_out,
         &mut serve_in,
@@ -554,16 +587,19 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     } else {
         failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
     };
-
     let key = keys::Key::load_from_file(&key)?;
-    let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
-    let key = match key {
-        keys::Key::MasterKeyV1(mk) => mk,
-        _ => failure::bail!("the provided key is a not a master decryption key"),
+    let master_key_id = key.master_key_id();
+    let (hash_key_part_1, mut data_dctx, mut metadata_dctx) = match key {
+        keys::Key::MasterKeyV1(k) => {
+            let hash_key_part_1 = k.hash_key_part_1.clone();
+            let data_dctx = crypto2::DecryptionContext::new(k.data_sk.clone());
+            let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+            (hash_key_part_1, data_dctx, metadata_dctx)
+        }
+        _ => failure::bail!("provided key is a not a master decryption key"),
     };
 
     let (id, query) = matches_to_id_and_query(&matches)?;
-
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
@@ -582,11 +618,11 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut f = |qid: i64, metadata: itemset::VersionedItemMetadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.master_key_id != key.id {
+                    if master_key_id != metadata.master_key_id {
                         return Ok(());
                     }
 
-                    let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
+                    let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
                     let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
                     tags.insert("id".to_string(), Some(qid.to_string()));
                     if tquery::query_matches(&query, &tags) {
@@ -611,7 +647,10 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     client::request_data_stream(
-        &key,
+        &master_key_id,
+        &hash_key_part_1,
+        &mut data_dctx,
+        &mut metadata_dctx,
         id,
         &mut serve_out,
         &mut serve_in,
@@ -660,15 +699,26 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             };
 
             let key = keys::Key::load_from_file(&key)?;
-            let mut metadata_decrypt_ctx = crypto::DecryptContext::metadata_context(&key)?;
+            let master_key_id = key.master_key_id();
+            let mut metadata_dctx = match key {
+                keys::Key::MasterKeyV1(k) => {
+                    let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+                    metadata_dctx
+                }
+                keys::Key::MetadataKeyV1(k) => {
+                    let metadata_dctx = crypto2::DecryptionContext::new(k.metadata_sk.clone());
+                    metadata_dctx
+                }
+                _ => failure::bail!("provided key is a not a master decryption key"),
+            };
             let mut ids = Vec::new();
 
             let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.master_key_id != key.master_key_id() {
+                    if metadata.master_key_id != master_key_id {
                         return Ok(());
                     }
-                    let tags = metadata_decrypt_ctx.decrypt_data(&metadata.encrypted_tags)?;
+                    let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
                     let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
                     tags.insert("id".to_string(), Some(id.to_string()));
                     if tquery::query_matches(&query, &tags) {
