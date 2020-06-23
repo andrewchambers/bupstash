@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn local_storage_add_get_chunk() {
-        let tmp_dir = tempdir::TempDir::new("test_dir").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let path_buf = PathBuf::from(tmp_dir.path());
         let mut local_storage = LocalStorage::new(&path_buf, 5);
         let addr = Address::default();

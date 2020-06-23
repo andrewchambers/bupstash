@@ -7,7 +7,6 @@ pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
 pub mod htree;
-pub mod hydrogen;
 pub mod itemset;
 pub mod keys;
 pub mod local_chunk_storage;
@@ -831,7 +830,6 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
 }
 
 fn main() {
-    unsafe { hydrogen::init() };
     crypto2::init();
 
     let mut args: Vec<String> = std::env::args().collect();

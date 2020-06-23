@@ -1,8 +1,8 @@
-use super::{hex, hydrogen};
+use super::hex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-pub const ADDRESS_SZ: usize = hydrogen::HASH_BYTES;
+pub const ADDRESS_SZ: usize = 32;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy, Debug)]
 pub struct Address {

@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn stat_cache_sanity_test() {
-        let tmp_dir = tempdir::TempDir::new("stat_cache").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
             d.push("stat_cache.sqlite3");

@@ -1,10 +1,10 @@
 use super::address::*;
 use super::chunk_storage;
+use super::crypto2;
 use super::external_chunk_storage;
 use super::fsutil;
 use super::hex;
 use super::htree;
-use super::hydrogen;
 use super::itemset;
 use super::local_chunk_storage;
 use failure::Fail;
@@ -81,7 +81,7 @@ impl Drop for FileLock {
 
 fn new_random_token() -> String {
     let mut gen: [u8; 32] = [0; 32];
-    hydrogen::random_buf(&mut gen);
+    crypto2::randombytes(&mut gen);
     hex::easy_encode_to_string(&gen)
 }
 
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn add_get_chunk() {
-        let tmp_dir = tempdir::TempDir::new("test_repo").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
         Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();

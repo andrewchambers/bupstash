@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn gc_generation_change_wipes_log() {
-        let tmp_dir = tempdir::TempDir::new("send_log").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
             d.push("send.log");
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn address_cycling() {
-        let tmp_dir = tempdir::TempDir::new("send_log").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
             d.push("send.log");
