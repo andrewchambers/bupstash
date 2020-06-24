@@ -180,9 +180,14 @@ impl Engine for LocalStorage {
             bytes_remaining: 0,
         };
 
-        // XXX TODO iterate while delete ok on all filesystems/implementations of read_dir?
+        let mut entries = Vec::new();
+        // Collect entries into memory first so we don't have to
+        // worry about fs semantics of removing while iterating.
         for e in std::fs::read_dir(&self.data_dir)? {
-            let e = e?;
+            entries.push(e?);
+        }
+
+        for e in entries.drain(..) {
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
                     if !reachable.contains(&addr) {
