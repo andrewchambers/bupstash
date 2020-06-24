@@ -10,17 +10,20 @@ mod sodium {
     include!(concat!(env!("OUT_DIR"), "/sodium_bindings.rs"));
 }
 
-const BOX_NONCEBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_NONCEBYTES as usize;
-const BOX_PUBLICKEYBYTES: usize =
-    sodium::crypto_box_curve25519xchacha20poly1305_PUBLICKEYBYTES as usize;
-const BOX_SECRETKEYBYTES: usize =
-    sodium::crypto_box_curve25519xchacha20poly1305_SECRETKEYBYTES as usize;
-const BOX_BEFORENMBYTES: usize =
-    sodium::crypto_box_curve25519xchacha20poly1305_BEFORENMBYTES as usize;
-const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_MACBYTES as usize;
+pub const HASH_BYTES: usize = sodium::crypto_generichash_BYTES as usize;
 
-const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
-const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
+pub const BOX_NONCEBYTES: usize =
+    sodium::crypto_box_curve25519xchacha20poly1305_NONCEBYTES as usize;
+pub const BOX_PUBLICKEYBYTES: usize =
+    sodium::crypto_box_curve25519xchacha20poly1305_PUBLICKEYBYTES as usize;
+pub const BOX_SECRETKEYBYTES: usize =
+    sodium::crypto_box_curve25519xchacha20poly1305_SECRETKEYBYTES as usize;
+pub const BOX_BEFORENMBYTES: usize =
+    sodium::crypto_box_curve25519xchacha20poly1305_BEFORENMBYTES as usize;
+pub const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_MACBYTES as usize;
+
+pub const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
+pub const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
 
 pub fn init() {
     unsafe {
@@ -403,7 +406,7 @@ impl HashState {
                 } else {
                     0
                 },
-                sodium::crypto_generichash_BYTES.try_into().unwrap(),
+                HASH_BYTES.try_into().unwrap(),
             )
         } != 0
         {
@@ -425,9 +428,8 @@ impl HashState {
         };
     }
 
-    pub fn finish(mut self) -> [u8; sodium::crypto_generichash_BYTES as usize] {
-        let mut out: [u8; sodium::crypto_generichash_BYTES as usize] =
-            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    pub fn finish(mut self) -> [u8; HASH_BYTES] {
+        let mut out: [u8; HASH_BYTES] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         if unsafe {
             sodium::crypto_generichash_final(
                 &mut self.st as *mut sodium::crypto_generichash_state,

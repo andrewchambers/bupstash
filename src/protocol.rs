@@ -343,11 +343,12 @@ mod tests {
                 let master_key = keys::MasterKey::gen();
                 Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
                     itemset::ItemMetadata {
-                        address: Address::default(),
-                        tree_height: 3,
-                        master_key_id: master_key.id,
-                        hash_key_part_2: master_key.hash_key_part_2,
-                        encrypted_tags: vec![1, 2, 3],
+                        plain_text_metadata: itemset::PlainTextItemMetadata {
+                            address: Address::default(),
+                            tree_height: 3,
+                            master_key_id: master_key.id,
+                        },
+                        encrypted_metadata: vec![1, 2, 3],
                     },
                 )))
             },
@@ -361,11 +362,12 @@ mod tests {
                 let master_key = keys::MasterKey::gen();
                 Packet::RRequestData(RRequestData {
                     metadata: Some(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                        address: Address::default(),
-                        tree_height: 1234,
-                        master_key_id: master_key.id,
-                        hash_key_part_2: master_key.hash_key_part_2,
-                        encrypted_tags: vec![1, 2, 3],
+                        plain_text_metadata: itemset::PlainTextItemMetadata {
+                            address: Address::default(),
+                            tree_height: 3,
+                            master_key_id: master_key.id,
+                        },
+                        encrypted_metadata: vec![1, 2, 3],
                     })),
                 })
             },

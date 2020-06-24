@@ -1,5 +1,5 @@
 use failure::Fail;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Eq, PartialEq, Debug, Fail)]
 pub enum ParseError {
@@ -422,7 +422,7 @@ pub fn report_parse_error(e: ParseError) {
     }
 }
 
-pub fn query_matches(q: &Query, tagset: &HashMap<String, Option<String>>) -> bool {
+pub fn query_matches(q: &Query, tagset: &BTreeMap<String, Option<String>>) -> bool {
     match q {
         Query::Glob { tag, pattern, .. } => match tagset.get(tag) {
             Some(Some(v)) => pattern.matches(v),
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn test_query_match() {
-        let mut tagset = HashMap::<String, Option<String>>::new();
+        let mut tagset = BTreeMap::<String, Option<String>>::new();
         tagset.insert("foo".to_string(), Some("123".to_string()));
         tagset.insert("bar".to_string(), None);
 

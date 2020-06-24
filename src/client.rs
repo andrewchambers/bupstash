@@ -12,7 +12,7 @@ use super::rollsum;
 use super::sendlog;
 use super::statcache;
 use failure::Fail;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::convert::{From, TryInto};
 use std::os::unix::fs::MetadataExt;
 
@@ -79,7 +79,7 @@ pub fn send(
     send_log: &mut sendlog::SendLog,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-    tags: &HashMap<String, Option<String>>,
+    tags: BTreeMap<String, Option<String>>,
     data: SendSource,
 ) -> Result<i64, failure::Error> {
     write_packet(w, &Packet::TBeginSend(TBeginSend {}))?;
@@ -133,18 +133,29 @@ pub fn send(
     let chunk_data = chunker.finish();
     let addr = crypto::keyed_content_address(&chunk_data, hash_key);
     tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?;
-    let (tree_height, tree_address) = tw.finish()?;
+    let (tree_height, address) = tw.finish()?;
+
+    let plain_text_metadata = itemset::PlainTextItemMetadata {
+        master_key_id: *master_key_id,
+        tree_height,
+        address,
+    };
+
+    let e_metadata = itemset::EncryptedItemMetadata {
+        plain_text_hash: plain_text_metadata.hash(),
+        hash_key_part_2: hash_key.part2.clone(),
+        tags,
+    };
 
     write_packet(
         filtered_conn.w,
         &Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
             itemset::ItemMetadata {
-                tree_height,
-                address: tree_address,
-                master_key_id: *master_key_id,
-                hash_key_part_2: hash_key.part2.clone(),
-                encrypted_tags: metadata_ectx
-                    .encrypt_data(bincode::serialize(&tags)?, crypto::DataCompression::Zstd),
+                plain_text_metadata,
+                encrypted_metadata: metadata_ectx.encrypt_data(
+                    bincode::serialize(&e_metadata)?,
+                    crypto::DataCompression::Zstd,
+                ),
             },
         ))),
     )?;
@@ -335,7 +346,7 @@ pub fn request_data_stream(
     master_key_id: &[u8; keys::KEYID_SZ],
     hash_key_part_1: &crypto::PartialHashKey,
     data_dctx: &mut crypto::DecryptionContext,
-    _metadata_dctx: &mut crypto::DecryptionContext,
+    metadata_dctx: &mut crypto::DecryptionContext,
     id: i64,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -353,15 +364,20 @@ pub fn request_data_stream(
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if *master_key_id != metadata.master_key_id {
+            if *master_key_id != metadata.plain_text_metadata.master_key_id {
                 failure::bail!("decryption key does not match master key used for encryption");
             }
 
-            let hash_key = crypto::derive_hash_key(&hash_key_part_1, &metadata.hash_key_part_2);
+            let encrypted_metadata = metadata.decrypt_metadata(metadata_dctx)?;
+            let plain_text_metadata = metadata.plain_text_metadata;
 
-            // TODO XXX FIXME verify the encrypted metadata matches this metadata.
+            let hash_key =
+                crypto::derive_hash_key(&hash_key_part_1, &encrypted_metadata.hash_key_part_2);
 
-            let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
+            let mut tr = htree::TreeReader::new(
+                plain_text_metadata.tree_height,
+                &plain_text_metadata.address,
+            );
 
             loop {
                 match tr.next_addr()? {

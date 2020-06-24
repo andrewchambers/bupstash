@@ -4,17 +4,47 @@ use super::keys;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct ItemMetadata {
-    // XXX TODO FIXME, all unencrypted metadata
-    // could be bound to the address via some sort of authentication code.
-    pub tree_height: usize,
+pub struct PlainTextItemMetadata {
     pub master_key_id: [u8; keys::KEYID_SZ],
+    pub tree_height: usize,
     pub address: Address,
-    // XXX TODO FIXME this hash_key could be encrypted?
-    // instead of split? The only person who needs access
-    // to the hash key is the master key.
+}
+
+impl PlainTextItemMetadata {
+    pub fn hash(&self) -> [u8; crypto::HASH_BYTES] {
+        let mut hst = crypto::HashState::new(None);
+        hst.update(&bincode::serialize(&self).unwrap());
+        hst.finish()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct EncryptedItemMetadata {
+    pub plain_text_hash: [u8; crypto::HASH_BYTES],
     pub hash_key_part_2: crypto::PartialHashKey,
-    pub encrypted_tags: Vec<u8>,
+    // We want ordered serialization.
+    pub tags: std::collections::BTreeMap<String, Option<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct ItemMetadata {
+    pub plain_text_metadata: PlainTextItemMetadata,
+    // An encrypted instance of EncryptedItemMetadata
+    pub encrypted_metadata: Vec<u8>,
+}
+
+impl ItemMetadata {
+    pub fn decrypt_metadata(
+        &self,
+        dctx: &mut crypto::DecryptionContext,
+    ) -> Result<EncryptedItemMetadata, failure::Error> {
+        let data = dctx.decrypt_data(self.encrypted_metadata.clone())?;
+        let emd: EncryptedItemMetadata = bincode::deserialize(&data)?;
+        if self.plain_text_metadata.hash() != emd.plain_text_hash {
+            failure::bail!("item metadata is corrupt or tampered with");
+        }
+        Ok(emd)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

@@ -322,12 +322,13 @@ impl Repo {
 
             itemset::walk_items(&tx, &mut |_id, metadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    let addr = &metadata.address;
+                    let addr = &metadata.plain_text_metadata.address;
                     if !reachable.contains(&addr) {
                         // We could probably pipeline this tree reading similar to how
                         // we pipline fetching data, though the current insertion code is probably so fast, there isn't
                         // much gain. Consider doing this if we get code for an N deep pipeline.
-                        let mut tr = htree::TreeReader::new(metadata.tree_height, addr);
+                        let mut tr =
+                            htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
                         while let Some((height, addr)) = tr.next_addr()? {
                             if !reachable.contains(&addr) {
                                 reachable.insert(addr);

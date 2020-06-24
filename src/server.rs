@@ -126,7 +126,10 @@ fn send(
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            let mut tr = htree::TreeReader::new(metadata.tree_height, &metadata.address);
+            let mut tr = htree::TreeReader::new(
+                metadata.plain_text_metadata.tree_height,
+                &metadata.plain_text_metadata.address,
+            );
 
             // Here we send using a pipeline. The idea is we lookahead and use a worker to prefetch
             // the next data chunk in the stream, this eliminates some of the problems with latency

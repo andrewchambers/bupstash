@@ -21,7 +21,7 @@ pub mod tquery;
 
 use failure::Fail;
 use getopts::{Matches, Options};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 fn die(s: String) -> ! {
     eprintln!("{}", s);
@@ -363,7 +363,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let warned_wrong_key = &mut false;
     let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if metadata.master_key_id != master_key_id {
+            if metadata.plain_text_metadata.master_key_id != master_key_id {
                 if !*warned_wrong_key {
                     *warned_wrong_key = true;
                     eprintln!("NOTE: Search skipping items encrypted with different master key.")
@@ -371,8 +371,8 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 return Ok(());
             }
 
-            let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
-            let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+            let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+            let mut tags = encrypted_metadata.tags;
             tags.insert("id".to_string(), Some(id.to_string()));
 
             let doprint = match query {
@@ -518,7 +518,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         failure::bail!("please set --file or --dir")
     };
 
-    let mut tags = HashMap::<String, Option<String>>::new();
+    let mut tags = BTreeMap::<String, Option<String>>::new();
 
     let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
     for a in &matches.free {
@@ -556,7 +556,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut send_log,
         &mut serve_out,
         &mut serve_in,
-        &tags,
+        tags,
         data,
     )?;
     client::hangup(&mut serve_in)?;
@@ -617,12 +617,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut f = |qid: i64, metadata: itemset::VersionedItemMetadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if master_key_id != metadata.master_key_id {
+                    if master_key_id != metadata.plain_text_metadata.master_key_id {
                         return Ok(());
                     }
 
-                    let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
-                    let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+                    let mut tags = encrypted_metadata.tags;
                     tags.insert("id".to_string(), Some(qid.to_string()));
                     if tquery::query_matches(&query, &tags) {
                         n_matches += 1;
@@ -714,11 +714,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.master_key_id != master_key_id {
+                    if metadata.plain_text_metadata.master_key_id != master_key_id {
                         return Ok(());
                     }
-                    let tags = metadata_dctx.decrypt_data(metadata.encrypted_tags)?;
-                    let mut tags: HashMap<String, Option<String>> = bincode::deserialize(&tags)?;
+                    let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+                    let mut tags = encrypted_metadata.tags;
+
                     tags.insert("id".to_string(), Some(id.to_string()));
                     if tquery::query_matches(&query, &tags) {
                         ids.push(id);
