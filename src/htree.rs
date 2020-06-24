@@ -24,14 +24,14 @@ pub trait Source {
 
 use std::collections::HashMap;
 
-impl<S: ::std::hash::BuildHasher> Sink for HashMap<Address, Vec<u8>, S> {
+impl Sink for HashMap<Address, Vec<u8>> {
     fn add_chunk(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), failure::Error> {
         self.insert(*addr, data);
         Ok(())
     }
 }
 
-impl<S: ::std::hash::BuildHasher> Source for HashMap<Address, Vec<u8>, S> {
+impl Source for HashMap<Address, Vec<u8>> {
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
         if let Some(v) = self.get(addr) {
             Ok(v.clone())
