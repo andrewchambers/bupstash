@@ -54,23 +54,25 @@ teardown () {
 }
 
 @test "random data" {
-  for i in $(echo 0 1024 4096 1000000)
+  for i in $(echo 0 1024 4096 1000000 100000000)
   do
     rm -f "$SCRATCH/rand.dat"
     head -c $i /dev/urandom > "$SCRATCH/rand.dat"
     id="$(archivist send -k "$SEND_KEY" -f "$SCRATCH/rand.dat")"
     archivist get -k "$MASTER_KEY" id=$id > "$SCRATCH/got.dat"
+    archivist gc
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
   done
 }
 
 @test "highly compressible data" {
-  for i in $(echo 0 1024 4096 1000000)
+  for i in $(echo 0 1024 4096 1000000 100000000)
   do
     rm -f "$SCRATCH/rand.dat"
     yes | head -c $i > "$SCRATCH/yes.dat"
     id="$(archivist send -k "$SEND_KEY" -f "$SCRATCH/yes.dat")"
     archivist get -k "$MASTER_KEY" id=$id > "$SCRATCH/got.dat"
+    archivist gc
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
   done
 }

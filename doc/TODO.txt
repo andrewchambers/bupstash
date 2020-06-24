@@ -1,7 +1,5 @@
 External storage garbage collection.
 
-We should use libsodium and optimise our authentication to prevent excessive hashing (We already authenticate data via hmac, we don't need authentication of data, only metadata.). Rework how crypto/keys work to be more efficient.
-
 Shift storage engine spec out of sqlite database for easier editing.
 
 Remove dependency on codemap? We should be able to have a small simple version.
@@ -36,3 +34,5 @@ Rewrite external backend? Only use a single socket for all requests? Are we sure
 Fewer sockets, potentially more complicated code?
 
 Allow more than 4gigs of hashes in backend protocol?
+
+Split encrypted metadata and unencrypted so gc doesn't need to fetch encrypted metadata?

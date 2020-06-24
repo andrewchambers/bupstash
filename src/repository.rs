@@ -324,18 +324,16 @@ impl Repo {
                 itemset::VersionedItemMetadata::V1(metadata) => {
                     let addr = &metadata.plain_text_metadata.address;
                     if !reachable.contains(&addr) {
-                        // We could probably pipeline this tree reading similar to how
-                        // we pipline fetching data, though the current insertion code is probably so fast, there isn't
-                        // much gain. Consider doing this if we get code for an N deep pipeline.
+                        // IDEA:
+                        // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
+                        // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
                         let mut tr =
                             htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
                         while let Some((height, addr)) = tr.next_addr()? {
-                            if !reachable.contains(&addr) {
-                                reachable.insert(addr);
-                                if height != 0 {
-                                    let data = storage_engine.get_chunk(&addr)?;
-                                    tr.push_level(height - 1, data)?;
-                                }
+                            reachable.insert(addr);
+                            if height != 0 {
+                                let data = storage_engine.get_chunk(&addr)?;
+                                tr.push_level(height - 1, data)?;
                             }
                         }
                     }

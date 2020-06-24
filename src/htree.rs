@@ -72,11 +72,14 @@ impl<'a> TreeWriter<'a> {
     }
 
     fn clear_level(&mut self, level: usize) -> Result<(), failure::Error> {
-        let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
-        std::mem::swap(&mut block, &mut self.tree_blocks[level]);
-        let block_address = tree_block_address(&block);
-        self.sink.add_chunk(&block_address, block)?;
-        self.add_addr(level + 1, &block_address)?;
+        // Writing empty blocks the parent level is pointless.
+        if !self.tree_blocks[level].is_empty() {
+            let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
+            std::mem::swap(&mut block, &mut self.tree_blocks[level]);
+            let block_address = tree_block_address(&block);
+            self.sink.add_chunk(&block_address, block)?;
+            self.add_addr(level + 1, &block_address)?;
+        }
         self.rollsums[level].reset();
         Ok(())
     }
@@ -125,15 +128,8 @@ impl<'a> TreeWriter<'a> {
                 .clone_from_slice(&self.tree_blocks[level][..]);
             return Ok((level, result_addr));
         }
-
-        if self.tree_blocks[level].is_empty() {
-            // Empty block, writing it to the parent is pointless.
-            return self.finish_level(level + 1);
-        }
-
         // The tree blocks must contain whole addresses.
         assert!((self.tree_blocks[level].len() % ADDRESS_SZ) == 0);
-
         self.clear_level(level)?;
         Ok(self.finish_level(level + 1)?)
     }
@@ -171,6 +167,12 @@ impl TreeReader {
         tr
     }
 
+    fn pop(&mut self) {
+        self.tree_blocks.pop();
+        self.tree_heights.pop();
+        self.read_offsets.pop();
+    }
+
     pub fn push_level(&mut self, level: usize, data: Vec<u8>) -> Result<(), failure::Error> {
         self.read_offsets.push(0);
         self.tree_heights.push(level);
@@ -178,13 +180,6 @@ impl TreeReader {
         Ok(())
     }
 
-    fn pop(&mut self) {
-        self.tree_blocks.pop();
-        self.tree_heights.pop();
-        self.read_offsets.pop();
-    }
-
-    // Returns (level, Address)
     pub fn next_addr(&mut self) -> Result<Option<(usize, Address)>, failure::Error> {
         loop {
             if self.tree_blocks.is_empty() {

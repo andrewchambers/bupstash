@@ -131,22 +131,18 @@ fn send(
                 &metadata.plain_text_metadata.address,
             );
 
-            // Here we send using a pipeline. The idea is we lookahead and use a worker to prefetch
-            // the next data chunk in the stream, this eliminates some of the problems with latency
-            // when fetching from a slow storage engine.
+            // The idea is we fetch the next chunk while we are sending the current chunk.
+            // to mitigate some of the problems with latency when fetching from a slow storage engine.
 
             let (height, chunk_address) = tr.next_addr()?.unwrap();
-            let mut next_in_pipeline = (
+            let mut next = (
                 height,
                 chunk_address,
                 storage_engine.get_chunk_async(&chunk_address),
             );
 
-            // Idea:
-            // we could use a queue with N values, initially filled with noops to utilize N workers
-            // worth of lookahead. The tradeoff is we can have a peak memory usage of N*MaxChunkSize.
             loop {
-                let (height, chunk_address, pending_chunk) = next_in_pipeline;
+                let (height, chunk_address, pending_chunk) = next;
                 let chunk_data = pending_chunk.recv()??;
                 if height != 0 {
                     tr.push_level(height - 1, chunk_data.clone())?;
@@ -154,7 +150,7 @@ fn send(
 
                 match tr.next_addr()? {
                     Some((height, chunk_address)) => {
-                        next_in_pipeline = (
+                        next = (
                             height,
                             chunk_address,
                             storage_engine.get_chunk_async(&chunk_address),
@@ -172,6 +168,7 @@ fn send(
                     }
                 }
 
+                // Write the chunk out while the async worker fetches the next one.
                 write_packet(
                     w,
                     &Packet::Chunk(Chunk {
