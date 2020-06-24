@@ -148,7 +148,7 @@ pub fn send(
     };
 
     write_packet(
-        filtered_conn.w,
+        w,
         &Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
             itemset::ItemMetadata {
                 plain_text_metadata,
