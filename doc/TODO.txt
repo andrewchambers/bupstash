@@ -36,3 +36,5 @@ Fewer sockets, potentially more complicated code?
 Allow more than 4gigs of hashes in backend protocol?
 
 Split encrypted metadata and unencrypted so gc doesn't need to fetch encrypted metadata?
+
+Initially only start one backend worker, scale up when workload requires it.

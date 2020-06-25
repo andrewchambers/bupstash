@@ -1,8 +1,10 @@
 # Technical overview
 
-This document explains the datastructures and details of the archivist backup/storage system. Archivist
-stores arbitrary data streams into an encrypted repository, with an associated set of arbitrary
-encrypted key/value metadata that can be queried.
+This document explains the datastructures and details of the archivist backup/storage system.
+
+Archivist stores arbitrary encrypted data streams with an associated set of arbitrary
+encrypted key/value metadata, this .
+
 
 First, lets cover the basics of using archivist for context:
 
@@ -110,8 +112,8 @@ pub struct PlainTextItemMetadata {
 }
 
 pub struct EncryptedItemMetadata {
-    pub plain_text_hash: [u8; crypto::HASH_BYTES],
-    pub hash_key_part_2: crypto::PartialHashKey,
+    pub plain_text_hash: [u8; HASH_BYTES],
+    pub hash_key_part_2: PartialHashKey,
     // We want ordered serialization.
     pub tags: std::collections::BTreeMap<String, Option<String>>,
 }
@@ -278,36 +280,34 @@ Keys are stored as [bincoded](https://github.com/servo/bincode) byte arrays. Whe
 are pem encoded.
 
 ```
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+
+
 pub struct MasterKey {
     pub id: [u8; KEYID_SZ],
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    pub data_pk: crypto::BoxPublicKey,
-    pub data_sk: crypto::BoxSecretKey,
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_sk: crypto::BoxSecretKey,
+    pub hash_key_part_1: PartialHashKey,
+    pub hash_key_part_2: PartialHashKey,
+    pub data_pk: BoxPublicKey,
+    pub data_sk: BoxSecretKey,
+    pub metadata_pk: BoxPublicKey,
+    pub metadata_sk: BoxSecretKey,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
 pub struct SendKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    pub data_pk: crypto::BoxPublicKey,
-    pub metadata_pk: crypto::BoxPublicKey,
+    pub hash_key_part_1: PartialHashKey,
+    pub hash_key_part_2: PartialHashKey,
+    pub data_pk: BoxPublicKey,
+    pub metadata_pk: BoxPublicKey,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
 pub struct MetadataKey {
     pub id: [u8; KEYID_SZ],
     pub master_key_id: [u8; KEYID_SZ],
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_sk: crypto::BoxSecretKey,
+    pub metadata_pk: BoxPublicKey,
+    pub metadata_sk: BoxSecretKey,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     MasterKeyV1(MasterKey),
     SendKeyV1(SendKey),
@@ -347,7 +347,7 @@ On cache hit archivist is able to skip sending a tar header, or file contents, i
 to the hash tree that is being written.
 
 By default this cache is at `$HOME/.cache/archivist/stat-cache.sqlite3`. But users are given the ability
-to override the stat cache path when they with to optimize cache invalidation.
+to override the stat cache path when they wish to optimize cache invalidation.
 
 ## Search and query
 
@@ -358,7 +358,7 @@ The question then arises, if all metadata is encrypted, how does search work?  T
 the repository owner.
 
 By default the synced query cache resides at `$HOME/.cache/archivist/query-cache.sqlite3`. But users are given the ability
-to override the query cache path when they with to optimize cache invalidation.
+to override the query cache path when they wish to optimize cache invalidation.
 
 ## Forward secrecy
 
