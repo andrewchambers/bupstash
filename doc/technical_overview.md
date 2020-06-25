@@ -1,6 +1,8 @@
 # Technical overview
 
-This document explains the datastructures and details of the archivist backup/storage system.
+This document explains the datastructures and details of the archivist backup/storage system. Archivist
+stores arbitrary data streams into an encrypted repository, with an associated set of arbitrary
+encrypted key/value metadata that can be queried.
 
 First, lets cover the basics of using archivist for context:
 
