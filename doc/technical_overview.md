@@ -98,7 +98,7 @@ gc-generation=$RANDOM_UNIQUE_ID
 storage-engine=$SPEC 
 ```
 
-The `ItemOpLog` is an append only ledger where each OpData entry is is a [bincoded](https://github.com/servo/bincode) LogOp
+The `ItemOpLog` is an append only ledger where each OpData entry is a [bincoded](https://github.com/servo/bincode) LogOp
 of the following format:
 
 
