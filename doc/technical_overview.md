@@ -101,28 +101,25 @@ of the following format:
 
 
 ```
+pub struct PlainTextItemMetadata {
+    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub tree_height: usize,
+    pub address: Address,
+}
 
-pub struct Address {
-    pub bytes: [u8; ADDRESS_SZ],
+pub struct EncryptedItemMetadata {
+    pub plain_text_hash: [u8; crypto::HASH_BYTES],
+    pub hash_key_part_2: crypto::PartialHashKey,
+    // We want ordered serialization.
+    pub tags: std::collections::BTreeMap<String, Option<String>>,
 }
 
 pub struct ItemMetadata {
-    pub tree_height: usize,
-    pub master_key_id: [u8; keys::KEYID_SZ],
-    pub address: Address,
-    pub hash_key_part_2a: [u8; keys::PARTIAL_HASH_KEY_SZ],
-    pub hash_key_part_2b: [u8; keys::PARTIAL_HASH_KEY_SZ],
-    pub encrypted_tags: Vec<u8>,
+    pub plain_text_metadata: PlainTextItemMetadata,
+    // An encrypted serialization of a bincoded EncryptedItemMetadata
+    pub encrypted_metadata: Vec<u8>,
 }
 
-pub enum VersionedItemMetadata {
-    V1(ItemMetadata),
-}
-
-pub enum LogOp {
-    AddItem(VersionedItemMetadata),
-    RemoveItems(Vec<i64>),
-}
 ```
 
 It is important to note, all metadata like search tags are stored encrypted and are not 
