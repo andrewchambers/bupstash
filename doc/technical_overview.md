@@ -362,7 +362,7 @@ to override the query cache path when they wish to optimize cache invalidation.
 
 ## Forward secrecy
 
-Archivist provides forward secrecy with respect to sending keys, but not the master key. This protects users
+Archivist provides forward secrecy with respect to sending keys. This protects users
 from compromised or malicious clients that wish to read historic backups, and thus preventing 'undeletion' of sensitive deleted.
 
 This works because when encrypting data chunks, archivist uses an ephemeral key,
