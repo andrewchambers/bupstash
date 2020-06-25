@@ -160,7 +160,7 @@ This addressing and encryption scheme has some important properties:
 - The repository owner *cannot* decrypt leaves of the hash tree, as they are encrypted.
 - The repository owner *can* iterate the hash tree for garbage collection purposes.
 - The repository owner *can* run garbage collection without retrieving the leaf nodes from cold storage.
-- The repository owner *can* push stream a hash tree to a client with no network round trips.
+- The repository owner *can* push stream a of hash tree nodes to a client with no network round trips.
 - A client *can* send data streams to a repository without sharing the encryption key.
 - A client *can* retrieve and verify a datastream by checking hmacs.
 
