@@ -246,13 +246,11 @@ impl Repo {
                 data_dir.push("data");
                 Box::new(local_chunk_storage::LocalStorage::new(&data_dir))
             }
-
             StorageEngineSpec::External { socket_path, path } => {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
                     path,
-                    4,
                 )?)
             }
         };
