@@ -15,7 +15,7 @@ impl StatCache {
     pub fn open(p: &PathBuf, remember: i64) -> Result<StatCache, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
-
+        conn.busy_timeout(std::time::Duration::new(600, 0))?;
         let tx = conn.transaction()?;
 
         tx.execute(
@@ -71,6 +71,8 @@ impl StatCache {
         )?;
 
         tx.commit()?;
+
+        conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
 
         Ok(StatCache { conn, remember })
     }

@@ -309,10 +309,13 @@ impl Repo {
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
+        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
         let mut storage_engine = self.storage_engine()?;
-        let tx = self.conn.transaction()?;
+
         {
+            let tx = self.conn.transaction()?;
             tx.execute(
                 "update RepositoryMeta set value = ? where key = 'gc-generation';",
                 rusqlite::params![new_random_token()],
@@ -340,11 +343,11 @@ impl Repo {
                     Ok(())
                 }
             })?;
-        }
 
-        // We MUST commit the new gc generation before we start
-        // deleting any chunks.
-        tx.commit()?;
+            // We MUST commit the new gc generation before we start
+            // deleting any chunks.
+            tx.commit()?;
+        }
 
         let stats = storage_engine.gc(reachable)?;
         Ok(stats)

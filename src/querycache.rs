@@ -45,7 +45,31 @@ impl QueryCache {
 
         itemset::init_tables(&mut tx)?;
 
+        let recently_cleared = match tx.query_row(
+            "select Value from QueryCacheMeta where Key = 'recently-cleared';",
+            rusqlite::NO_PARAMS,
+            |r| {
+                let v: bool = r.get(0)?;
+                Ok(v)
+            },
+        ) {
+            Ok(v) => v,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(err) => return Err(err.into()),
+        };
+
+        if recently_cleared {
+            tx.execute(
+                "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 0);",
+                rusqlite::NO_PARAMS,
+            )?;
+        }
+
         tx.commit()?;
+
+        if recently_cleared {
+            conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+        }
 
         Ok(QueryCache { conn: conn })
     }
@@ -61,6 +85,10 @@ impl<'a> QueryCacheTx<'a> {
         self.tx.execute("delete from Items;", rusqlite::NO_PARAMS)?;
         self.tx
             .execute("delete from ItemOpLog;", rusqlite::NO_PARAMS)?;
+        self.tx.execute(
+            "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 1);",
+            rusqlite::NO_PARAMS,
+        )?;
         Ok(())
     }
 
