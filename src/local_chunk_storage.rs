@@ -19,17 +19,19 @@ enum WorkerMsg {
 }
 
 pub struct LocalStorage {
-    had_io_error: Arc<AtomicBool>,
     data_dir: PathBuf,
+    had_io_error: Arc<AtomicBool>,
     worker_handles: Vec<std::thread::JoinHandle<()>>,
-    dispatch: crossbeam::channel::Sender<WorkerMsg>,
-    rendezvous: crossbeam::channel::Receiver<Option<failure::Error>>,
+    worker_tx: crossbeam::channel::Sender<WorkerMsg>,
+    worker_rx: crossbeam::channel::Receiver<WorkerMsg>,
+    rendezvous_tx: crossbeam::channel::Sender<Option<failure::Error>>,
+    rendezvous_rx: crossbeam::channel::Receiver<Option<failure::Error>>,
 }
 
 impl Drop for LocalStorage {
     fn drop(&mut self) {
         for _i in 0..self.worker_handles.len() {
-            let _ = self.dispatch.send(WorkerMsg::Exit);
+            let _ = self.worker_tx.send(WorkerMsg::Exit);
         }
         for h in self.worker_handles.drain(..) {
             let _ = h.join();
@@ -38,85 +40,90 @@ impl Drop for LocalStorage {
 }
 
 impl LocalStorage {
-    pub fn new(path: &std::path::Path, mut nworkers: usize) -> Self {
-        if nworkers == 0 {
-            nworkers = 1
-        }
+    fn add_worker_thread(&mut self) {
+        // Quite a small stack for these workers.
+        let mut data_dir = self.data_dir.to_path_buf();
+        let had_io_error = self.had_io_error.clone();
+        let worker_rx = self.worker_rx.clone();
+        let rendezvous_tx = self.rendezvous_tx.clone();
 
-        let mut worker_handles = Vec::new();
-        let had_io_error = Arc::new(AtomicBool::new(false));
-        let (dispatch, rx) = crossbeam::channel::bounded(0);
-        let (ack_barrier, rendezvous) = crossbeam::channel::bounded(0);
-
-        for _i in 0..nworkers {
-            // Quite a small stack for these workers.
-            let builder = std::thread::Builder::new().stack_size(256 * 1024);
-            let mut data_dir = path.to_path_buf();
-            let had_io_error = had_io_error.clone();
-            let rx = rx.clone();
-            let ack_barrier = ack_barrier.clone();
-
-            let worker = builder
-                .spawn(move || {
-                    let mut write_err: Option<failure::Error> = None;
-                    loop {
-                        match rx.recv() {
-                            Ok(WorkerMsg::GetChunk((addr, tx))) => {
-                                data_dir.push(addr.as_hex_addr().as_str());
-                                let result = std::fs::read(data_dir.as_path());
-                                data_dir.pop();
-                                let result = match result {
-                                    Ok(data) => Ok(data),
-                                    Err(err) => Err(err.into()),
-                                };
-                                let _ = tx.send(result);
-                            }
-                            Ok(WorkerMsg::AddChunk((addr, buf))) => {
-                                data_dir.push(addr.as_hex_addr().as_str());
-                                let result = if !data_dir.exists() {
-                                    fsutil::atomic_add_file(data_dir.as_path(), &buf)
-                                } else {
-                                    Ok(())
-                                };
-                                data_dir.pop();
-                                if let Err(err) = result {
-                                    had_io_error.store(true, Ordering::SeqCst);
-                                    if write_err.is_none() {
-                                        write_err = Some(err.into());
-                                    }
+        let worker = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let mut write_err: Option<failure::Error> = None;
+                loop {
+                    match worker_rx.recv() {
+                        Ok(WorkerMsg::GetChunk((addr, tx))) => {
+                            data_dir.push(addr.as_hex_addr().as_str());
+                            let result = std::fs::read(data_dir.as_path());
+                            data_dir.pop();
+                            let result = match result {
+                                Ok(data) => Ok(data),
+                                Err(err) => Err(err.into()),
+                            };
+                            let _ = tx.send(result);
+                        }
+                        Ok(WorkerMsg::AddChunk((addr, buf))) => {
+                            data_dir.push(addr.as_hex_addr().as_str());
+                            let result = if !data_dir.exists() {
+                                fsutil::atomic_add_file(data_dir.as_path(), &buf)
+                            } else {
+                                Ok(())
+                            };
+                            data_dir.pop();
+                            if let Err(err) = result {
+                                had_io_error.store(true, Ordering::SeqCst);
+                                if write_err.is_none() {
+                                    write_err = Some(err.into());
                                 }
                             }
-                            Ok(WorkerMsg::Barrier) => {
-                                let mut err = None;
-                                std::mem::swap(&mut write_err, &mut err);
-                                ack_barrier.send(err).unwrap();
-                            }
-                            Ok(WorkerMsg::Exit) | Err(_) => {
-                                return;
-                            }
+                        }
+                        Ok(WorkerMsg::Barrier) => {
+                            let mut err = None;
+                            std::mem::swap(&mut write_err, &mut err);
+                            rendezvous_tx.send(err).unwrap();
+                        }
+                        Ok(WorkerMsg::Exit) | Err(_) => {
+                            return;
                         }
                     }
-                })
-                .unwrap();
-            worker_handles.push(worker);
-        }
+                }
+            })
+            .unwrap();
+        self.worker_handles.push(worker);
+    }
 
-        LocalStorage {
+    fn ensure_workers(&mut self, n: usize) {
+        while self.worker_handles.len() < n {
+            self.add_worker_thread()
+        }
+    }
+
+    pub fn new(path: &std::path::Path) -> Self {
+        let worker_handles = Vec::new();
+        let had_io_error = Arc::new(AtomicBool::new(false));
+        let (worker_tx, worker_rx) = crossbeam::channel::bounded(0);
+        let (rendezvous_tx, rendezvous_rx) = crossbeam::channel::bounded(0);
+        let mut ls = LocalStorage {
             data_dir: path.to_path_buf(),
             worker_handles,
-            dispatch,
-            rendezvous,
+            worker_tx,
+            worker_rx,
+            rendezvous_tx,
+            rendezvous_rx,
             had_io_error,
-        }
+        };
+        ls.ensure_workers(1);
+        ls
     }
 
     fn sync_workers(&mut self) -> Result<(), failure::Error> {
         for _i in 0..self.worker_handles.len() {
-            self.dispatch.send(WorkerMsg::Barrier).unwrap();
+            self.worker_tx.send(WorkerMsg::Barrier).unwrap();
         }
         let mut write_error: Option<failure::Error> = None;
         for _i in 0..self.worker_handles.len() {
-            if let Some(err) = self.rendezvous.recv().unwrap() {
+            if let Some(err) = self.rendezvous_rx.recv().unwrap() {
                 if write_error.is_none() {
                     write_error = Some(err)
                 }
@@ -162,11 +169,28 @@ impl LocalStorage {
 impl Engine for LocalStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         // Abort upload early on any io errors.
+        self.ensure_workers(3);
         self.check_worker_io_errors()?;
-        self.dispatch
+        self.worker_tx
             .send(WorkerMsg::AddChunk((*addr, buf)))
             .unwrap();
         Ok(())
+    }
+
+    fn get_chunk_async(
+        &mut self,
+        addr: &Address,
+    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
+        self.ensure_workers(1);
+        let (tx, rx) = crossbeam::channel::bounded(1);
+        self.worker_tx
+            .send(WorkerMsg::GetChunk((*addr, tx)))
+            .unwrap();
+        rx
+    }
+
+    fn sync(&mut self) -> Result<(), failure::Error> {
+        self.sync_workers()
     }
 
     fn gc(
@@ -211,21 +235,6 @@ impl Engine for LocalStorage {
         }
         Ok(stats)
     }
-
-    fn get_chunk_async(
-        &mut self,
-        addr: &Address,
-    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
-        let (tx, rx) = crossbeam::channel::bounded(1);
-        self.dispatch
-            .send(WorkerMsg::GetChunk((*addr, tx)))
-            .unwrap();
-        rx
-    }
-
-    fn sync(&mut self) -> Result<(), failure::Error> {
-        self.sync_workers()
-    }
 }
 
 #[cfg(test)]
@@ -236,7 +245,7 @@ mod tests {
     fn local_storage_add_get_chunk() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let path_buf = PathBuf::from(tmp_dir.path());
-        let mut local_storage = LocalStorage::new(&path_buf, 5);
+        let mut local_storage = LocalStorage::new(&path_buf);
         let addr = Address::default();
         local_storage.add_chunk(&addr, vec![1]).unwrap();
         local_storage.sync().unwrap();

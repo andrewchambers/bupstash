@@ -244,10 +244,7 @@ impl Repo {
             StorageEngineSpec::Local => {
                 let mut data_dir = self.repo_path.to_path_buf();
                 data_dir.push("data");
-                // XXX fixme, how many workers do we want?
-                // configurable?
-                // it depends on the context?
-                Box::new(local_chunk_storage::LocalStorage::new(&data_dir, 4))
+                Box::new(local_chunk_storage::LocalStorage::new(&data_dir))
             }
 
             StorageEngineSpec::External { socket_path, path } => {
