@@ -93,9 +93,21 @@ impl LocalStorage {
         self.worker_handles.push(worker);
     }
 
-    fn ensure_workers(&mut self, n: usize) {
-        while self.worker_handles.len() < n {
-            self.add_worker_thread()
+    fn scaling_worker_dispatch(&mut self, msg: WorkerMsg) -> Result<(), failure::Error> {
+        // Should this be configurable?
+        const MAX_WORKERS: usize = 4;
+
+        if self.worker_handles.len() < MAX_WORKERS {
+            match self.worker_tx.try_send(msg) {
+                Ok(_) => Ok(()),
+                Err(crossbeam::channel::TrySendError::Full(msg)) => {
+                    self.add_worker_thread();
+                    Ok(self.worker_tx.send(msg)?)
+                }
+                Err(err) => Err(err.into()),
+            }
+        } else {
+            Ok(self.worker_tx.send(msg)?)
         }
     }
 
@@ -104,7 +116,7 @@ impl LocalStorage {
         let had_io_error = Arc::new(AtomicBool::new(false));
         let (worker_tx, worker_rx) = crossbeam::channel::bounded(0);
         let (rendezvous_tx, rendezvous_rx) = crossbeam::channel::bounded(0);
-        let mut ls = LocalStorage {
+        LocalStorage {
             data_dir: path.to_path_buf(),
             worker_handles,
             worker_tx,
@@ -112,9 +124,7 @@ impl LocalStorage {
             rendezvous_tx,
             rendezvous_rx,
             had_io_error,
-        };
-        ls.ensure_workers(1);
-        ls
+        }
     }
 
     fn sync_workers(&mut self) -> Result<(), failure::Error> {
@@ -168,11 +178,8 @@ impl LocalStorage {
 
 impl Engine for LocalStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
-        // Abort upload early on any io errors.
-        self.ensure_workers(3);
         self.check_worker_io_errors()?;
-        self.worker_tx
-            .send(WorkerMsg::AddChunk((*addr, buf)))
+        self.scaling_worker_dispatch(WorkerMsg::AddChunk((*addr, buf)))
             .unwrap();
         Ok(())
     }
@@ -181,10 +188,8 @@ impl Engine for LocalStorage {
         &mut self,
         addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
-        self.ensure_workers(1);
         let (tx, rx) = crossbeam::channel::bounded(1);
-        self.worker_tx
-            .send(WorkerMsg::GetChunk((*addr, tx)))
+        self.scaling_worker_dispatch(WorkerMsg::GetChunk((*addr, tx)))
             .unwrap();
         rx
     }
