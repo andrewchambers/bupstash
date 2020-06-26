@@ -102,7 +102,7 @@ impl Repo {
         path_buf.push("data");
         Repo::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
-        path_buf.push("archivist.db");
+        path_buf.push("archivist.sqlite3");
         Repo::ensure_file_exists(&path_buf.as_path())?;
         path_buf.pop();
         Ok(())
@@ -189,7 +189,7 @@ impl Repo {
 
     fn open_db(repo_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
         let mut db_path = repo_path.to_path_buf();
-        db_path.push("archivist.db");
+        db_path.push("archivist.sqlite3");
         let conn = rusqlite::Connection::open(db_path)?;
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
             Ok(())

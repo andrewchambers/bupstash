@@ -25,7 +25,7 @@ teardown () {
 @test "init repository" {
   test -d "$REPO"
   test -d "$REPO/data"
-  test -f "$REPO/archivist.db"
+  test -f "$REPO/archivist.sqlite3"
   test -f "$REPO/gc.lock"
   test -f "$MASTER_KEY"
   test -f "$SEND_KEY"
@@ -141,27 +141,27 @@ _concurrent_send_test_worker () {
   id2="$(archivist send -k "$MASTER_KEY" -f <(echo hello2))"
   archivist list -k "$MASTER_KEY"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
+  test 2 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 2 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from Items;')"
   test 2 = "$(ls "$REPO/data" | wc -l)"
   archivist rm id=$id1
   archivist list -k "$MASTER_KEY"
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 3 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
+  test 3 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 1 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from Items;')"
   test 2 = "$(ls "$REPO/data" | wc -l)"
   archivist gc
   archivist list -k "$MASTER_KEY"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
+  test 1 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 1 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from Items;')"
   test 1 = "$(ls "$REPO/data" | wc -l)"
   archivist rm id=$id2
   archivist gc
   archivist list -k "$MASTER_KEY"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/archivist.db" 'select count(*) from Items;')"
+  test 0 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 0 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from Items;')"
   test 0 = "$(ls "$REPO/data" | wc -l)"
 }
 

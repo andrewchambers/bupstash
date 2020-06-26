@@ -10,8 +10,6 @@ In storage backends, way to avoid starting unused worker threads?
 
 repository and cache vacuuming.
 
-rename .db file to .sqlite3 ?
-
 think of different name.
 
 Reconsider if we always want a write log, or if it should be optional.
@@ -30,13 +28,12 @@ ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com/archivist serve"
 
 Prefetch system should also work for non leaf tree nodes. htree peek api?
 
-Rewrite external backend? Only use a single socket for all requests? Are we sure of the benefit?
-Fewer sockets, potentially more complicated code?
-
 Allow more than 4gigs of hashes in backend protocol?
 
 Split encrypted metadata and unencrypted so gc doesn't need to fetch encrypted metadata?
 
-Initially only start one backend worker, scale up when workload requires it.
-
 Improve documentation on key exchange packet and 'box' structure.
+
+Tests shouldn't depend on bash.
+
+Should allow running of single tests.

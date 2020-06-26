@@ -67,14 +67,14 @@ Files:
 
 ```
 repo/
-├── archivist.db
+├── archivist.sqlite3
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
 │   └── ...
 └── gc.lock
 ```
 
-### archivist.db
+### archivist.sqlite3
 
 An sqlite repository, with the following schema:
 
