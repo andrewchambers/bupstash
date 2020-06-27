@@ -37,3 +37,9 @@ Improve documentation on key exchange packet and 'box' structure.
 Tests shouldn't depend on bash.
 
 Should allow running of single tests.
+
+We should use random id's for our oplog items, using the integer primary key
+
+Sendlog + Statcache should NOT be invalidated by gc. We could instead only allow
+memory == 1 and check if the server still has an item via it's random id.
+(see above.)

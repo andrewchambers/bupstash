@@ -1,4 +1,4 @@
-use super::address::Address;
+use super::address::{Address, ADDRESS_SZ};
 use super::chunk_storage::Engine;
 use super::protocol;
 use super::repository;
@@ -143,10 +143,12 @@ impl ExternalStorage {
                                 &mut sock,
                                 protocol::DEFAULT_MAX_PACKET_SIZE,
                             ) {
-                                Ok(protocol::Packet::TStorageWriteBarrier) => (),
+                                Ok(protocol::Packet::RStorageWriteBarrier) => (),
                                 Ok(_) => {
                                     if maybe_err.is_none() {
-                                        maybe_err = Some(failure::format_err!("protocol error"));
+                                        maybe_err = Some(failure::format_err!(
+                                            "protocol error, expected RStorageWriteBarrier"
+                                        ));
                                     }
                                 }
                                 Err(err) => {
@@ -265,12 +267,37 @@ impl Engine for ExternalStorage {
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error> {
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
+
+        protocol::write_packet(&mut sock, &protocol::Packet::StorageBeginGC)?;
+
+        /* Transfer addresses over in chunks, terminated with an empty block */
+        const ADDRESSES_PER_PACKET: usize = 4096;
+        let mut reachable_part = Vec::with_capacity(ADDRESSES_PER_PACKET * ADDRESS_SZ);
+        for a in reachable.iter() {
+            reachable_part.extend_from_slice(&a.bytes[..]);
+            if reachable_part.len() == ADDRESSES_PER_PACKET * ADDRESS_SZ {
+                protocol::write_packet(
+                    &mut sock,
+                    &protocol::Packet::StorageGCReachable(reachable_part.clone()),
+                )?;
+                reachable_part.clear();
+            }
+        }
+        if !reachable_part.is_empty() {
+            protocol::write_packet(
+                &mut sock,
+                &protocol::Packet::StorageGCReachable(reachable_part.clone()),
+            )?;
+            reachable_part.clear();
+        }
+        /* Empty block */
         protocol::write_packet(
             &mut sock,
-            &protocol::Packet::TStorageGC(protocol::TStorageGC { reachable }),
+            &protocol::Packet::StorageGCReachable(reachable_part),
         )?;
+
         match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::RStorageGC(stats)) => {
+            Ok(protocol::Packet::StorageGCComplete(stats)) => {
                 let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
                 Ok(stats)
             }

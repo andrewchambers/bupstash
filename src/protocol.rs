@@ -62,9 +62,7 @@ pub struct StorageConnect {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TStorageGC {
-    pub reachable: std::collections::HashSet<Address>,
-}
+pub struct StorageBeginGC {}
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -86,8 +84,9 @@ pub enum Packet {
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
-    TStorageGC(TStorageGC),
-    RStorageGC(repository::GCStats),
+    StorageBeginGC,
+    StorageGCReachable(Vec<u8>), /* Actually vector of addresses, done like this for efficiency */
+    StorageGCComplete(repository::GCStats),
     EndOfTransmission,
 }
 
@@ -109,8 +108,9 @@ const PACKET_KIND_R_REQUEST_CHUNK: u8 = 14;
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 15;
 const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 16;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 17;
-const PACKET_T_STORAGE_GC: u8 = 18;
-const PACKET_KIND_R_STORAGE_GC: u8 = 19;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 18;
+const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 19;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 20;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -177,16 +177,9 @@ pub fn read_packet(
         PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(bincode::deserialize(&buf)?),
         PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(bincode::deserialize(&buf)?),
-        PACKET_T_STORAGE_GC => {
-            let mut address = Address { bytes: [0; 32] };
-            let mut reachable = std::collections::HashSet::new();
-            for a in buf.chunks(ADDRESS_SZ) {
-                address.bytes.clone_from_slice(a);
-                reachable.insert(address.clone());
-            }
-            Packet::TStorageGC(TStorageGC { reachable })
-        }
-        PACKET_KIND_R_STORAGE_GC => Packet::RStorageGC(bincode::deserialize(&buf)?),
+        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
+        PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
+        PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(bincode::deserialize(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
@@ -291,21 +284,21 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::TStorageGC(TStorageGC { reachable }) => {
-            let len = reachable.len() * ADDRESS_SZ;
-            // FIXME, excessive (2x) memory usage.
-            let mut buf = Vec::<u8>::with_capacity(len);
-            for addr in reachable.iter() {
-                buf.extend_from_slice(&addr.bytes);
-            }
-            std::mem::drop(reachable);
-
-            send_hdr(w, PACKET_T_STORAGE_GC, len.try_into()?)?;
-            w.write_all(&buf)?;
+        Packet::StorageBeginGC => {
+            send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, 0)?;
         }
-        Packet::RStorageGC(ref v) => {
+        Packet::StorageGCReachable(reachable) => {
+            std::mem::drop(reachable);
+            send_hdr(
+                w,
+                PACKET_KIND_STORAGE_GC_REACHABLE,
+                reachable.len().try_into()?,
+            )?;
+            w.write_all(&reachable)?;
+        }
+        Packet::StorageGCComplete(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_R_STORAGE_GC, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TStorageWriteBarrier => {
@@ -395,10 +388,17 @@ mod tests {
                 path: "abc".to_string(),
             }),
             {
-                let mut reachable = std::collections::HashSet::new();
-                reachable.insert(Address::default());
-                Packet::TStorageGC(TStorageGC { reachable })
+                let mut reachable = Vec::new();
+                reachable.extend_from_slice(&Address::default().bytes[..]);
+                Packet::StorageGCReachable(reachable)
             },
+            Packet::StorageBeginGC,
+            Packet::StorageGCComplete(repository::GCStats {
+                chunks_remaining: 1,
+                chunks_freed: 123,
+                bytes_freed: 345,
+                bytes_remaining: 678,
+            }),
             Packet::TStorageWriteBarrier,
             Packet::RStorageWriteBarrier,
             Packet::EndOfTransmission,
