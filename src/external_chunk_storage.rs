@@ -14,7 +14,7 @@ enum WorkerMsg {
             crossbeam::channel::Sender<Result<Vec<u8>, failure::Error>>,
         ),
     ),
-    Barrier,
+    Barrier(crossbeam::channel::Sender<Option<failure::Error>>),
     Exit,
 }
 
@@ -26,8 +26,6 @@ pub struct ExternalStorage {
     worker_handles: Vec<std::thread::JoinHandle<()>>,
     worker_tx: crossbeam::channel::Sender<WorkerMsg>,
     worker_rx: crossbeam::channel::Receiver<WorkerMsg>,
-    rendezvous_tx: crossbeam::channel::Sender<Option<failure::Error>>,
-    rendezvous_rx: crossbeam::channel::Receiver<Option<failure::Error>>,
 }
 
 impl Drop for ExternalStorage {
@@ -61,7 +59,6 @@ impl ExternalStorage {
         // Quite a small stack for these workers.
         let had_io_error = self.had_io_error.clone();
         let worker_rx = self.worker_rx.clone();
-        let rendezvous_tx = self.rendezvous_tx.clone();
         let socket_path = self.socket_path.clone();
         let path = self.path.clone();
 
@@ -123,7 +120,7 @@ impl ExternalStorage {
                                 }
                             }
                         }
-                        Ok(WorkerMsg::Barrier) => {
+                        Ok(WorkerMsg::Barrier(rendezvous_tx)) => {
                             let mut maybe_err = None;
                             std::mem::swap(&mut write_err, &mut maybe_err);
 
@@ -197,7 +194,6 @@ impl ExternalStorage {
         let had_io_error = Arc::new(AtomicBool::new(false));
         let worker_handles = Vec::new();
         let (worker_tx, worker_rx) = crossbeam::channel::bounded(0);
-        let (rendezvous_tx, rendezvous_rx) = crossbeam::channel::bounded(0);
 
         Ok(ExternalStorage {
             socket_path: socket_path.to_path_buf(),
@@ -206,18 +202,23 @@ impl ExternalStorage {
             worker_handles,
             worker_tx,
             worker_rx,
-            rendezvous_tx,
-            rendezvous_rx,
         })
     }
 
     fn sync_workers(&mut self) -> Result<(), failure::Error> {
+        let mut rendezvous = Vec::with_capacity(self.worker_handles.len());
+
         for _i in 0..self.worker_handles.len() {
-            self.worker_tx.send(WorkerMsg::Barrier).unwrap();
+            let (rendezvous_tx, rendezvous_rx) = crossbeam::channel::bounded(0);
+            rendezvous.push(rendezvous_rx);
+            self.worker_tx
+                .send(WorkerMsg::Barrier(rendezvous_tx))
+                .unwrap();
         }
+
         let mut write_error: Option<failure::Error> = None;
-        for _i in 0..self.worker_handles.len() {
-            if let Some(err) = self.rendezvous_rx.recv().unwrap() {
+        for i in 0..self.worker_handles.len() {
+            if let Some(err) = rendezvous[i].recv().unwrap() {
                 if write_error.is_none() {
                     write_error = Some(err)
                 }
