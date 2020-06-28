@@ -96,6 +96,9 @@ schema-version=$NUMBER
 # Marker for client side cache invalidation after gc.
 gc-generation=$RANDOM_UNIQUE_ID 
 
+# Marker that a garbage collection was interrupted.
+gc-dirty=$BOOL
+
 # JSON encoded specification of where to store data.
 storage-engine=$SPEC 
 ```

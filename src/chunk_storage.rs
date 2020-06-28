@@ -19,6 +19,7 @@ pub trait Engine {
     // Returns the number of chunks removed.
     fn gc(
         &mut self,
+        on_progress: &dyn Fn() -> Result<(), failure::Error>,
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error>;
 

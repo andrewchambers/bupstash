@@ -31,7 +31,11 @@ pub enum RepoError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
     Local,
-    External { socket_path: String, path: String },
+    External {
+        socket_path: String,
+        path: String,
+        quiescent_period_ms: Option<u64>,
+    },
 }
 
 #[derive(Clone)]
@@ -167,6 +171,10 @@ impl Repo {
             rusqlite::params![new_random_token()],
         )?;
         tx.execute(
+            "insert into RepositoryMeta(Key, Value) values('gc-dirty', ?);",
+            rusqlite::params![false],
+        )?;
+        tx.execute(
             "insert into RepositoryMeta(Key, Value) values('storage-engine', ?);",
             rusqlite::params![serde_json::to_string(&engine)?],
         )?;
@@ -210,12 +218,80 @@ impl Repo {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
-        Ok(Repo {
+        let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
+
+        let r = Repo {
             conn,
             repo_path: repo_path.to_path_buf(),
             _gc_lock_mode: GCLockMode::Shared,
-            _gc_lock: Some(FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?),
-        })
+            _gc_lock: Some(gc_lock),
+        };
+
+        r.handle_gc_dirty()?;
+
+        Ok(r)
+    }
+
+    fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
+        let engine_meta: String = self.conn.query_row(
+            "select value from RepositoryMeta where Key='storage-engine';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+        let spec: StorageEngineSpec = serde_json::from_str(&engine_meta)?;
+        Ok(spec)
+    }
+
+    fn handle_gc_dirty(&self) -> Result<(), failure::Error> {
+        // The gc_dirty flag gets set when a garbage collection exits without
+        // proper cleanup. For external storage engines we handle this by applying a delay to any repository
+        // actions to ensure the external engine has had time to finish any operations (especially object deletions)
+        // that might have been in flight at the time of a crash.
+        //
+        // Consider the following case:
+        //
+        // 1. We are deleting a set of objects in an external storage engine.
+        // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+        // 3. The archivist repository process crashes.
+        // 4. A new archivist put starts.
+        // 5. The new process resends the same object that is in the process of deletion.
+        // 6. The delete object message gets processed by the backend.
+        //
+        // We would then have data loss. Without having the backend participate in some of our locking
+        // somehow, I cannot see a precise way to avoid this problem assuming the presence of arbitrary network
+        // delays.
+        //
+        // The current mitigation introduces the idea of a quiescent_period to an external storage implementation.
+        // The idea is that between steps 4 and 5 we introduce a mandatory delay if the gc process crashed. This
+        // means in practice we can make what is already an unlikely event, extremely unlikely by increasing this period.
+
+        let gc_dirty: bool = self.conn.query_row(
+            "select value from RepositoryMeta where Key='gc-dirty';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
+        if gc_dirty {
+            match self.storage_engine_spec()? {
+                StorageEngineSpec::External {
+                    quiescent_period_ms,
+                    ..
+                } => {
+                    eprintln!("repository garbage collection was cancelled, recovering...");
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        // Default is 10 seconds.
+                        quiescent_period_ms.unwrap_or(10000),
+                    ))
+                }
+                StorageEngineSpec::Local => (),
+            }
+            self.conn.execute(
+                "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+                rusqlite::params![false],
+            )?;
+        }
+
+        Ok(())
     }
 
     pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) {
@@ -232,13 +308,7 @@ impl Repo {
     }
 
     pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
-        let engine_meta: String = self.conn.query_row(
-            "select value from RepositoryMeta where Key='storage-engine';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
-        let spec: StorageEngineSpec = serde_json::from_str(&engine_meta)?;
+        let spec = self.storage_engine_spec()?;
 
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::Local => {
@@ -246,7 +316,9 @@ impl Repo {
                 data_dir.push("data");
                 Box::new(local_chunk_storage::LocalStorage::new(&data_dir))
             }
-            StorageEngineSpec::External { socket_path, path } => {
+            StorageEngineSpec::External {
+                socket_path, path, ..
+            } => {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
@@ -304,6 +376,11 @@ impl Repo {
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
+        let on_progress = || -> Result<(), failure::Error> {
+            /* TODO... */
+            Ok(())
+        };
+
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
@@ -321,13 +398,13 @@ impl Repo {
             itemset::walk_items(&tx, &mut |_id, metadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
                     let addr = &metadata.plain_text_metadata.address;
-                    if !reachable.contains(&addr) {
-                        // IDEA:
-                        // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
-                        // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
-                        let mut tr =
-                            htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
-                        while let Some((height, addr)) = tr.next_addr()? {
+                    // IDEA:
+                    // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
+                    // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
+                    let mut tr =
+                        htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
+                    while let Some((height, addr)) = tr.next_addr()? {
+                        if !reachable.contains(&addr) {
                             reachable.insert(addr);
                             if height != 0 {
                                 let data = storage_engine.get_chunk(&addr)?;
@@ -339,12 +416,23 @@ impl Repo {
                 }
             })?;
 
+            tx.execute(
+                "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+                rusqlite::params![true],
+            )?;
+
             // We MUST commit the new gc generation before we start
             // deleting any chunks.
             tx.commit()?;
         }
 
-        let stats = storage_engine.gc(reachable)?;
+        let stats = storage_engine.gc(&on_progress, reachable)?;
+
+        self.conn.execute(
+            "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+            rusqlite::params![false],
+        )?;
+
         Ok(stats)
     }
 }

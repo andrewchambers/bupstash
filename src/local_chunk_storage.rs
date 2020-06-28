@@ -201,6 +201,7 @@ impl Engine for LocalStorage {
 
     fn gc(
         &mut self,
+        on_progress: &dyn Fn() -> Result<(), failure::Error>,
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error> {
         let mut stats = repository::GCStats {
@@ -217,27 +218,30 @@ impl Engine for LocalStorage {
             entries.push(e?);
         }
 
-        for e in entries.drain(..) {
-            match Address::from_hex_str(&e.file_name().to_string_lossy()) {
-                Ok(addr) => {
-                    if !reachable.contains(&addr) {
-                        if let Ok(md) = e.metadata() {
-                            stats.bytes_freed += md.len() as usize
+        for entries in entries.chunks(4096) {
+            for e in entries {
+                match Address::from_hex_str(&e.file_name().to_string_lossy()) {
+                    Ok(addr) => {
+                        if !reachable.contains(&addr) {
+                            if let Ok(md) = e.metadata() {
+                                stats.bytes_freed += md.len() as usize
+                            }
+                            std::fs::remove_file(e.path())?;
+                            stats.chunks_freed += 1;
+                        } else {
+                            if let Ok(md) = e.metadata() {
+                                stats.bytes_remaining += md.len() as usize
+                            }
+                            stats.chunks_remaining += 1;
                         }
+                    }
+                    Err(_) => {
+                        // This is not a chunk, so don't count it.
                         std::fs::remove_file(e.path())?;
-                        stats.chunks_freed += 1;
-                    } else {
-                        if let Ok(md) = e.metadata() {
-                            stats.bytes_remaining += md.len() as usize
-                        }
-                        stats.chunks_remaining += 1;
                     }
                 }
-                Err(_) => {
-                    // This is not a chunk, so don't count it.
-                    std::fs::remove_file(e.path())?;
-                }
             }
+            on_progress()?;
         }
         Ok(stats)
     }

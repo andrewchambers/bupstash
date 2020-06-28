@@ -265,6 +265,7 @@ impl Engine for ExternalStorage {
 
     fn gc(
         &mut self,
+        on_progress: &dyn Fn() -> Result<(), failure::Error>,
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error> {
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
@@ -299,7 +300,7 @@ impl Engine for ExternalStorage {
 
         loop {
             match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                Ok(protocol::Packet::StorageGCHeartBeat) => (),
+                Ok(protocol::Packet::StorageGCHeartBeat) => on_progress()?,
                 Ok(protocol::Packet::StorageGCComplete(stats)) => {
                     let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
                     return Ok(stats);
