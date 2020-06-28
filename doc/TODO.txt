@@ -8,8 +8,6 @@ Querying tags is allowed to span multiple cli args, but setting them is not, thi
 
 In storage backends, way to avoid starting unused worker threads?
 
-repository and cache vacuuming.
-
 think of different name.
 
 Reconsider if we always want a write log, or if it should be optional.

@@ -177,7 +177,7 @@ impl ExternalStorage {
 
     fn scaling_worker_dispatch(&mut self, msg: WorkerMsg) -> Result<(), failure::Error> {
         // Should this be configurable?
-        const MAX_WORKERS: usize = 4;
+        const MAX_WORKERS: usize = 10;
 
         if self.worker_handles.len() < MAX_WORKERS {
             match self.worker_tx.try_send(msg) {
@@ -296,13 +296,16 @@ impl Engine for ExternalStorage {
             &protocol::Packet::StorageGCReachable(reachable_part),
         )?;
 
-        match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::StorageGCComplete(stats)) => {
-                let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
-                Ok(stats)
+        loop {
+            match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+                Ok(protocol::Packet::StorageGCHeartBeat) => (),
+                Ok(protocol::Packet::StorageGCComplete(stats)) => {
+                    let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
+                    return Ok(stats);
+                }
+                Ok(_) => failure::bail!("unexpected packet response"),
+                Err(err) => return Err(err.into()),
             }
-            Ok(_) => failure::bail!("unexpected packet response"),
-            Err(err) => Err(err.into()),
         }
     }
 }

@@ -95,7 +95,7 @@ impl LocalStorage {
 
     fn scaling_worker_dispatch(&mut self, msg: WorkerMsg) -> Result<(), failure::Error> {
         // Should this be configurable?
-        const MAX_WORKERS: usize = 4;
+        const MAX_WORKERS: usize = 10;
 
         if self.worker_handles.len() < MAX_WORKERS {
             match self.worker_tx.try_send(msg) {

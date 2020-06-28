@@ -85,7 +85,8 @@ pub enum Packet {
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
     StorageBeginGC,
-    StorageGCReachable(Vec<u8>), /* Actually vector of addresses, done like this for efficiency */
+    StorageGCReachable(Vec<u8>), /* Actually vector of addresses, u8 to avoid copy */
+    StorageGCHeartBeat,
     StorageGCComplete(repository::GCStats),
     EndOfTransmission,
 }
@@ -110,7 +111,8 @@ const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 16;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 17;
 const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 18;
 const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 19;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 20;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 20;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 21;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -179,6 +181,7 @@ pub fn read_packet(
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(bincode::deserialize(&buf)?),
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
         PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
+        PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(bincode::deserialize(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
@@ -296,6 +299,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             )?;
             w.write_all(&reachable)?;
         }
+        Packet::StorageGCHeartBeat => {
+            send_hdr(w, PACKET_KIND_STORAGE_GC_HEARTBEAT, 0)?;
+        }
         Packet::StorageGCComplete(ref v) => {
             let b = bincode::serialize(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
@@ -393,6 +399,7 @@ mod tests {
                 Packet::StorageGCReachable(reachable)
             },
             Packet::StorageBeginGC,
+            Packet::StorageGCHeartBeat,
             Packet::StorageGCComplete(repository::GCStats {
                 chunks_remaining: 1,
                 chunks_freed: 123,
