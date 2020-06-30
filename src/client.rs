@@ -52,7 +52,7 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
             self.w,
             &Packet::Chunk(Chunk {
                 address: *addr,
-                data: data,
+                data,
             }),
         )?;
         self.tx.add_address(addr)?;
@@ -60,9 +60,12 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct SendOptions {
+pub struct SendContext {
     pub compression: crypto::DataCompression,
+    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub hash_key: crypto::HashKey,
+    pub data_ectx: crypto::EncryptionContext,
+    pub metadata_ectx: crypto::EncryptionContext,
 }
 
 pub enum SendSource {
@@ -71,14 +74,10 @@ pub enum SendSource {
 }
 
 pub fn send(
-    opts: SendOptions,
-    master_key_id: &[u8; keys::KEYID_SZ],
-    hash_key: &crypto::HashKey,
-    data_ectx: &mut crypto::EncryptionContext,
-    metadata_ectx: &mut crypto::EncryptionContext,
-    send_log: &mut sendlog::SendLog,
+    ctx: &mut SendContext,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
+    mut send_log: sendlog::SendLog,
     tags: BTreeMap<String, Option<String>>,
     data: SendSource,
 ) -> Result<i64, failure::Error> {
@@ -92,7 +91,7 @@ pub fn send(
     let mut send_log_tx = send_log.transaction(&gc_generation)?;
     let mut filtered_conn = FilteredConnection {
         tx: &mut send_log_tx,
-        w: w,
+        w,
     };
     let min_size = 1024;
     let max_size = 8 * 1024 * 1024;
@@ -104,46 +103,32 @@ pub fn send(
 
     match data {
         SendSource::Readable(mut data) => {
-            send_chunks(
-                &opts,
-                hash_key,
-                data_ectx,
-                &mut chunker,
-                &mut tw,
-                &mut data,
-                None,
-            )?;
-            ()
+            send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
         SendSource::Directory((mut stat_cache, path)) => {
             let mut stat_cache_tx = stat_cache.transaction(&gc_generation)?;
-            send_dir(
-                &opts,
-                hash_key,
-                data_ectx,
-                &mut chunker,
-                &mut tw,
-                &mut stat_cache_tx,
-                &path,
-            )?;
+            send_dir(ctx, &mut chunker, &mut tw, &mut stat_cache_tx, &path)?;
             stat_cache_tx.commit()?;
         }
     }
 
     let chunk_data = chunker.finish();
-    let addr = crypto::keyed_content_address(&chunk_data, hash_key);
-    tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?;
+    let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+    tw.add(
+        &addr,
+        ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
+    )?;
     let (tree_height, address) = tw.finish()?;
 
     let plain_text_metadata = itemset::PlainTextItemMetadata {
-        master_key_id: *master_key_id,
+        master_key_id: ctx.master_key_id,
         tree_height,
         address,
     };
 
     let e_metadata = itemset::EncryptedItemMetadata {
         plain_text_hash: plain_text_metadata.hash(),
-        hash_key_part_2: hash_key.part2.clone(),
+        hash_key_part_2: ctx.hash_key.part2.clone(),
         tags,
     };
 
@@ -152,7 +137,7 @@ pub fn send(
         &Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
             itemset::ItemMetadata {
                 plain_text_metadata,
-                encrypted_metadata: metadata_ectx.encrypt_data(
+                encrypted_metadata: ctx.metadata_ectx.encrypt_data(
                     bincode::serialize(&e_metadata)?,
                     crypto::DataCompression::Zstd,
                 ),
@@ -170,13 +155,11 @@ pub fn send(
 }
 
 fn send_chunks(
-    opts: &SendOptions,
-    hash_key: &crypto::HashKey,
-    data_ectx: &mut crypto::EncryptionContext,
+    ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
-    mut on_chunk: Option<&mut dyn FnMut(&Address) -> ()>,
+    mut on_chunk: Option<&mut dyn FnMut(&Address)>,
 ) -> Result<usize, failure::Error> {
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
     let mut n_written: usize = 0;
@@ -191,8 +174,9 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        let addr = crypto::keyed_content_address(&chunk_data, &hash_key);
-                        let encrypted_chunk = data_ectx.encrypt_data(chunk_data, opts.compression);
+                        let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                        let encrypted_chunk =
+                            ctx.data_ectx.encrypt_data(chunk_data, ctx.compression);
                         if let Some(ref mut on_chunk) = on_chunk {
                             on_chunk(&addr);
                         }
@@ -207,9 +191,7 @@ fn send_chunks(
 }
 
 fn send_dir(
-    opts: &SendOptions,
-    hash_key: &crypto::HashKey,
-    data_ectx: &mut crypto::EncryptionContext,
+    ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     stat_cache_tx: &mut statcache::StatCacheTx,
@@ -219,11 +201,11 @@ fn send_dir(
     let path = fsutil::absolute_path(&path)?;
 
     for entry in walkdir::WalkDir::new(&path) {
-        let mut hash_state = crypto::HashState::new(Some(&hash_key));
+        let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
         let entry = entry?;
         let entry_path = fsutil::absolute_path(entry.path())?;
         let mut short_entry_path = entry_path.strip_prefix(&path)?.to_path_buf();
-        short_entry_path = if short_entry_path.to_str().unwrap_or("").len() == 0 {
+        short_entry_path = if short_entry_path.to_str().unwrap_or("").is_empty() {
             std::path::PathBuf::from(".")
         } else {
             short_entry_path
@@ -267,46 +249,22 @@ fn send_dir(
                 }
             }
             None => {
-                let mut on_chunk = |addr: &Address| -> () {
+                let mut on_chunk = |addr: &Address| {
                     addresses.extend_from_slice(&addr.bytes[..]);
                 };
 
                 let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
-                send_chunks(
-                    opts,
-                    hash_key,
-                    data_ectx,
-                    chunker,
-                    tw,
-                    &mut hdr_cursor,
-                    Some(&mut on_chunk),
-                )?;
+                send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
 
                 if ft.is_file() {
                     let mut f = std::fs::File::open(&entry_path)?;
-                    let len = send_chunks(
-                        opts,
-                        hash_key,
-                        data_ectx,
-                        chunker,
-                        tw,
-                        &mut f,
-                        Some(&mut on_chunk),
-                    )?;
+                    let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
                     /* Tar entries are rounded to 512 bytes */
                     let remaining = 512 - (len % 512);
                     if remaining < 512 {
                         let buf = [0; 512];
                         let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
-                        send_chunks(
-                            opts,
-                            hash_key,
-                            data_ectx,
-                            chunker,
-                            tw,
-                            &mut hdr_cursor,
-                            Some(&mut on_chunk),
-                        )?;
+                        send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
                     }
                     if len != metadata.len() as usize {
                         failure::bail!(
@@ -317,9 +275,12 @@ fn send_dir(
                 }
 
                 if let Some(chunk_data) = chunker.force_split() {
-                    let addr = crypto::keyed_content_address(&chunk_data, hash_key);
+                    let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
                     on_chunk(&addr);
-                    tw.add(&addr, data_ectx.encrypt_data(chunk_data, opts.compression))?
+                    tw.add(
+                        &addr,
+                        ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
+                    )?
                 }
 
                 stat_cache_tx.add(&entry_path, &hash[..], &addresses)?;
@@ -330,23 +291,19 @@ fn send_dir(
     }
     let buf = [0; 1024];
     let mut trailer_cursor = std::io::Cursor::new(&buf[..]);
-    send_chunks(
-        opts,
-        hash_key,
-        data_ectx,
-        chunker,
-        tw,
-        &mut trailer_cursor,
-        None,
-    )?;
+    send_chunks(ctx, chunker, tw, &mut trailer_cursor, None)?;
     Ok(())
 }
 
+pub struct RequestContext {
+    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub hash_key_part_1: crypto::PartialHashKey,
+    pub data_dctx: crypto::DecryptionContext,
+    pub metadata_dctx: crypto::DecryptionContext,
+}
+
 pub fn request_data_stream(
-    master_key_id: &[u8; keys::KEYID_SZ],
-    hash_key_part_1: &crypto::PartialHashKey,
-    data_dctx: &mut crypto::DecryptionContext,
-    metadata_dctx: &mut crypto::DecryptionContext,
+    mut ctx: RequestContext,
     id: i64,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -364,48 +321,43 @@ pub fn request_data_stream(
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if *master_key_id != metadata.plain_text_metadata.master_key_id {
+            if ctx.master_key_id != metadata.plain_text_metadata.master_key_id {
                 failure::bail!("decryption key does not match master key used for encryption");
             }
 
-            let encrypted_metadata = metadata.decrypt_metadata(metadata_dctx)?;
+            let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
             let plain_text_metadata = metadata.plain_text_metadata;
 
             let hash_key =
-                crypto::derive_hash_key(&hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+                crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
 
             let mut tr = htree::TreeReader::new(
                 plain_text_metadata.tree_height,
                 &plain_text_metadata.address,
             );
 
-            loop {
-                match tr.next_addr()? {
-                    Some((height, addr)) => {
-                        let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-                            Packet::Chunk(chunk) => {
-                                if addr != chunk.address {
-                                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                                }
-                                chunk.data
-                            }
-                            _ => failure::bail!("protocol error, expected begin chunk packet"),
-                        };
-
-                        if height == 0 {
-                            let data = data_dctx.decrypt_data(data)?;
-                            if addr != crypto::keyed_content_address(&data, &hash_key) {
-                                return Err(ClientError::CorruptOrTamperedDataError.into());
-                            }
-                            out.write_all(&data)?;
-                        } else {
-                            if addr != htree::tree_block_address(&data) {
-                                return Err(ClientError::CorruptOrTamperedDataError.into());
-                            }
-                            tr.push_level(height - 1, data)?;
+            while let Some((height, addr)) = tr.next_addr()? {
+                let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::Chunk(chunk) => {
+                        if addr != chunk.address {
+                            return Err(ClientError::CorruptOrTamperedDataError.into());
                         }
+                        chunk.data
                     }
-                    None => break,
+                    _ => failure::bail!("protocol error, expected begin chunk packet"),
+                };
+
+                if height == 0 {
+                    let data = ctx.data_dctx.decrypt_data(data)?;
+                    if addr != crypto::keyed_content_address(&data, &hash_key) {
+                        return Err(ClientError::CorruptOrTamperedDataError.into());
+                    }
+                    out.write_all(&data)?;
+                } else {
+                    if addr != htree::tree_block_address(&data) {
+                        return Err(ClientError::CorruptOrTamperedDataError.into());
+                    }
+                    tr.push_level(height - 1, data)?;
                 }
             }
 

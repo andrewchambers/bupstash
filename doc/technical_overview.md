@@ -71,7 +71,8 @@ repo/
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
 │   └── ...
-└── gc.lock
+├── gc.lock
+└── storage-engine.json
 ```
 
 ### archivist.sqlite3
@@ -99,8 +100,6 @@ gc-generation=$RANDOM_UNIQUE_ID
 # Marker that a garbage collection was interrupted.
 gc-dirty=$BOOL
 
-# JSON encoded specification of where to store data.
-storage-engine=$SPEC 
 ```
 
 The `ItemOpLog` is an append only ledger where each OpData entry is a [bincoded](https://github.com/servo/bincode) LogOp
@@ -148,6 +147,11 @@ A lockfile allowing concurrent repository access.
 
 This lock is held exclusively during garbage collection, and held in a shared way during
 all other operations.
+
+### storage-engine.json
+
+Contains the the storage engine specification, which allows storage of data chunks
+in an external storage engine.
 
 ## The hash tree structure
 

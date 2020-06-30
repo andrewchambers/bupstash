@@ -7,6 +7,7 @@ mod sodium {
     #![allow(non_camel_case_types)]
     #![allow(non_snake_case)]
     #![allow(dead_code)]
+    #![allow(clippy::redundant_static_lifetimes)]
     include!(concat!(env!("OUT_DIR"), "/sodium_bindings.rs"));
 }
 
@@ -70,6 +71,12 @@ impl BoxNonce {
                 self.bytes.len().try_into().unwrap(),
             )
         }
+    }
+}
+
+impl Default for BoxNonce {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -233,8 +240,7 @@ fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
                 | ((data[data_len - 3] as u32) << 8)
                 | (data[data_len - 4] as u32);
             data.truncate(data.len() - 4);
-            let decompressed_data = zstd::block::decompress(&data, decompressed_sz as usize)?;
-            decompressed_data
+            zstd::block::decompress(&data, decompressed_sz as usize)?
         }
         _ => failure::bail!("unknown footer type type"),
     };
@@ -349,6 +355,12 @@ impl PartialHashKey {
             unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         randombytes(&mut bytes[..]);
         PartialHashKey { bytes }
+    }
+}
+
+impl Default for PartialHashKey {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

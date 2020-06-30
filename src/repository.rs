@@ -12,6 +12,7 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Fail)]
@@ -149,6 +150,11 @@ impl Repo {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
+        path_buf.push("storage-engine.json");
+        let engine_buf = serde_json::to_vec_pretty(&engine)?;
+        fsutil::atomic_add_file(path_buf.as_path(), &engine_buf)?;
+        path_buf.pop();
+
         let mut conn = Repo::open_db(&path_buf)?;
 
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
@@ -173,10 +179,6 @@ impl Repo {
         tx.execute(
             "insert into RepositoryMeta(Key, Value) values('gc-dirty', ?);",
             rusqlite::params![false],
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('storage-engine', ?);",
-            rusqlite::params![serde_json::to_string(&engine)?],
         )?;
 
         itemset::init_tables(&tx)?;
@@ -230,16 +232,6 @@ impl Repo {
         r.handle_gc_dirty()?;
 
         Ok(r)
-    }
-
-    fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
-        let engine_meta: String = self.conn.query_row(
-            "select value from RepositoryMeta where Key='storage-engine';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-        let spec: StorageEngineSpec = serde_json::from_str(&engine_meta)?;
-        Ok(spec)
     }
 
     fn handle_gc_dirty(&self) -> Result<(), failure::Error> {
@@ -305,6 +297,16 @@ impl Repo {
                 Some(FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
             }
         }
+    }
+
+    fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
+        let mut p = self.repo_path.clone();
+        p.push("storage-engine.json");
+        let mut f = std::fs::OpenOptions::new().read(true).open(p)?;
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf)?;
+        let spec = serde_json::from_slice(&buf)?;
+        Ok(spec)
     }
 
     pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
@@ -382,16 +384,16 @@ impl Repo {
         };
 
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+        self.conn.execute(
+            "update RepositoryMeta set value = ? where key = 'gc-generation';",
+            rusqlite::params![new_random_token()],
+        )?;
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
         let mut storage_engine = self.storage_engine()?;
 
         {
             let tx = self.conn.transaction()?;
-            tx.execute(
-                "update RepositoryMeta set value = ? where key = 'gc-generation';",
-                rusqlite::params![new_random_token()],
-            )?;
 
             itemset::compact(&tx)?;
 

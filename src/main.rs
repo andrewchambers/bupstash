@@ -225,7 +225,7 @@ fn matches_to_send_log(matches: &Matches) -> Result<sendlog::SendLog, failure::E
 fn matches_to_id_and_query(
     matches: &Matches,
 ) -> Result<(Option<i64>, tquery::Query), failure::Error> {
-    let query: tquery::Query = if matches.free.len() != 0 {
+    let query: tquery::Query = if !matches.free.is_empty() {
         match tquery::parse(&matches.free.join("•")) {
             Ok(query) => query,
             Err(e) => {
@@ -264,12 +264,12 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         args.push("archivist".to_owned());
         args.push("serve".to_owned());
         let repo_path = caps[3].to_string();
-        if repo_path.len() != 0 {
+        if !repo_path.is_empty() {
             args.push(repo_path);
         }
         args
     } else {
-        vec!["archivist".to_owned(), "serve".to_owned(), repo.to_string()]
+        vec!["archivist".to_owned(), "serve".to_owned(), repo]
     };
 
     let bin = serve_cmd_args.remove(0);
@@ -336,19 +336,13 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let key = keys::Key::load_from_file(&key)?;
     let master_key_id = key.master_key_id();
     let mut metadata_dctx = match key {
-        keys::Key::MasterKeyV1(k) => {
-            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
-            metadata_dctx
-        }
-        keys::Key::MetadataKeyV1(k) => {
-            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
-            metadata_dctx
-        }
+        keys::Key::MasterKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+        keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
         _ => failure::bail!("provided key is a not a master decryption key"),
     };
     let mut query: Option<tquery::Query> = None;
 
-    if matches.free.len() != 0 {
+    if !matches.free.is_empty() {
         query = match tquery::parse(&matches.free.join("•")) {
             Err(e) => {
                 tquery::report_parse_error(e);
@@ -390,8 +384,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             if doprint {
                 match list_format {
                     ListFormat::Human => {
-                        for i in 0..tags.len() {
-                            let (k, v) = &tags[i];
+                        for (i, (k, v)) in tags.iter().enumerate() {
                             if i != 0 {
                                 print!(" ");
                             }
@@ -403,12 +396,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                                 None => (),
                             }
                         }
-                        println!("");
+                        println!();
                     }
                     ListFormat::Jsonl => {
                         print!("{{");
-                        for i in 0..tags.len() {
-                            let (k, v) = &tags[i];
+                        for (i, (k, v)) in tags.iter().enumerate() {
                             if i != 0 {
                                 print!(", ");
                             }
@@ -486,7 +478,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = keys::Key::load_from_file(&key)?;
     let master_key_id = key.master_key_id();
-    let (hash_key, mut data_ectx, mut metadata_ectx) = match key {
+    let (hash_key, data_ectx, metadata_ectx) = match key {
         keys::Key::MasterKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
@@ -535,27 +527,28 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     }
 
-    let mut send_log = matches_to_send_log(&matches)?;
+    let send_log = matches_to_send_log(&matches)?;
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut ctx = client::SendContext {
+        compression: if matches.opt_present("no-compression") {
+            crypto::DataCompression::None
+        } else {
+            crypto::DataCompression::Zstd
+        },
+        master_key_id,
+        hash_key,
+        data_ectx,
+        metadata_ectx,
+    };
 
     client::handle_server_info(&mut serve_out)?;
     let id = client::send(
-        client::SendOptions {
-            compression: if matches.opt_present("no-compression") {
-                crypto::DataCompression::None
-            } else {
-                crypto::DataCompression::Zstd
-            },
-        },
-        &master_key_id,
-        &hash_key,
-        &mut data_ectx,
-        &mut metadata_ectx,
-        &mut send_log,
+        &mut ctx,
         &mut serve_out,
         &mut serve_in,
+        send_log,
         tags,
         data,
     )?;
@@ -588,11 +581,11 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
     let key = keys::Key::load_from_file(&key)?;
     let master_key_id = key.master_key_id();
-    let (hash_key_part_1, mut data_dctx, mut metadata_dctx) = match key {
+    let (hash_key_part_1, data_dctx, mut metadata_dctx) = match key {
         keys::Key::MasterKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
-            let data_dctx = crypto::DecryptionContext::new(k.data_sk.clone());
-            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk);
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk);
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
         _ => failure::bail!("provided key is a not a master decryption key"),
@@ -646,10 +639,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     client::request_data_stream(
-        &master_key_id,
-        &hash_key_part_1,
-        &mut data_dctx,
-        &mut metadata_dctx,
+        client::RequestContext {
+            master_key_id,
+            hash_key_part_1,
+            data_dctx,
+            metadata_dctx,
+        },
         id,
         &mut serve_out,
         &mut serve_in,
@@ -700,14 +695,8 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let key = keys::Key::load_from_file(&key)?;
             let master_key_id = key.master_key_id();
             let mut metadata_dctx = match key {
-                keys::Key::MasterKeyV1(k) => {
-                    let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
-                    metadata_dctx
-                }
-                keys::Key::MetadataKeyV1(k) => {
-                    let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk.clone());
-                    metadata_dctx
-                }
+                keys::Key::MasterKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+                keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
                 _ => failure::bail!("provided key is a not a master decryption key"),
             };
             let mut ids = Vec::new();

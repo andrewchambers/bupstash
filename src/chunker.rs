@@ -75,10 +75,10 @@ impl RollsumChunker {
     pub fn force_split(&mut self) -> Option<Vec<u8>> {
         self.rs.reset();
         let v = self.swap_vec();
-        if v.len() == 0 {
-            return None;
+        if v.is_empty() {
+            None
         } else {
-            return Some(v);
+            Some(v)
         }
     }
 

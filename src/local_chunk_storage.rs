@@ -133,8 +133,8 @@ impl LocalStorage {
         }
 
         let mut write_error: Option<failure::Error> = None;
-        for i in 0..self.worker_handles.len() {
-            if let Some(err) = rendezvous[i].recv().unwrap() {
+        for c in rendezvous.iter() {
+            if let Some(err) = c.recv().unwrap() {
                 if write_error.is_none() {
                     write_error = Some(err)
                 }

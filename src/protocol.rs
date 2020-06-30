@@ -116,7 +116,7 @@ const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 21;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
-    if let Err(_) = r.read_exact(buf) {
+    if r.read_exact(buf).is_err() {
         failure::bail!("remote disconnected");
     };
     Ok(())
@@ -291,7 +291,6 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, 0)?;
         }
         Packet::StorageGCReachable(reachable) => {
-            std::mem::drop(reachable);
             send_hdr(
                 w,
                 PACKET_KIND_STORAGE_GC_REACHABLE,

@@ -39,16 +39,13 @@ impl Drop for ExternalStorage {
     }
 }
 
-fn socket_connect(
-    socket_path: &std::path::Path,
-    path: &String,
-) -> Result<UnixStream, failure::Error> {
+fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStream, failure::Error> {
     let mut sock = UnixStream::connect(socket_path)?;
     protocol::write_packet(
         &mut sock,
         &protocol::Packet::StorageConnect(protocol::StorageConnect {
             protocol: "storage-0".to_string(),
-            path: path.clone(),
+            path: path.to_string(),
         }),
     )?;
     Ok(sock)
@@ -70,7 +67,7 @@ impl ExternalStorage {
                     Ok(s) => s,
                     Err(err) => {
                         had_io_error.store(true, Ordering::SeqCst);
-                        write_err = Some(err.into());
+                        write_err = Some(err);
                         // This could be refactored...
                         // The problem is that we need a valid socket so we can report
                         // io errors via the normal code path, socket pair is an ok way
@@ -87,7 +84,7 @@ impl ExternalStorage {
                                 &protocol::Packet::TRequestChunk(addr),
                             ) {
                                 Ok(()) => (),
-                                Err(err) => tx.send(Err(err.into())).unwrap(),
+                                Err(err) => tx.send(Err(err)).unwrap(),
                             }
                             match protocol::read_packet(
                                 &mut sock,
@@ -102,7 +99,7 @@ impl ExternalStorage {
                                     )));
                                 }
                                 Err(err) => {
-                                    let _ = tx.send(Err(err.into()));
+                                    let _ = tx.send(Err(err));
                                 }
                             }
                         }
@@ -150,7 +147,7 @@ impl ExternalStorage {
                                 }
                                 Err(err) => {
                                     if maybe_err.is_none() {
-                                        maybe_err = Some(err.into());
+                                        maybe_err = Some(err);
                                     }
                                 }
                             }
@@ -217,8 +214,8 @@ impl ExternalStorage {
         }
 
         let mut write_error: Option<failure::Error> = None;
-        for i in 0..self.worker_handles.len() {
-            if let Some(err) = rendezvous[i].recv().unwrap() {
+        for c in rendezvous.iter() {
+            if let Some(err) = c.recv().unwrap() {
                 if write_error.is_none() {
                     write_error = Some(err)
                 }
@@ -306,7 +303,7 @@ impl Engine for ExternalStorage {
                     return Ok(stats);
                 }
                 Ok(_) => failure::bail!("unexpected packet response"),
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(err),
             }
         }
     }

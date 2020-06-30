@@ -14,7 +14,7 @@ impl QueryCache {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
 
-        let mut tx = conn.transaction()?;
+        let tx = conn.transaction()?;
 
         tx.execute(
             "create table if not exists QueryCacheMeta(Key, Value, unique(Key)); ",
@@ -43,7 +43,7 @@ impl QueryCache {
             Err(err) => return Err(err.into()),
         }
 
-        itemset::init_tables(&mut tx)?;
+        itemset::init_tables(&tx)?;
 
         let recently_cleared = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'recently-cleared';",
@@ -71,10 +71,10 @@ impl QueryCache {
             conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
         }
 
-        Ok(QueryCache { conn: conn })
+        Ok(QueryCache { conn })
     }
 
-    pub fn transaction<'a>(self: &'a mut Self) -> Result<QueryCacheTx<'a>, failure::Error> {
+    pub fn transaction(self: &mut Self) -> Result<QueryCacheTx, failure::Error> {
         let tx = self.conn.transaction()?;
         Ok(QueryCacheTx { tx })
     }
@@ -120,7 +120,7 @@ impl<'a> QueryCacheTx<'a> {
         ) {
             Ok(generation) => Ok(Some(generation)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -156,7 +156,7 @@ impl<'a> QueryCacheTx<'a> {
     }
 
     pub fn sync_op(self: &mut Self, id: i64, op: itemset::LogOp) -> Result<i64, failure::Error> {
-        itemset::do_op_with_id(&mut self.tx, id, &op)
+        itemset::do_op_with_id(&self.tx, id, &op)
     }
 
     pub fn commit(self: Self) -> Result<(), failure::Error> {
@@ -168,6 +168,6 @@ impl<'a> QueryCacheTx<'a> {
         self: &mut Self,
         f: &mut dyn FnMut(i64, itemset::VersionedItemMetadata) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
-        itemset::walk_items(&mut self.tx, f)
+        itemset::walk_items(&self.tx, f)
     }
 }

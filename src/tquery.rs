@@ -429,10 +429,7 @@ pub fn query_matches(q: &Query, tagset: &BTreeMap<String, Option<String>>) -> bo
             Some(None) => false,
             None => false,
         },
-        Query::ExistsAssertion { tag, .. } => match tagset.get(tag) {
-            Some(_) => true,
-            None => false,
-        },
+        Query::ExistsAssertion { tag, .. } => tagset.get(tag).is_some(),
         Query::Binop {
             op, left, right, ..
         } => match op {
