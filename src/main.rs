@@ -513,17 +513,31 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut tags = BTreeMap::<String, Option<String>>::new();
 
     let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
+    let mut tag_size: usize = 0;
     for a in &matches.free {
         match tag_re.captures(&a) {
             Some(caps) => {
                 let t = &caps[1];
                 let v = caps.get(2);
                 match v {
-                    Some(v) => tags.insert(t.to_string(), Some(v.as_str().to_string())),
-                    None => tags.insert(t.to_string(), None),
+                    Some(v) => {
+                        tag_size += t.len() + v.as_str().len();
+                        tags.insert(t.to_string(), Some(v.as_str().to_string()))
+                    }
+                    None => {
+                        tag_size += t.len();
+                        tags.insert(t.to_string(), None)
+                    }
                 };
             }
             None => failure::bail!("argument '{}' is not a valid tag value.", a),
+        }
+
+        if tag_size > itemset::MAX_TAG_SET_SIZE {
+            failure::bail!(
+                "tags must not exceed {} bytes",
+                itemset::MAX_TAG_SET_SIZE
+            );
         }
     }
 

@@ -3,6 +3,10 @@ use super::crypto;
 use super::keys;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_TAG_SET_SIZE: usize = 32 * 1024;
+// Tags plus some leeway, we can adjust this if we need to.
+pub const MAX_OPLOG_ITEM_SIZE: usize = MAX_TAG_SET_SIZE + 8 * 1024;
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PlainTextItemMetadata {
     pub master_key_id: [u8; keys::KEYID_SZ],
@@ -72,13 +76,19 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     Ok(())
 }
 
+fn checked_serialize_log_op(op: &LogOp) -> Result<Vec<u8>, failure::Error> {
+    let serialized_op = bincode::serialize(&op)?;
+    if serialized_op.len() > MAX_OPLOG_ITEM_SIZE {
+        failure::bail!("itemset log item too big!");
+    }
+    Ok(serialized_op)
+}
+
 pub fn do_op(tx: &rusqlite::Transaction, op: &LogOp) -> Result<i64, failure::Error> {
+    let serialized_op = checked_serialize_log_op(op)?;
     match &op {
         LogOp::AddItem(_) => {
-            tx.execute(
-                "insert into ItemOpLog(OpData) values(?);",
-                &[bincode::serialize(&op)?],
-            )?;
+            tx.execute("insert into ItemOpLog(OpData) values(?);", &[serialized_op])?;
             let id = tx.last_insert_rowid();
             tx.execute("insert into Items(LogOpId) values(?);", &[id])?;
             Ok(id)
@@ -87,10 +97,7 @@ pub fn do_op(tx: &rusqlite::Transaction, op: &LogOp) -> Result<i64, failure::Err
             for itemid in items {
                 tx.execute("delete from Items where LogOpId = ?;", &[*itemid])?;
             }
-            tx.execute(
-                "insert into ItemOpLog(OpData) values(?);",
-                &[bincode::serialize(&op)?],
-            )?;
+            tx.execute("insert into ItemOpLog(OpData) values(?);", &[serialized_op])?;
             Ok(tx.last_insert_rowid())
         }
     }
@@ -101,11 +108,12 @@ pub fn do_op_with_id(
     id: i64,
     op: &LogOp,
 ) -> Result<i64, failure::Error> {
+    let serialized_op = checked_serialize_log_op(&op)?;
     match &op {
         LogOp::AddItem(_) => {
             tx.execute(
                 "insert into ItemOpLog(Id, OpData) values(?, ?);",
-                rusqlite::params![id, bincode::serialize(&op)?],
+                rusqlite::params![id, serialized_op],
             )?;
             tx.execute("insert into Items(LogOpId) values(?);", &[id])?;
             Ok(id)
@@ -116,7 +124,7 @@ pub fn do_op_with_id(
             }
             tx.execute(
                 "insert into ItemOpLog(Id, OpData) values(?, ?);",
-                rusqlite::params![id, bincode::serialize(&op)?],
+                rusqlite::params![id, serialized_op],
             )?;
             Ok(tx.last_insert_rowid())
         }
