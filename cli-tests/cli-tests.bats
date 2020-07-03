@@ -107,7 +107,7 @@ _concurrent_send_test_worker () {
   set -e
   for i in $(seq 10)
   do
-    id="$(archivist send -e --send-log ":memory:" -k "$MASTER_KEY" :: echo $i)"
+    id="$(archivist send -e --no-send-log -k "$MASTER_KEY" :: echo $i)"
     test "$i" = "$(archivist get -k "$MASTER_KEY" id=$id)"
   done
 }
@@ -221,6 +221,8 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
+  id=$(archivist send -k "$MASTER_KEY" --no-send-log :: "$SCRATCH/foo")
+  test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
   id=$(archivist send -k "$MASTER_KEY" --no-stat-cache :: "$SCRATCH/foo")
   test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
 }

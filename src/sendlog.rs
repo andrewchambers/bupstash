@@ -78,7 +78,8 @@ impl SendLog {
 
         tx.commit()?;
 
-        if cfg!(debug_assertions) || sequence_number % 100 == 0 {
+        /* Simple policy to decide when to defragment our send log */
+        if cfg!(debug_assertions) || sequence_number % 10 == 0 {
             conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
         }
 

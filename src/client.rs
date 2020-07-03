@@ -33,29 +33,44 @@ pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failu
     }
 }
 
-struct FilteredConnection<'a, 'b> {
-    tx: &'a sendlog::SendLogTx<'b>,
+struct ConnectionHtreeSink<'a, 'b> {
+    tx: &'a Option<sendlog::SendLogTx<'b>>,
     w: &'a mut dyn std::io::Write,
 }
 
-impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
+impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
     fn add_chunk(
         &mut self,
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> std::result::Result<(), failure::Error> {
-        if self.tx.has_address(addr)? {
-            return Ok(());
+        match self.tx {
+            Some(ref tx) => {
+                if tx.has_address(addr)? {
+                    Ok(())
+                } else {
+                    write_packet(
+                        self.w,
+                        &Packet::Chunk(Chunk {
+                            address: *addr,
+                            data,
+                        }),
+                    )?;
+                    tx.add_address(addr)?;
+                    Ok(())
+                }
+            }
+            None => {
+                write_packet(
+                    self.w,
+                    &Packet::Chunk(Chunk {
+                        address: *addr,
+                        data,
+                    }),
+                )?;
+                Ok(())
+            }
         }
-        write_packet(
-            self.w,
-            &Packet::Chunk(Chunk {
-                address: *addr,
-                data,
-            }),
-        )?;
-        self.tx.add_address(addr)?;
-        Ok(())
     }
 }
 
@@ -78,7 +93,7 @@ pub fn send(
     ctx: &mut SendContext,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-    mut send_log: sendlog::SendLog,
+    mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, Option<String>>,
     data: DataSource,
 ) -> Result<i64, failure::Error> {
@@ -89,18 +104,23 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    let send_log_tx = send_log.transaction(&gc_generation)?;
-    let mut filtered_conn = FilteredConnection {
+    let send_log_tx = match send_log {
+        Some(ref mut sl) => Some(sl.transaction(&gc_generation)?),
+        None => None,
+    };
+
+    let mut sink = ConnectionHtreeSink {
         tx: &send_log_tx,
         w,
     };
+
     let min_size = 1024;
     let max_size = 8 * 1024 * 1024;
     let chunk_mask = 0x000f_ffff;
     // XXX TODO these chunk parameters need to be investigated and tuned.
     let rs = rollsum::Rollsum::new_with_chunk_mask(chunk_mask);
     let mut chunker = chunker::RollsumChunker::new(rs, min_size, max_size);
-    let mut tw = htree::TreeWriter::new(&mut filtered_conn, max_size, chunk_mask);
+    let mut tw = htree::TreeWriter::new(&mut sink, max_size, chunk_mask);
 
     match data {
         DataSource::Subprocess(args) => {
@@ -159,7 +179,9 @@ pub fn send(
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RLogOp(id) => {
-            send_log_tx.commit()?;
+            if send_log_tx.is_some() {
+                send_log_tx.unwrap().commit()?;
+            }
             Ok(id)
         }
         _ => failure::bail!("protocol error, expected ack packet"),
@@ -206,7 +228,7 @@ fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
-    send_log_tx: &sendlog::SendLogTx,
+    send_log_tx: &Option<sendlog::SendLogTx>,
     path: &std::path::PathBuf,
 ) -> Result<(), failure::Error> {
     let mut addresses: Vec<u8> = Vec::with_capacity(1024 * 128);
@@ -251,8 +273,11 @@ fn send_dir(
         hash_state.update(&hdr_bytes);
         let hash = hash_state.finish();
 
-        let cache_lookup = if ctx.use_stat_cache {
-            send_log_tx.lookup_stat(&entry_path, &hash)?
+        let cache_lookup = if send_log_tx.is_some() && ctx.use_stat_cache {
+            send_log_tx
+                .as_ref()
+                .unwrap()
+                .lookup_stat(&entry_path, &hash)?
         } else {
             None
         };
@@ -301,8 +326,11 @@ fn send_dir(
                     )?
                 }
 
-                if ctx.use_stat_cache {
-                    send_log_tx.add_stat(&entry_path, &hash[..], &addresses)?;
+                if send_log_tx.is_some() && ctx.use_stat_cache {
+                    send_log_tx
+                        .as_ref()
+                        .unwrap()
+                        .add_stat(&entry_path, &hash[..], &addresses)?;
                 }
             }
         }

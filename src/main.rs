@@ -180,27 +180,6 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
     }
 }
 
-fn matches_to_send_log(matches: &Matches) -> Result<sendlog::SendLog, failure::Error> {
-    // TODO XXX make cli option/env
-    const SEND_SEQUENCE_MEMORY: i64 = 3;
-    match matches.opt_str("send-log") {
-        Some(send_log) => {
-            sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)
-        }
-        None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
-            Some(send_log) => {
-                sendlog::SendLog::open(&std::path::PathBuf::from(send_log), SEND_SEQUENCE_MEMORY)
-            }
-            None => {
-                let mut p = cache_dir()?;
-                std::fs::create_dir_all(&p)?;
-                p.push("send-log.sqlite3");
-                sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)
-            }
-        },
-    }
-}
-
 fn matches_to_id_and_query(
     matches: &Matches,
 ) -> Result<(Option<i64>, tquery::Query), failure::Error> {
@@ -440,6 +419,12 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "no-stat-cache",
         "Do not use the stat caching when sending a directory snapshot.",
     );
+    opts.optflag(
+        "",
+        "no-send-log",
+        "Do not use any memory remembering what data chunks have previously been sent to the server.",
+    );
+
     opts.optopt(
         "",
         "send-log",
@@ -493,28 +478,6 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("can only send data with a master key or send key."),
     };
 
-    let data_source = if matches.opt_present("exec") {
-        client::DataSource::Subprocess(source_args)
-    } else if source_args.is_empty() {
-        client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
-    } else {
-        if !source_args.len() == 1 {
-            failure::bail!("expected a single data source, got {:?}", source_args);
-        }
-        let input_path = &source_args[0];
-        let md = match std::fs::metadata(input_path) {
-            Ok(md) => md,
-            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
-        };
-        if md.is_dir() {
-            client::DataSource::Directory(std::convert::From::from(input_path))
-        } else if md.is_file() {
-            client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
-        } else {
-            failure::bail!("{} is not a file or a directory", source_args[0]);
-        }
-    };
-
     let mut tags = BTreeMap::<String, Option<String>>::new();
 
     let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
@@ -543,17 +506,66 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         }
     }
 
-    let send_log = matches_to_send_log(&matches)?;
+    let data_source = if matches.opt_present("exec") {
+        client::DataSource::Subprocess(source_args)
+    } else if source_args.is_empty() {
+        client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
+    } else {
+        if !source_args.len() == 1 {
+            failure::bail!("expected a single data source, got {:?}", source_args);
+        }
+        let input_path = &source_args[0];
+        let md = match std::fs::metadata(input_path) {
+            Ok(md) => md,
+            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
+        };
+        if md.is_dir() {
+            client::DataSource::Directory(std::convert::From::from(input_path))
+        } else if md.is_file() {
+            client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+        } else {
+            failure::bail!("{} is not a file or a directory", source_args[0]);
+        }
+    };
+
+    let compression = if matches.opt_present("no-compression") {
+        crypto::DataCompression::None
+    } else {
+        crypto::DataCompression::Zstd
+    };
+
+    let use_stat_cache = !matches.opt_present("no-stat-cache");
+
+    const SEND_SEQUENCE_MEMORY: i64 = 3;
+    let send_log = if matches.opt_present("no-send-log") {
+        None
+    } else {
+        match matches.opt_str("send-log") {
+            Some(send_log) => Some(sendlog::SendLog::open(
+                &std::path::PathBuf::from(send_log),
+                SEND_SEQUENCE_MEMORY,
+            )?),
+            None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
+                Some(send_log) => Some(sendlog::SendLog::open(
+                    &std::path::PathBuf::from(send_log),
+                    SEND_SEQUENCE_MEMORY,
+                )?),
+                None => {
+                    let mut p = cache_dir()?;
+                    std::fs::create_dir_all(&p)?;
+                    p.push("send-log.sqlite3");
+                    Some(sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)?)
+                }
+            },
+        }
+    };
+
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
-        use_stat_cache: !matches.opt_present("no-stat-cache"),
-        compression: if matches.opt_present("no-compression") {
-            crypto::DataCompression::None
-        } else {
-            crypto::DataCompression::Zstd
-        },
+        compression,
+        use_stat_cache,
         master_key_id,
         hash_key,
         data_ectx,
