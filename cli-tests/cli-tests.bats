@@ -215,6 +215,16 @@ _concurrent_send_test_worker () {
   test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
 }
 
+@test "send directory no stat cache" {
+  mkdir "$SCRATCH/foo"
+  echo a > "$SCRATCH/foo/a.txt"
+  echo b > "$SCRATCH/foo/b.txt"
+  mkdir "$SCRATCH/foo/bar"
+  echo c > "$SCRATCH/foo/bar/c.txt"
+  id=$(archivist send -k "$MASTER_KEY" --no-stat-cache :: "$SCRATCH/foo")
+  test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
+}
+
 @test "stat cache invalidated" {
   mkdir "$SCRATCH/foo"
   echo a > "$SCRATCH/foo/a.txt"

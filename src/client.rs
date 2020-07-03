@@ -10,7 +10,6 @@ use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
-use super::statcache;
 use failure::Fail;
 use std::collections::BTreeMap;
 use std::convert::{From, TryInto};
@@ -62,6 +61,7 @@ impl<'a, 'b> htree::Sink for FilteredConnection<'a, 'b> {
 
 pub struct SendContext {
     pub compression: crypto::DataCompression,
+    pub use_stat_cache: bool,
     pub master_key_id: [u8; keys::KEYID_SZ],
     pub hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
@@ -71,7 +71,7 @@ pub struct SendContext {
 pub enum DataSource {
     Subprocess(Vec<String>),
     Readable(Box<dyn std::io::Read>),
-    Directory((statcache::StatCache, std::path::PathBuf)),
+    Directory(std::path::PathBuf),
 }
 
 pub fn send(
@@ -119,10 +119,8 @@ pub fn send(
         DataSource::Readable(mut data) => {
             send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
-        DataSource::Directory((mut stat_cache, path)) => {
-            let mut stat_cache_tx = stat_cache.transaction(&gc_generation)?;
-            send_dir(ctx, &mut chunker, &mut tw, &mut stat_cache_tx, &path)?;
-            stat_cache_tx.commit()?;
+        DataSource::Directory(path) => {
+            send_dir(ctx, &mut chunker, &mut tw, &send_log_tx, &path)?;
         }
     }
 
@@ -208,7 +206,7 @@ fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
-    stat_cache_tx: &mut statcache::StatCacheTx,
+    send_log_tx: &sendlog::SendLogTx,
     path: &std::path::PathBuf,
 ) -> Result<(), failure::Error> {
     let mut addresses: Vec<u8> = Vec::with_capacity(1024 * 128);
@@ -253,7 +251,13 @@ fn send_dir(
         hash_state.update(&hdr_bytes);
         let hash = hash_state.finish();
 
-        match stat_cache_tx.lookup(&entry_path, &hash)? {
+        let cache_lookup = if ctx.use_stat_cache {
+            send_log_tx.lookup_stat(&entry_path, &hash)?
+        } else {
+            None
+        };
+
+        match cache_lookup {
             Some(cached_addresses) => {
                 debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
                 let mut address = Address::default();
@@ -297,7 +301,9 @@ fn send_dir(
                     )?
                 }
 
-                stat_cache_tx.add(&entry_path, &hash[..], &addresses)?;
+                if ctx.use_stat_cache {
+                    send_log_tx.add_stat(&entry_path, &hash[..], &addresses)?;
+                }
             }
         }
 

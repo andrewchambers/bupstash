@@ -40,3 +40,6 @@ Default tags? A way to set custom default tags?
 
 Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
 we can avoid the gc quiescent period on proper shutdown.
+
+Send gc generation alongside put for potential future use as an upload fence with
+no locking.

@@ -16,7 +16,6 @@ pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
-pub mod statcache;
 pub mod tquery;
 
 use failure::Fail;
@@ -176,27 +175,6 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
                 std::fs::create_dir_all(&p)?;
                 p.push("query-cache.sqlite3");
                 querycache::QueryCache::open(&p)
-            }
-        },
-    }
-}
-
-fn matches_to_stat_cache(matches: &Matches) -> Result<statcache::StatCache, failure::Error> {
-    // TODO XXX make cli option/env
-    const STAT_CACHE_MEMORY: i64 = 3;
-    match matches.opt_str("stat-cache") {
-        Some(send_log) => {
-            statcache::StatCache::open(&std::path::PathBuf::from(send_log), STAT_CACHE_MEMORY)
-        }
-        None => match std::env::var_os("ARCHIVIST_STAT_CACHE") {
-            Some(send_log) => {
-                statcache::StatCache::open(&std::path::PathBuf::from(send_log), STAT_CACHE_MEMORY)
-            }
-            None => {
-                let mut p = cache_dir()?;
-                std::fs::create_dir_all(&p)?;
-                p.push("stat-cache.sqlite3");
-                statcache::StatCache::open(&p, STAT_CACHE_MEMORY)
             }
         },
     }
@@ -457,16 +435,15 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "exec",
         "Treat all arguments after '::' as a command to run, ensuring it succeeds before committing the send.",
     );
+    opts.optflag(
+        "",
+        "no-stat-cache",
+        "Do not use the stat caching when sending a directory snapshot.",
+    );
     opts.optopt(
         "",
         "send-log",
         "Use send log to avoid resending data that was sent previously.",
-        "PATH",
-    );
-    opts.optopt(
-        "",
-        "stat-cache",
-        "Use stat cache when sending a directory to avoid reading unchanged files.",
         "PATH",
     );
 
@@ -530,8 +507,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
         };
         if md.is_dir() {
-            let stat_cache = matches_to_stat_cache(&matches)?;
-            client::DataSource::Directory((stat_cache, std::convert::From::from(input_path)))
+            client::DataSource::Directory(std::convert::From::from(input_path))
         } else if md.is_file() {
             client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
         } else {
@@ -572,6 +548,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
+        use_stat_cache: !matches.opt_present("no-stat-cache"),
         compression: if matches.opt_present("no-compression") {
             crypto::DataCompression::None
         } else {
