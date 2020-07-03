@@ -159,6 +159,16 @@ pub fn lookup_item_by_id(
     }
 }
 
+pub fn has_item_with_id(tx: &rusqlite::Transaction, id: i64) -> Result<bool, failure::Error> {
+    match tx.query_row("select 1 from Items where LogOpId = ?;", &[id], |_row| {
+        Ok(true)
+    }) {
+        Ok(_) => Ok(true),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub fn walk_items(
     tx: &rusqlite::Transaction,
     f: &mut dyn FnMut(i64, VersionedItemMetadata) -> Result<(), failure::Error>,

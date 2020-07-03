@@ -27,11 +27,11 @@ pub fn serve(
 
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::TBeginSend(_) => {
+            Packet::TBeginSend(begin) => {
                 if !cfg.allow_add {
                     failure::bail!("server has add writing data for this client")
                 }
-                recv(&mut repo, r, w)?;
+                recv(&mut repo, begin, r, w)?;
             }
             Packet::TRequestData(req) => {
                 if !cfg.allow_read {
@@ -66,13 +66,18 @@ pub fn serve(
 
 fn recv(
     repo: &mut repository::Repo,
+    begin: TBeginSend,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     write_packet(
         w,
         &Packet::RBeginSend(RBeginSend {
-            gc_generation: repo.gc_generation()?,
+            has_delta_id: if let Some(delta_id) = begin.delta_id {
+                repo.has_item_with_id(delta_id)?
+            } else {
+                false
+            },
         }),
     )?;
 

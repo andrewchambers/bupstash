@@ -47,6 +47,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         match self.tx {
             Some(ref tx) => {
                 if tx.has_address(addr)? {
+                    tx.add_address(addr)?;
                     Ok(())
                 } else {
                     write_packet(
@@ -97,15 +98,21 @@ pub fn send(
     tags: BTreeMap<String, Option<String>>,
     data: DataSource,
 ) -> Result<i64, failure::Error> {
-    write_packet(w, &Packet::TBeginSend(TBeginSend {}))?;
+    write_packet(w, &Packet::TBeginSend(TBeginSend { delta_id: None }))?;
 
-    let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RBeginSend(ack) => ack.gc_generation,
+    let ack = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RBeginSend(ack) => ack,
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
     let send_log_tx = match send_log {
-        Some(ref mut sl) => Some(sl.transaction(&gc_generation)?),
+        Some(ref mut send_log) => {
+            let tx = send_log.transaction()?;
+            if !ack.has_delta_id {
+                tx.clear_log()?;
+            }
+            Some(tx)
+        }
         None => None,
     };
 
@@ -180,7 +187,7 @@ pub fn send(
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RLogOp(id) => {
             if send_log_tx.is_some() {
-                send_log_tx.unwrap().commit()?;
+                send_log_tx.unwrap().commit(id)?;
             }
             Ok(id)
         }

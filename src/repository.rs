@@ -363,6 +363,11 @@ impl Repo {
         itemset::lookup_item_by_id(&tx, id)
     }
 
+    pub fn has_item_with_id(&mut self, id: i64) -> Result<bool, failure::Error> {
+        let tx = self.conn.transaction()?;
+        itemset::has_item_with_id(&tx, id)
+    }
+
     pub fn walk_log(
         &mut self,
         after: i64,

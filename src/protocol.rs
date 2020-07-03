@@ -19,11 +19,13 @@ pub struct Chunk {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TBeginSend {}
+pub struct TBeginSend {
+    pub delta_id: Option<i64>,
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RBeginSend {
-    pub gc_generation: String,
+    pub has_delta_id: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -333,10 +335,10 @@ mod tests {
                 repo_id: "abc".to_string(),
                 protocol: "foobar".to_owned(),
             }),
-            Packet::TBeginSend(TBeginSend {}),
-            Packet::RBeginSend(RBeginSend {
-                gc_generation: "blah".to_owned(),
+            Packet::TBeginSend(TBeginSend {
+                delta_id: Some(123),
             }),
+            Packet::RBeginSend(RBeginSend { has_delta_id: true }),
             {
                 let master_key = keys::MasterKey::gen();
                 Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(

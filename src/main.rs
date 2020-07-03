@@ -536,25 +536,20 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
     let use_stat_cache = !matches.opt_present("no-stat-cache");
 
-    const SEND_SEQUENCE_MEMORY: i64 = 3;
     let send_log = if matches.opt_present("no-send-log") {
         None
     } else {
         match matches.opt_str("send-log") {
-            Some(send_log) => Some(sendlog::SendLog::open(
-                &std::path::PathBuf::from(send_log),
-                SEND_SEQUENCE_MEMORY,
-            )?),
+            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
             None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
-                Some(send_log) => Some(sendlog::SendLog::open(
-                    &std::path::PathBuf::from(send_log),
-                    SEND_SEQUENCE_MEMORY,
-                )?),
+                Some(send_log) => {
+                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
+                }
                 None => {
                     let mut p = cache_dir()?;
                     std::fs::create_dir_all(&p)?;
                     p.push("send-log.sqlite3");
-                    Some(sendlog::SendLog::open(&p, SEND_SEQUENCE_MEMORY)?)
+                    Some(sendlog::SendLog::open(&p)?)
                 }
             },
         }
