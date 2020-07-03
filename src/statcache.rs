@@ -66,7 +66,7 @@ impl StatCache {
         )?;
 
         tx.execute(
-            "create index if not exists StateCachePathHashIndex on StatCache(Path, Hash); ",
+            "create index if not exists StateCachePathHashIndex on StatCache(Path, Hash);",
             rusqlite::NO_PARAMS,
         )?;
 

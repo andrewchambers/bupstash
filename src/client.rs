@@ -35,7 +35,7 @@ pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failu
 }
 
 struct FilteredConnection<'a, 'b> {
-    tx: &'a mut sendlog::SendLogTx<'b>,
+    tx: &'a sendlog::SendLogTx<'b>,
     w: &'a mut dyn std::io::Write,
 }
 
@@ -68,7 +68,8 @@ pub struct SendContext {
     pub metadata_ectx: crypto::EncryptionContext,
 }
 
-pub enum SendSource {
+pub enum DataSource {
+    Subprocess(Vec<String>),
     Readable(Box<dyn std::io::Read>),
     Directory((statcache::StatCache, std::path::PathBuf)),
 }
@@ -79,7 +80,7 @@ pub fn send(
     w: &mut dyn std::io::Write,
     mut send_log: sendlog::SendLog,
     tags: BTreeMap<String, Option<String>>,
-    data: SendSource,
+    data: DataSource,
 ) -> Result<i64, failure::Error> {
     write_packet(w, &Packet::TBeginSend(TBeginSend {}))?;
 
@@ -88,9 +89,9 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    let mut send_log_tx = send_log.transaction(&gc_generation)?;
+    let send_log_tx = send_log.transaction(&gc_generation)?;
     let mut filtered_conn = FilteredConnection {
-        tx: &mut send_log_tx,
+        tx: &send_log_tx,
         w,
     };
     let min_size = 1024;
@@ -102,10 +103,23 @@ pub fn send(
     let mut tw = htree::TreeWriter::new(&mut filtered_conn, max_size, chunk_mask);
 
     match data {
-        SendSource::Readable(mut data) => {
+        DataSource::Subprocess(args) => {
+            let mut child = std::process::Command::new(args[0].clone())
+                .args(&args[1..])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .spawn()?;
+            let mut data = child.stdout.as_mut().unwrap();
+            send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
+            let status = child.wait()?;
+            if !status.success() {
+                failure::bail!("child failed with status {}", status.code().unwrap());
+            }
+        }
+        DataSource::Readable(mut data) => {
             send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
-        SendSource::Directory((mut stat_cache, path)) => {
+        DataSource::Directory((mut stat_cache, path)) => {
             let mut stat_cache_tx = stat_cache.transaction(&gc_generation)?;
             send_dir(ctx, &mut chunker, &mut tw, &mut stat_cache_tx, &path)?;
             stat_cache_tx.commit()?;

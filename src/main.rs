@@ -58,6 +58,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
 
 fn default_cli_opts() -> Options {
     let mut opts = Options::new();
+    opts.parsing_style(getopts::ParsingStyle::StopAtFirstFree);
     opts.optflag("h", "help", "print this help menu.");
     opts
 }
@@ -436,7 +437,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
     opts.optopt("k", "key", "Encryption key.", "PATH");
@@ -446,12 +447,15 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to save data info.",
         "REPO",
     );
-    opts.optopt("f", "file", "Save a file.", "PATH");
-    opts.optopt("d", "dir", "Save a directory as a tarball.", "PATH");
     opts.optflag(
         "",
         "no-compression",
         "Disable compression (Use for for already compressed/encrypted data).",
+    );
+    opts.optflag(
+        "e",
+        "exec",
+        "Treat all arguments after '::' as a command to run, ensuring it succeeds before committing the send.",
     );
     opts.optopt(
         "",
@@ -466,7 +470,25 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         "PATH",
     );
 
-    let matches = default_parse_opts(opts, &args[..]);
+    let (args, source_args) = {
+        let mut idx = None;
+        for (i, v) in args.iter().enumerate() {
+            if v == "::" {
+                idx = Some(i);
+                break;
+            }
+        }
+        match idx {
+            Some(i) => {
+                args.remove(i);
+                let source_args = args.split_off(i);
+                (args, source_args)
+            }
+            None => (args, Vec::new()),
+        }
+    };
+
+    let matches = default_parse_opts(opts, &args);
 
     let key = if matches.opt_present("key") {
         matches.opt_str("key").unwrap()
@@ -494,20 +516,27 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("can only send data with a master key or send key."),
     };
 
-    let data = if matches.opt_present("file") {
-        let f = matches.opt_str("file").unwrap();
-        let f: Box<dyn std::io::Read> = if f == "-" {
-            Box::new(std::io::stdin())
-        } else {
-            Box::new(std::fs::File::open(f)?)
-        };
-        client::SendSource::Readable(f)
-    } else if matches.opt_present("dir") {
-        let dir = matches.opt_str("dir").unwrap();
-        let stat_cache = matches_to_stat_cache(&matches)?;
-        client::SendSource::Directory((stat_cache, std::convert::From::from(dir)))
+    let data_source = if matches.opt_present("exec") {
+        client::DataSource::Subprocess(source_args)
+    } else if source_args.is_empty() {
+        client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
     } else {
-        failure::bail!("please set --file or --dir")
+        if !source_args.len() == 1 {
+            failure::bail!("expected a single data source, got {:?}", source_args);
+        }
+        let input_path = &source_args[0];
+        let md = match std::fs::metadata(input_path) {
+            Ok(md) => md,
+            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
+        };
+        if md.is_dir() {
+            let stat_cache = matches_to_stat_cache(&matches)?;
+            client::DataSource::Directory((stat_cache, std::convert::From::from(input_path)))
+        } else if md.is_file() {
+            client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+        } else {
+            failure::bail!("{} is not a file or a directory", source_args[0]);
+        }
     };
 
     let mut tags = BTreeMap::<String, Option<String>>::new();
@@ -534,10 +563,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
 
         if tag_size > itemset::MAX_TAG_SET_SIZE {
-            failure::bail!(
-                "tags must not exceed {} bytes",
-                itemset::MAX_TAG_SET_SIZE
-            );
+            failure::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
         }
     }
 
@@ -564,7 +590,7 @@ fn send_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut serve_in,
         send_log,
         tags,
-        data,
+        data_source,
     )?;
     client::hangup(&mut serve_in)?;
 

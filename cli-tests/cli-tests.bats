@@ -35,21 +35,21 @@ teardown () {
 @test "simple send recv master key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(archivist send -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
+  id="$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(archivist get -k "$MASTER_KEY" id=$id )"
 }
 
 @test "simple send recv send key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(archivist send -k "$SEND_KEY" -f "$SCRATCH/foo.txt")"
+  id="$(archivist send -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(archivist get -k "$MASTER_KEY" id=$id )"
 }
 
 @test "simple send recv no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(archivist send --no-compression -k "$SEND_KEY" -f "$SCRATCH/foo.txt")"
+  id="$(archivist send --no-compression -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(archivist get -k "$MASTER_KEY" id=$id )"
 }
 
@@ -58,7 +58,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     head -c $i /dev/urandom > "$SCRATCH/rand.dat"
-    id="$(archivist send -k "$SEND_KEY" -f "$SCRATCH/rand.dat")"
+    id="$(archivist send -k "$SEND_KEY" :: "$SCRATCH/rand.dat")"
     archivist get -k "$MASTER_KEY" id=$id > "$SCRATCH/got.dat"
     archivist gc
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
@@ -70,7 +70,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     yes | head -c $i > "$SCRATCH/yes.dat"
-    id="$(archivist send -k "$SEND_KEY" -f "$SCRATCH/yes.dat")"
+    id="$(archivist send -k "$SEND_KEY" :: "$SCRATCH/yes.dat")"
     archivist get -k "$MASTER_KEY" id=$id > "$SCRATCH/got.dat"
     archivist gc
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
@@ -80,7 +80,7 @@ teardown () {
 @test "key mismatch" {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(archivist send -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
+  id="$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo.txt")"
   archivist new-master-key -o "$SCRATCH/wrong.key"
   run archivist get -k "$SCRATCH/wrong.key" id=$id
   echo "$output" | grep -q "key does not match"
@@ -93,7 +93,7 @@ teardown () {
 @test "corruption detected" {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(archivist send -k "$MASTER_KEY" -f "$SCRATCH/foo.txt")"
+  id="$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo.txt")"
   echo -n x >> "$REPO/data/"*
   run archivist get -k "$MASTER_KEY" id=$id
   echo "$output" | grep -q "corrupt"
@@ -107,7 +107,7 @@ _concurrent_send_test_worker () {
   set -e
   for i in $(seq 10)
   do
-    id="$(archivist send --send-log ":memory:" -k "$MASTER_KEY" -f <(echo $i))"
+    id="$(archivist send -e --send-log ":memory:" -k "$MASTER_KEY" :: echo $i)"
     test "$i" = "$(archivist get -k "$MASTER_KEY" id=$id)"
   done
 }
@@ -124,7 +124,7 @@ _concurrent_send_test_worker () {
 @test "simple search and listing" {
   for i in $(seq 100) # Enough to trigger more than one sync packet.
   do
-    archivist send -k "$MASTER_KEY" -f <(echo $i) "i=$i"
+    archivist send -e -k "$MASTER_KEY"  "i=$i" :: echo $i
   done
   for k in $MASTER_KEY $METADATA_KEY
   do
@@ -137,8 +137,8 @@ _concurrent_send_test_worker () {
 @test "rm and gc" {
   archivist list -k "$MASTER_KEY"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  id1="$(archivist send -k "$MASTER_KEY" -f <(echo hello1))"
-  id2="$(archivist send -k "$MASTER_KEY" -f <(echo hello2))"
+  id1="$(archivist send -k "$MASTER_KEY" -e :: echo hello1)"
+  id2="$(archivist send -k "$MASTER_KEY" -e :: echo hello2)"
   archivist list -k "$MASTER_KEY"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/archivist.sqlite3" 'select count(*) from ItemOpLog;')"
@@ -166,9 +166,9 @@ _concurrent_send_test_worker () {
 }
 
 @test "query sync" {
-  id1="$(archivist send -k "$MASTER_KEY" -f <(echo hello1))"
+  id1="$(archivist send -k "$MASTER_KEY" -e :: echo hello1)"
   test 1 = $(archivist list -k "$MASTER_KEY" | wc -l)
-  id2="$(archivist send -k "$MASTER_KEY" -f <(echo hello2))"
+  id2="$(archivist send -k "$MASTER_KEY" -e :: echo hello2)"
   test 2 = $(archivist list -k "$MASTER_KEY" | wc -l)
   archivist rm id=$id1
   test 1 = $(archivist list -k "$MASTER_KEY" | wc -l)
@@ -181,16 +181,16 @@ _concurrent_send_test_worker () {
 }
 
 @test "get via query" {
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello1) foo=bar
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=baz
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=bang
+  archivist send -e -k "$MASTER_KEY" foo=bar ::  echo -n hello1 
+  archivist send -e -k "$MASTER_KEY" foo=baz ::  echo -n hello2 
+  archivist send -e -k "$MASTER_KEY" foo=bang :: echo -n hello2 
   test "hello2" = $(archivist get -k "$MASTER_KEY" "foo=ban*")
 }
 
 @test "rm via query" {
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello1) foo=bar
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=baz
-  archivist send -k "$MASTER_KEY" -f <(echo -n hello2) foo=bang
+  archivist send -e -k "$MASTER_KEY"  foo=bar :: echo -n hello1 
+  archivist send -e -k "$MASTER_KEY"  foo=baz :: echo -n hello2
+  archivist send -e -k "$MASTER_KEY"  foo=bang :: echo -n hello2
   test 3 = $(archivist list -k "$MASTER_KEY" | wc -l)
   if archivist rm -k "$MASTER_KEY" "foo=*"
   then
@@ -208,19 +208,19 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
-  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  id=$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo")
   test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
   # Test again to excercise stat caching.
-  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  id=$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo")
   test 5 = "$(archivist get -k "$MASTER_KEY" id=$id | tar -tf - | wc -l)"
 }
 
 @test "stat cache invalidated" {
   mkdir "$SCRATCH/foo"
   echo a > "$SCRATCH/foo/a.txt"
-  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  id=$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo")
   archivist rm -k "$MASTER_KEY" id=$id
   archivist gc
-  id=$(archivist send -k "$MASTER_KEY" --dir "$SCRATCH/foo")
+  id=$(archivist send -k "$MASTER_KEY" :: "$SCRATCH/foo")
   archivist get -k "$MASTER_KEY" id=$id > /dev/null
 }

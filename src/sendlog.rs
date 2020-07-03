@@ -123,7 +123,7 @@ impl SendLog {
 }
 
 impl<'a> SendLogTx<'a> {
-    pub fn add_address(self: &mut Self, addr: &Address) -> Result<(), failure::Error> {
+    pub fn add_address(self: &Self, addr: &Address) -> Result<(), failure::Error> {
         let mut stmt = self
             .tx
             .prepare_cached("insert or replace into Sent(Addr, Seq) values(?, ?); ")?;
@@ -131,7 +131,7 @@ impl<'a> SendLogTx<'a> {
         Ok(())
     }
 
-    pub fn has_address(self: &mut Self, addr: &Address) -> Result<bool, failure::Error> {
+    pub fn has_address(self: &Self, addr: &Address) -> Result<bool, failure::Error> {
         let mut stmt = self.tx.prepare_cached("select 1 from Sent where Addr=?;")?;
         match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
             Ok(_) => Ok(true),
@@ -170,7 +170,7 @@ mod tests {
         // Commit an address
         let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction("123").unwrap();
+        let tx = sendlog.transaction("123").unwrap();
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
@@ -179,7 +179,7 @@ mod tests {
         // Ensure address is still present after reopening db.
         let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction("123").unwrap();
+        let tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
         // Drop tx to avoid ab cycling
         drop(tx);
@@ -189,7 +189,7 @@ mod tests {
         // be there anymore.
         let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
-        let mut tx = sendlog.transaction("345").unwrap();
+        let tx = sendlog.transaction("345").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
     }
 
@@ -204,14 +204,14 @@ mod tests {
         let mut sendlog = SendLog::open(&log_path, 1).unwrap();
         let addr = Address::default();
         // Commit adding an address
-        let mut tx = sendlog.transaction("123").unwrap();
+        let tx = sendlog.transaction("123").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
         // Start a new tx, ensure we still have that address.
         // then add the address again.
-        let mut tx = sendlog.transaction("123").unwrap();
+        let tx = sendlog.transaction("123").unwrap();
         assert!(tx.has_address(&addr).unwrap());
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
@@ -221,7 +221,7 @@ mod tests {
         let tx = sendlog.transaction("123").unwrap();
         tx.commit().unwrap();
         // Verify the value was cycled away.
-        let mut tx = sendlog.transaction("123").unwrap();
+        let tx = sendlog.transaction("123").unwrap();
         assert!(!tx.has_address(&addr).unwrap());
         tx.commit().unwrap();
     }

@@ -18,10 +18,10 @@ $ archivist init $ARCHIVIST_REPOSTIORY
 $ archivist new-master-key -o ./master.key
 
 # Store a backup of a directory
-$ archivist put date=$(date +%Y/%m/%d) host=$(hostname) --dir ./my-files -k ./master.key
+$ archivist put -k ./master.key date=$(date +%Y/%m/%d) host=$(hostname) :: ./my-files 
 
-# Store a backup of a postgres database
-$ pgdump ... |  archivist put date=$(date +%Y/%m/%d) name=db.sql --file - -k ./master.key
+# Store a backup of a postgres database, checking exit codes.
+$ archivist put --exec date=$(date +%Y/%m/%d) name=db.sql  -k ./master.key :: pgdump...
 
 # List backups
 $ archivist list -k ./master.key date=2020/* and name=*.sql
