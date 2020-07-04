@@ -109,12 +109,12 @@ impl SendLog {
 }
 
 impl<'a> SendLogTx<'a> {
-    pub fn send_id(self: &Self) -> Result<Option<i64>, failure::Error> {
+    pub fn send_id(self: &Self) -> Result<Option<String>, failure::Error> {
         match self.tx.query_row(
             "select value from LogMeta where key = 'send-id';",
             rusqlite::NO_PARAMS,
             |r| {
-                let send_id: i64 = r.get(0)?;
+                let send_id: String = r.get(0)?;
                 Ok(send_id)
             },
         ) {
@@ -192,7 +192,7 @@ impl<'a> SendLogTx<'a> {
         Ok(Some(addresses))
     }
 
-    pub fn commit(self: Self, id: i64) -> Result<(), failure::Error> {
+    pub fn commit(self: Self, id: &str) -> Result<(), failure::Error> {
         self.tx.execute(
             "delete from StatCache where Seq != ?;",
             &[self.sequence_number],
@@ -227,17 +227,17 @@ mod tests {
         assert_eq!(tx.send_id().unwrap(), None);
         tx.add_address(&addr).unwrap();
         assert!(tx.has_address(&addr).unwrap());
-        tx.commit(123).unwrap();
+        tx.commit(&"123".to_string()).unwrap();
         drop(sendlog);
 
         // Ensure address is still present after reopening db.
         let mut sendlog = SendLog::open(&log_path).unwrap();
         let tx = sendlog.transaction().unwrap();
-        assert_eq!(tx.send_id().unwrap(), Some(123));
+        assert_eq!(tx.send_id().unwrap(), Some("123".to_string()));
         assert!(tx.has_address(&addr).unwrap());
 
         // Drop tx to avoid ab cycling
-        tx.commit(345).unwrap();
+        tx.commit(&"345".to_string()).unwrap();
         drop(sendlog);
 
         let mut sendlog = SendLog::open(&log_path).unwrap();
@@ -267,7 +267,7 @@ mod tests {
             .unwrap();
         assert_eq!(addresses, addresses2);
 
-        tx.commit(123).unwrap();
+        tx.commit(&"123".to_string()).unwrap();
 
         let tx = sendlog.transaction().unwrap();
 
@@ -283,7 +283,7 @@ mod tests {
             .unwrap()
             .is_none());
 
-        tx.commit(456).unwrap();
+        tx.commit(&"456".to_string()).unwrap();
 
         drop(sendlog);
     }

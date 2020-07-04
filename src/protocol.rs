@@ -20,7 +20,7 @@ pub struct Chunk {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TBeginSend {
-    pub delta_id: Option<i64>,
+    pub delta_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -30,7 +30,7 @@ pub struct RBeginSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TRequestData {
-    pub id: i64,
+    pub id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -73,14 +73,14 @@ pub enum Packet {
     RBeginSend(RBeginSend),
     Chunk(Chunk),
     TLogOp(itemset::LogOp),
-    RLogOp(i64),
+    RLogOp(Option<String>),
     TRequestData(TRequestData),
     RRequestData(RRequestData),
     TGc(TGc),
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
     RRequestItemSync(RRequestItemSync),
-    SyncLogOps(Vec<(i64, itemset::LogOp)>),
+    SyncLogOps(Vec<(i64, Option<String>, itemset::LogOp)>),
     TRequestChunk(Address),
     RRequestChunk(Vec<u8>),
     TStorageWriteBarrier,
@@ -336,7 +336,7 @@ mod tests {
                 protocol: "foobar".to_owned(),
             }),
             Packet::TBeginSend(TBeginSend {
-                delta_id: Some(123),
+                delta_id: Some("abc".to_owned()),
             }),
             Packet::RBeginSend(RBeginSend { has_delta_id: true }),
             {
@@ -352,12 +352,14 @@ mod tests {
                     },
                 )))
             },
-            Packet::RLogOp(123),
+            Packet::RLogOp(Some("123".to_owned())),
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
             }),
-            Packet::TRequestData(TRequestData { id: 153534 }),
+            Packet::TRequestData(TRequestData {
+                id: "1234".to_owned(),
+            }),
             {
                 let master_key = keys::MasterKey::gen();
                 Packet::RRequestData(RRequestData {
@@ -387,12 +389,16 @@ mod tests {
             Packet::RRequestItemSync(RRequestItemSync {
                 gc_generation: "123".to_owned(),
             }),
-            Packet::SyncLogOps(vec![(765756, itemset::LogOp::RemoveItems(vec![123]))]),
+            Packet::SyncLogOps(vec![(
+                765756,
+                Some("abdef".to_owned()),
+                itemset::LogOp::RemoveItems(vec!["123".to_owned()]),
+            )]),
             Packet::TRequestChunk(Address::default()),
             Packet::RRequestChunk(vec![1, 2, 3]),
             Packet::StorageConnect(StorageConnect {
                 protocol: "foobar".to_owned(),
-                path: "abc".to_string(),
+                path: "abc".to_owned(),
             }),
             {
                 let mut reachable = Vec::new();

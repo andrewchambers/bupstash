@@ -43,3 +43,10 @@ we can avoid the gc quiescent period on proper shutdown.
 
 Send gc generation alongside put for potential future use as an upload fence with
 no locking.
+
+item id fixed size? not a string but its own type? stored in database as binary?
+
+gc_generation and send_id different lengths? 
+
+refactor, make additem its own protocol message, this way item_id can be omitted from other ops?
+Maybe not worth it.

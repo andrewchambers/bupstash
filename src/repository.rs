@@ -348,7 +348,7 @@ impl Repo {
         )?)
     }
 
-    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<i64, failure::Error> {
+    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<(i64, Option<String>), failure::Error> {
         let tx = self.conn.transaction()?;
         let id = itemset::do_op(&tx, &op)?;
         tx.commit()?;
@@ -357,21 +357,21 @@ impl Repo {
 
     pub fn lookup_item_by_id(
         &mut self,
-        id: i64,
+        id: &str,
     ) -> Result<Option<itemset::VersionedItemMetadata>, failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn has_item_with_id(&mut self, id: i64) -> Result<bool, failure::Error> {
+    pub fn item_with_id_in_oplog(&mut self, id: &str) -> Result<bool, failure::Error> {
         let tx = self.conn.transaction()?;
-        itemset::has_item_with_id(&tx, id)
+        itemset::item_with_id_in_oplog(&tx, id)
     }
 
     pub fn walk_log(
         &mut self,
         after: i64,
-        f: &mut dyn FnMut(i64, itemset::LogOp) -> Result<(), failure::Error>,
+        f: &mut dyn FnMut(i64, Option<String>, itemset::LogOp) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::walk_log(&tx, after, f)
@@ -402,7 +402,7 @@ impl Repo {
 
             itemset::compact(&tx)?;
 
-            itemset::walk_items(&tx, &mut |_id, metadata| match metadata {
+            itemset::walk_items(&tx, &mut |_op_id, _item_id, metadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
                     let addr = &metadata.plain_text_metadata.address;
                     // IDEA:

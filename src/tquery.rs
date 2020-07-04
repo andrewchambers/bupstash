@@ -442,12 +442,12 @@ pub fn query_matches(q: &Query, tagset: &BTreeMap<String, Option<String>>) -> bo
     }
 }
 
-pub fn get_id_query(q: &Query) -> Option<i64> {
+pub fn get_id_query(q: &Query) -> Option<String> {
     match q {
         Query::Glob { tag, pattern, .. }
-            if tag == "id" && pattern.as_str().chars().all(char::is_numeric) =>
+            if tag == "id" && pattern.as_str().chars().all(char::is_alphanumeric) =>
         {
-            Some(pattern.as_str().parse::<i64>().unwrap_or(0))
+            Some(pattern.as_str().to_owned())
         }
         _ => None,
     }
@@ -494,7 +494,10 @@ mod tests {
 
     #[test]
     fn test_is_id_query() {
-        assert_eq!(get_id_query(&parse("id=123").unwrap()), Some(123));
+        assert_eq!(
+            get_id_query(&parse("id=123").unwrap()),
+            Some("123".to_owned())
+        );
         assert_eq!(get_id_query(&parse("foo=123").unwrap()), None);
     }
 

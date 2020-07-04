@@ -94,7 +94,7 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn last_log_op(self: &mut Self) -> Result<i64, failure::Error> {
         let last_id = match self.tx.query_row(
-            "select Id from ItemOpLog order by Id desc limit 1;",
+            "select OpId from ItemOpLog order by OpId desc limit 1;",
             rusqlite::NO_PARAMS,
             |r| {
                 let last: i64 = r.get(0)?;
@@ -155,8 +155,13 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn sync_op(self: &mut Self, id: i64, op: itemset::LogOp) -> Result<i64, failure::Error> {
-        itemset::do_op_with_id(&self.tx, id, &op)
+    pub fn sync_op(
+        self: &mut Self,
+        op_id: i64,
+        item_id: Option<String>,
+        op: itemset::LogOp,
+    ) -> Result<(), failure::Error> {
+        itemset::do_op_with_ids(&self.tx, op_id, item_id, &op)
     }
 
     pub fn commit(self: Self) -> Result<(), failure::Error> {
@@ -166,7 +171,11 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn walk_items(
         self: &mut Self,
-        f: &mut dyn FnMut(i64, itemset::VersionedItemMetadata) -> Result<(), failure::Error>,
+        f: &mut dyn FnMut(
+            i64,
+            String,
+            itemset::VersionedItemMetadata,
+        ) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         itemset::walk_items(&self.tx, f)
     }

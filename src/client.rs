@@ -97,24 +97,28 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, Option<String>>,
     data: DataSource,
-) -> Result<i64, failure::Error> {
-    write_packet(w, &Packet::TBeginSend(TBeginSend { delta_id: None }))?;
+) -> Result<String, failure::Error> {
+    let (send_log_tx, send_id) = match send_log {
+        Some(ref mut send_log) => {
+            let tx = send_log.transaction()?;
+            let send_id = tx.send_id()?;
+            (Some(tx), send_id)
+        }
+        None => (None, None),
+    };
+
+    write_packet(w, &Packet::TBeginSend(TBeginSend { delta_id: send_id }))?;
 
     let ack = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RBeginSend(ack) => ack,
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    let send_log_tx = match send_log {
-        Some(ref mut send_log) => {
-            let tx = send_log.transaction()?;
-            if !ack.has_delta_id {
-                tx.clear_log()?;
-            }
-            Some(tx)
+    if let Some(ref tx) = send_log_tx {
+        if !ack.has_delta_id {
+            tx.clear_log()?;
         }
-        None => None,
-    };
+    }
 
     let mut sink = ConnectionHtreeSink {
         tx: &send_log_tx,
@@ -186,8 +190,13 @@ pub fn send(
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RLogOp(id) => {
+            let id = if let Some(id) = id {
+                id
+            } else {
+                failure::bail!("protocol error, expected item id in ack packet");
+            };
             if send_log_tx.is_some() {
-                send_log_tx.unwrap().commit(id)?;
+                send_log_tx.unwrap().commit(&id)?;
             }
             Ok(id)
         }
@@ -359,12 +368,12 @@ pub struct RequestContext {
 
 pub fn request_data_stream(
     mut ctx: RequestContext,
-    id: i64,
+    id: &str,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::TRequestData(TRequestData { id }))?;
+    write_packet(w, &Packet::TRequestData(TRequestData { id: id.to_owned() }))?;
 
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestData(req) => match req.metadata {
@@ -465,8 +474,8 @@ pub fn sync(
                 if ops.is_empty() {
                     break;
                 }
-                for (id, op) in ops {
-                    tx.sync_op(id, op)?;
+                for (opid, item_id, op) in ops {
+                    tx.sync_op(opid, item_id, op)?;
                 }
             }
             _ => failure::bail!("protocol error, expected items packet"),
@@ -478,7 +487,7 @@ pub fn sync(
 }
 
 pub fn remove(
-    ids: Vec<i64>,
+    ids: Vec<String>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {

@@ -182,7 +182,7 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
 
 fn matches_to_id_and_query(
     matches: &Matches,
-) -> Result<(Option<i64>, tquery::Query), failure::Error> {
+) -> Result<(Option<String>, tquery::Query), failure::Error> {
     let query: tquery::Query = if !matches.free.is_empty() {
         match tquery::parse(&matches.free.join("•")) {
             Ok(query) => query,
@@ -313,72 +313,76 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut query_cache = matches_to_query_cache(&matches)?;
 
     let warned_wrong_key = &mut false;
-    let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
-        itemset::VersionedItemMetadata::V1(metadata) => {
-            if metadata.plain_text_metadata.master_key_id != master_key_id {
-                if !*warned_wrong_key {
-                    *warned_wrong_key = true;
-                    eprintln!("NOTE: Search skipping items encrypted with different master key.")
+    let mut f =
+        |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| match metadata {
+            itemset::VersionedItemMetadata::V1(metadata) => {
+                if metadata.plain_text_metadata.master_key_id != master_key_id {
+                    if !*warned_wrong_key {
+                        *warned_wrong_key = true;
+                        eprintln!(
+                            "NOTE: Search skipping items encrypted with different master key."
+                        )
+                    }
+                    return Ok(());
                 }
-                return Ok(());
-            }
 
-            let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-            let mut tags = encrypted_metadata.tags;
-            tags.insert("id".to_string(), Some(id.to_string()));
+                let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+                let mut tags = encrypted_metadata.tags;
+                tags.insert("id".to_string(), Some(item_id));
 
-            let doprint = match query {
-                Some(ref query) => tquery::query_matches(query, &tags),
-                None => true,
-            };
+                let doprint = match query {
+                    Some(ref query) => tquery::query_matches(query, &tags),
+                    None => true,
+                };
 
-            let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
-            tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
-                ("id", _) => std::cmp::Ordering::Less,
-                (_, "id") => std::cmp::Ordering::Greater,
-                _ => k1.partial_cmp(k2).unwrap(),
-            });
+                let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+                tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
+                    ("id", _) => std::cmp::Ordering::Less,
+                    (_, "id") => std::cmp::Ordering::Greater,
+                    _ => k1.partial_cmp(k2).unwrap(),
+                });
 
-            if doprint {
-                match list_format {
-                    ListFormat::Human => {
-                        for (i, (k, v)) in tags.iter().enumerate() {
-                            if i != 0 {
-                                print!(" ");
-                            }
-                            print!("{}", k);
-                            match v {
-                                Some(v) => {
-                                    print!("=\"{}\"", v.replace("\\", "\\\\").replace("\"", "\\\""))
+                if doprint {
+                    match list_format {
+                        ListFormat::Human => {
+                            for (i, (k, v)) in tags.iter().enumerate() {
+                                if i != 0 {
+                                    print!(" ");
                                 }
-                                None => (),
+                                print!("{}", k);
+                                match v {
+                                    Some(v) => print!(
+                                        "=\"{}\"",
+                                        v.replace("\\", "\\\\").replace("\"", "\\\"")
+                                    ),
+                                    None => (),
+                                }
                             }
+                            println!();
                         }
-                        println!();
-                    }
-                    ListFormat::Jsonl => {
-                        print!("{{");
-                        for (i, (k, v)) in tags.iter().enumerate() {
-                            if i != 0 {
-                                print!(", ");
+                        ListFormat::Jsonl => {
+                            print!("{{");
+                            for (i, (k, v)) in tags.iter().enumerate() {
+                                if i != 0 {
+                                    print!(", ");
+                                }
+                                match v {
+                                    Some(v) => print!(
+                                        "{}:{}",
+                                        serde_json::to_string(&k)?,
+                                        serde_json::to_string(&v)?
+                                    ),
+                                    None => print!("{} : true", serde_json::to_string(&k)?),
+                                }
                             }
-                            match v {
-                                Some(v) => print!(
-                                    "{}:{}",
-                                    serde_json::to_string(&k)?,
-                                    serde_json::to_string(&v)?
-                                ),
-                                None => print!("{} : true", serde_json::to_string(&k)?),
-                            }
+                            println!("}}");
                         }
-                        println!("}}");
                     }
                 }
-            }
 
-            Ok(())
-        }
-    };
+                Ok(())
+            }
+        };
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
@@ -630,22 +634,24 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
 
             let mut n_matches: u64 = 0;
-            let mut id = -1;
+            let mut id = "".to_string();
 
-            let mut f = |qid: i64, metadata: itemset::VersionedItemMetadata| match metadata {
-                itemset::VersionedItemMetadata::V1(metadata) => {
-                    if master_key_id != metadata.plain_text_metadata.master_key_id {
-                        return Ok(());
-                    }
+            let mut f = |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| {
+                match metadata {
+                    itemset::VersionedItemMetadata::V1(metadata) => {
+                        if master_key_id != metadata.plain_text_metadata.master_key_id {
+                            return Ok(());
+                        }
 
-                    let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-                    let mut tags = encrypted_metadata.tags;
-                    tags.insert("id".to_string(), Some(qid.to_string()));
-                    if tquery::query_matches(&query, &tags) {
-                        n_matches += 1;
-                        id = qid;
+                        let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+                        let mut tags = encrypted_metadata.tags;
+                        tags.insert("id".to_string(), Some(item_id.clone()));
+                        if tquery::query_matches(&query, &tags) {
+                            n_matches += 1;
+                            id = item_id;
+                        }
+                        Ok(())
                     }
-                    Ok(())
                 }
             };
 
@@ -669,7 +675,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             data_dctx,
             metadata_dctx,
         },
-        id,
+        &id,
         &mut serve_out,
         &mut serve_in,
         &mut std::io::stdout(),
@@ -701,7 +707,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     client::handle_server_info(&mut serve_out)?;
 
-    let ids: Vec<i64> = match (id, query) {
+    let ids: Vec<String> = match (id, query) {
         (Some(id), _) => vec![id],
         (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
@@ -725,19 +731,21 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             };
             let mut ids = Vec::new();
 
-            let mut f = |id: i64, metadata: itemset::VersionedItemMetadata| match metadata {
-                itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.plain_text_metadata.master_key_id != master_key_id {
-                        return Ok(());
-                    }
-                    let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-                    let mut tags = encrypted_metadata.tags;
+            let mut f = |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| {
+                match metadata {
+                    itemset::VersionedItemMetadata::V1(metadata) => {
+                        if metadata.plain_text_metadata.master_key_id != master_key_id {
+                            return Ok(());
+                        }
+                        let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
+                        let mut tags = encrypted_metadata.tags;
 
-                    tags.insert("id".to_string(), Some(id.to_string()));
-                    if tquery::query_matches(&query, &tags) {
-                        ids.push(id);
+                        tags.insert("id".to_string(), Some(item_id.clone()));
+                        if tquery::query_matches(&query, &tags) {
+                            ids.push(item_id);
+                        }
+                        Ok(())
                     }
-                    Ok(())
                 }
             };
             let mut tx = query_cache.transaction()?;

@@ -55,8 +55,8 @@ pub fn serve(
                 if !cfg.allow_edit {
                     failure::bail!("server has disabled delete/edit for this client")
                 }
-                let id = repo.do_op(op)?;
-                write_packet(w, &Packet::RLogOp(id))?;
+                let (_op_id, _item_id) = repo.do_op(op)?;
+                write_packet(w, &Packet::RLogOp(_item_id))?;
             }
             Packet::EndOfTransmission => break Ok(()),
             _ => failure::bail!("protocol error, unexpected packet kind"),
@@ -74,7 +74,7 @@ fn recv(
         w,
         &Packet::RBeginSend(RBeginSend {
             has_delta_id: if let Some(delta_id) = begin.delta_id {
-                repo.has_item_with_id(delta_id)?
+                repo.item_with_id_in_oplog(&delta_id)?
             } else {
                 false
             },
@@ -92,8 +92,8 @@ fn recv(
                 store_engine.sync()?;
                 match op {
                     itemset::LogOp::AddItem(_) => {
-                        let id = repo.do_op(op)?;
-                        write_packet(w, &Packet::RLogOp(id))?;
+                        let (_op_id, item_id) = repo.do_op(op)?;
+                        write_packet(w, &Packet::RLogOp(item_id))?;
                     }
                     _ => failure::bail!("protocol error, expected add item log op"),
                 }
@@ -108,10 +108,10 @@ fn recv(
 
 fn send(
     repo: &mut repository::Repo,
-    id: i64,
+    id: String,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let metadata = match repo.lookup_item_by_id(id)? {
+    let metadata = match repo.lookup_item_by_id(&id)? {
         Some(metadata) => {
             write_packet(
                 w,
@@ -217,8 +217,8 @@ fn item_sync(
 
     let mut logops = Vec::new();
 
-    repo.walk_log(after, &mut |id, op| {
-        logops.push((id, op));
+    repo.walk_log(after, &mut |op_id, item_id, op| {
+        logops.push((op_id, item_id, op));
         if logops.len() >= 64 {
             let mut v = Vec::new();
             std::mem::swap(&mut v, &mut logops);
