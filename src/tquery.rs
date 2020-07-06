@@ -1,3 +1,4 @@
+use super::xid::*;
 use failure::Fail;
 use std::collections::BTreeMap;
 
@@ -442,12 +443,16 @@ pub fn query_matches(q: &Query, tagset: &BTreeMap<String, Option<String>>) -> bo
     }
 }
 
-pub fn get_id_query(q: &Query) -> Option<String> {
+pub fn get_id_query(q: &Query) -> Option<Xid> {
     match q {
         Query::Glob { tag, pattern, .. }
             if tag == "id" && pattern.as_str().chars().all(char::is_alphanumeric) =>
         {
-            Some(pattern.as_str().to_owned())
+            if let Ok(xid) = Xid::parse(pattern.as_str()) {
+                Some(xid)
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -495,8 +500,8 @@ mod tests {
     #[test]
     fn test_is_id_query() {
         assert_eq!(
-            get_id_query(&parse("id=123").unwrap()),
-            Some("123".to_owned())
+            get_id_query(&parse("id=11223344556677881122334455667788").unwrap()),
+            Some(Xid::parse(&"11223344556677881122334455667788").unwrap())
         );
         assert_eq!(get_id_query(&parse("foo=123").unwrap()), None);
     }

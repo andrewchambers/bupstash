@@ -2,6 +2,7 @@ use super::htree;
 use super::itemset;
 use super::protocol::*;
 use super::repository;
+use super::xid::*;
 
 pub struct ServerConfig {
     pub repo_path: std::path::PathBuf,
@@ -55,8 +56,8 @@ pub fn serve(
                 if !cfg.allow_edit {
                     failure::bail!("server has disabled delete/edit for this client")
                 }
-                let (_op_id, _item_id) = repo.do_op(op)?;
-                write_packet(w, &Packet::RLogOp(_item_id))?;
+                let (_op_id, item_id) = repo.do_op(op)?;
+                write_packet(w, &Packet::RLogOp(item_id))?;
             }
             Packet::EndOfTransmission => break Ok(()),
             _ => failure::bail!("protocol error, unexpected packet kind"),
@@ -108,7 +109,7 @@ fn recv(
 
 fn send(
     repo: &mut repository::Repo,
-    id: String,
+    id: Xid,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {

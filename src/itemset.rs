@@ -1,6 +1,7 @@
 use super::address::*;
 use super::crypto;
-use super::hex;
+use super::xid::*;
+
 use super::keys;
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +63,7 @@ pub enum LogOp {
     AddItem(VersionedItemMetadata),
     // Note: There is an asymmetry here in that we can delete many items with one log op.
     // This is because batch deleting is possible, but batch makes less sense.
-    RemoveItems(Vec<String>),
+    RemoveItems(Vec<Xid>),
 }
 
 pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
@@ -85,20 +86,11 @@ fn checked_serialize_log_op(op: &LogOp) -> Result<Vec<u8>, failure::Error> {
     Ok(serialized_op)
 }
 
-fn random_op_id() -> String {
-    let mut buf = [0; 20];
-    crypto::randombytes(&mut buf[..]);
-    hex::easy_encode_to_string(&buf[..])
-}
-
-pub fn do_op(
-    tx: &rusqlite::Transaction,
-    op: &LogOp,
-) -> Result<(i64, Option<String>), failure::Error> {
+pub fn do_op(tx: &rusqlite::Transaction, op: &LogOp) -> Result<(i64, Option<Xid>), failure::Error> {
     let serialized_op = checked_serialize_log_op(op)?;
     match &op {
         LogOp::AddItem(_) => {
-            let item_id = random_op_id();
+            let item_id = Xid::new();
             tx.execute(
                 "insert into ItemOpLog(OpData, ItemId) values(?, ?);",
                 rusqlite::params![serialized_op, item_id],
@@ -120,7 +112,7 @@ pub fn do_op(
 pub fn do_op_with_ids(
     tx: &rusqlite::Transaction,
     op_id: i64,
-    item_id: Option<String>,
+    item_id: Option<Xid>,
     op: &LogOp,
 ) -> Result<(), failure::Error> {
     let serialized_op = checked_serialize_log_op(&op)?;
@@ -167,7 +159,7 @@ pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     Ok(())
 }
 
-pub fn item_with_id_in_oplog(tx: &rusqlite::Transaction, id: &str) -> Result<bool, failure::Error> {
+pub fn item_with_id_in_oplog(tx: &rusqlite::Transaction, id: &Xid) -> Result<bool, failure::Error> {
     match tx.query_row("select 1 from ItemOpLog where ItemId = ?;", &[id], |_row| {
         Ok(true)
     }) {
@@ -179,7 +171,7 @@ pub fn item_with_id_in_oplog(tx: &rusqlite::Transaction, id: &str) -> Result<boo
 
 pub fn lookup_item_by_id(
     tx: &rusqlite::Transaction,
-    id: &str,
+    id: &Xid,
 ) -> Result<Option<VersionedItemMetadata>, failure::Error> {
     match tx.query_row("select 1 from Items where ItemId = ?;", &[id], |_row| {
         Ok(true)
@@ -202,7 +194,7 @@ pub fn lookup_item_by_id(
 
 pub fn walk_items(
     tx: &rusqlite::Transaction,
-    f: &mut dyn FnMut(i64, String, VersionedItemMetadata) -> Result<(), failure::Error>,
+    f: &mut dyn FnMut(i64, Xid, VersionedItemMetadata) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
     let mut stmt = tx.prepare(
         "select OpId, ItemId, OpData from ItemOpLog where ItemId in (select ItemId from Items);",
@@ -212,7 +204,7 @@ pub fn walk_items(
         match rows.next()? {
             Some(row) => {
                 let op_id: i64 = row.get(0)?;
-                let item_id: String = row.get(1)?;
+                let item_id: Xid = row.get(1)?;
                 let op: Vec<u8> = row.get(2)?;
                 let op: LogOp = bincode::deserialize(&op)?;
                 let metadata: VersionedItemMetadata = match op {
@@ -231,7 +223,7 @@ pub fn walk_items(
 pub fn walk_log(
     tx: &rusqlite::Transaction,
     after_op: i64,
-    f: &mut dyn FnMut(i64, Option<String>, LogOp) -> Result<(), failure::Error>,
+    f: &mut dyn FnMut(i64, Option<Xid>, LogOp) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
     let mut stmt =
         tx.prepare("select OpId, ItemId, OpData from ItemOpLog where OpId > ? order by OpId asc;")?;
@@ -240,7 +232,7 @@ pub fn walk_log(
         match rows.next()? {
             Some(row) => {
                 let op_id: i64 = row.get(0)?;
-                let item_id: Option<String> = row.get(1)?;
+                let item_id: Option<Xid> = row.get(1)?;
                 let op: Vec<u8> = row.get(2)?;
                 let op: LogOp = bincode::deserialize(&op)?;
                 f(op_id, item_id, op)?;

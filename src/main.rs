@@ -17,6 +17,7 @@ pub mod rollsum;
 pub mod sendlog;
 pub mod server;
 pub mod tquery;
+pub mod xid;
 
 use failure::Fail;
 use getopts::{Matches, Options};
@@ -182,7 +183,7 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
 
 fn matches_to_id_and_query(
     matches: &Matches,
-) -> Result<(Option<String>, tquery::Query), failure::Error> {
+) -> Result<(Option<xid::Xid>, tquery::Query), failure::Error> {
     let query: tquery::Query = if !matches.free.is_empty() {
         match tquery::parse(&matches.free.join("•")) {
             Ok(query) => query,
@@ -314,7 +315,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let warned_wrong_key = &mut false;
     let mut f =
-        |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| match metadata {
+        |_op_id: i64, item_id: xid::Xid, metadata: itemset::VersionedItemMetadata| match metadata {
             itemset::VersionedItemMetadata::V1(metadata) => {
                 if metadata.plain_text_metadata.master_key_id != master_key_id {
                     if !*warned_wrong_key {
@@ -328,7 +329,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
                 let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                 let mut tags = encrypted_metadata.tags;
-                tags.insert("id".to_string(), Some(item_id));
+                tags.insert("id".to_string(), Some(item_id.to_string()));
 
                 let doprint = match query {
                     Some(ref query) => tquery::query_matches(query, &tags),
@@ -634,9 +635,11 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
 
             let mut n_matches: u64 = 0;
-            let mut id = "".to_string();
+            let mut id = xid::Xid::default();
 
-            let mut f = |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| {
+            let mut f = |_op_id: i64,
+                         item_id: xid::Xid,
+                         metadata: itemset::VersionedItemMetadata| {
                 match metadata {
                     itemset::VersionedItemMetadata::V1(metadata) => {
                         if master_key_id != metadata.plain_text_metadata.master_key_id {
@@ -645,7 +648,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                         let mut tags = encrypted_metadata.tags;
-                        tags.insert("id".to_string(), Some(item_id.clone()));
+                        tags.insert("id".to_string(), Some(item_id.to_string()));
                         if tquery::query_matches(&query, &tags) {
                             n_matches += 1;
                             id = item_id;
@@ -675,7 +678,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             data_dctx,
             metadata_dctx,
         },
-        &id,
+        id,
         &mut serve_out,
         &mut serve_in,
         &mut std::io::stdout(),
@@ -707,7 +710,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     client::handle_server_info(&mut serve_out)?;
 
-    let ids: Vec<String> = match (id, query) {
+    let ids: Vec<xid::Xid> = match (id, query) {
         (Some(id), _) => vec![id],
         (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
@@ -731,7 +734,9 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             };
             let mut ids = Vec::new();
 
-            let mut f = |_op_id: i64, item_id: String, metadata: itemset::VersionedItemMetadata| {
+            let mut f = |_op_id: i64,
+                         item_id: xid::Xid,
+                         metadata: itemset::VersionedItemMetadata| {
                 match metadata {
                     itemset::VersionedItemMetadata::V1(metadata) => {
                         if metadata.plain_text_metadata.master_key_id != master_key_id {
@@ -740,7 +745,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                         let mut tags = encrypted_metadata.tags;
 
-                        tags.insert("id".to_string(), Some(item_id.clone()));
+                        tags.insert("id".to_string(), Some(item_id.to_string()));
                         if tquery::query_matches(&query, &tags) {
                             ids.push(item_id);
                         }

@@ -87,41 +87,46 @@ impl RollsumChunker {
     }
 }
 
-#[test]
-fn test_add_bytes() {
-    let rs = Rollsum::new();
-    let mut ch = RollsumChunker::new(rs, 1, 2);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    match ch.add_bytes(b"a") {
-        (1, None) => (),
-        v => panic!("{:?}", v),
+    #[test]
+    fn test_add_bytes() {
+        let rs = Rollsum::new();
+        let mut ch = RollsumChunker::new(rs, 1, 2);
+
+        match ch.add_bytes(b"a") {
+            (1, None) => (),
+            v => panic!("{:?}", v),
+        }
+
+        match ch.add_bytes(b"bc") {
+            (1, Some(v)) => assert_eq!(v, b"ab"),
+            v => panic!("{:?}", v),
+        }
+
+        match ch.add_bytes(b"c") {
+            (1, None) => (),
+            v => panic!("{:?}", v),
+        }
+
+        assert_eq!(ch.finish(), b"c");
     }
 
-    match ch.add_bytes(b"bc") {
-        (1, Some(v)) => assert_eq!(v, b"ab"),
-        v => panic!("{:?}", v),
+    #[test]
+    fn test_force_split_bytes() {
+        let rs = Rollsum::new();
+        let mut ch = RollsumChunker::new(rs, 10, 100);
+        assert_eq!(ch.force_split(), None);
+        ch.add_bytes(b"abc");
+
+        match ch.force_split() {
+            Some(v) => assert_eq!(v, b"abc"),
+            None => panic!("fail!"),
+        }
+        assert_eq!(ch.force_split(), None);
+        ch.add_bytes(b"def");
+        assert_eq!(ch.finish(), b"def");
     }
-
-    match ch.add_bytes(b"c") {
-        (1, None) => (),
-        v => panic!("{:?}", v),
-    }
-
-    assert_eq!(ch.finish(), b"c");
-}
-
-#[test]
-fn test_force_split_bytes() {
-    let rs = Rollsum::new();
-    let mut ch = RollsumChunker::new(rs, 10, 100);
-    assert_eq!(ch.force_split(), None);
-    ch.add_bytes(b"abc");
-
-    match ch.force_split() {
-        Some(v) => assert_eq!(v, b"abc"),
-        None => panic!("fail!"),
-    }
-    assert_eq!(ch.force_split(), None);
-    ch.add_bytes(b"def");
-    assert_eq!(ch.finish(), b"def");
 }

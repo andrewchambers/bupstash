@@ -10,6 +10,7 @@ use super::querycache;
 use super::repository;
 use super::rollsum;
 use super::sendlog;
+use super::xid::*;
 use failure::Fail;
 use std::collections::BTreeMap;
 use std::convert::{From, TryInto};
@@ -97,7 +98,7 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, Option<String>>,
     data: DataSource,
-) -> Result<String, failure::Error> {
+) -> Result<Xid, failure::Error> {
     let (send_log_tx, send_id) = match send_log {
         Some(ref mut send_log) => {
             let tx = send_log.transaction()?;
@@ -368,12 +369,12 @@ pub struct RequestContext {
 
 pub fn request_data_stream(
     mut ctx: RequestContext,
-    id: &str,
+    id: Xid,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::TRequestData(TRequestData { id: id.to_owned() }))?;
+    write_packet(w, &Packet::TRequestData(TRequestData { id }))?;
 
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestData(req) => match req.metadata {
@@ -487,7 +488,7 @@ pub fn sync(
 }
 
 pub fn remove(
-    ids: Vec<String>,
+    ids: Vec<Xid>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {

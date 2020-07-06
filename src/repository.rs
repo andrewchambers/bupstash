@@ -7,6 +7,7 @@ use super::hex;
 use super::htree;
 use super::itemset;
 use super::local_chunk_storage;
+use super::xid::*;
 use failure::Fail;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -348,7 +349,7 @@ impl Repo {
         )?)
     }
 
-    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<(i64, Option<String>), failure::Error> {
+    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<(i64, Option<Xid>), failure::Error> {
         let tx = self.conn.transaction()?;
         let id = itemset::do_op(&tx, &op)?;
         tx.commit()?;
@@ -357,13 +358,13 @@ impl Repo {
 
     pub fn lookup_item_by_id(
         &mut self,
-        id: &str,
+        id: &Xid,
     ) -> Result<Option<itemset::VersionedItemMetadata>, failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn item_with_id_in_oplog(&mut self, id: &str) -> Result<bool, failure::Error> {
+    pub fn item_with_id_in_oplog(&mut self, id: &Xid) -> Result<bool, failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::item_with_id_in_oplog(&tx, id)
     }
@@ -371,7 +372,7 @@ impl Repo {
     pub fn walk_log(
         &mut self,
         after: i64,
-        f: &mut dyn FnMut(i64, Option<String>, itemset::LogOp) -> Result<(), failure::Error>,
+        f: &mut dyn FnMut(i64, Option<Xid>, itemset::LogOp) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         let tx = self.conn.transaction()?;
         itemset::walk_log(&tx, after, f)

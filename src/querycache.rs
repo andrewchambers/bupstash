@@ -1,4 +1,5 @@
 use super::itemset;
+use super::xid::*;
 use std::path::PathBuf;
 
 pub struct QueryCache {
@@ -158,7 +159,7 @@ impl<'a> QueryCacheTx<'a> {
     pub fn sync_op(
         self: &mut Self,
         op_id: i64,
-        item_id: Option<String>,
+        item_id: Option<Xid>,
         op: itemset::LogOp,
     ) -> Result<(), failure::Error> {
         itemset::do_op_with_ids(&self.tx, op_id, item_id, &op)
@@ -171,11 +172,7 @@ impl<'a> QueryCacheTx<'a> {
 
     pub fn walk_items(
         self: &mut Self,
-        f: &mut dyn FnMut(
-            i64,
-            String,
-            itemset::VersionedItemMetadata,
-        ) -> Result<(), failure::Error>,
+        f: &mut dyn FnMut(i64, Xid, itemset::VersionedItemMetadata) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         itemset::walk_items(&self.tx, f)
     }

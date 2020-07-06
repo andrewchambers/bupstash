@@ -1,6 +1,7 @@
 use super::address::*;
 use super::itemset;
 use super::repository;
+use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
@@ -20,7 +21,7 @@ pub struct Chunk {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TBeginSend {
-    pub delta_id: Option<String>,
+    pub delta_id: Option<Xid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -30,7 +31,7 @@ pub struct RBeginSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TRequestData {
-    pub id: String,
+    pub id: Xid,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -73,14 +74,14 @@ pub enum Packet {
     RBeginSend(RBeginSend),
     Chunk(Chunk),
     TLogOp(itemset::LogOp),
-    RLogOp(Option<String>),
+    RLogOp(Option<Xid>),
     TRequestData(TRequestData),
     RRequestData(RRequestData),
     TGc(TGc),
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
     RRequestItemSync(RRequestItemSync),
-    SyncLogOps(Vec<(i64, Option<String>, itemset::LogOp)>),
+    SyncLogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
     TRequestChunk(Address),
     RRequestChunk(Vec<u8>),
     TStorageWriteBarrier,
@@ -336,7 +337,7 @@ mod tests {
                 protocol: "foobar".to_owned(),
             }),
             Packet::TBeginSend(TBeginSend {
-                delta_id: Some("abc".to_owned()),
+                delta_id: Some(Xid::new()),
             }),
             Packet::RBeginSend(RBeginSend { has_delta_id: true }),
             {
@@ -352,14 +353,12 @@ mod tests {
                     },
                 )))
             },
-            Packet::RLogOp(Some("123".to_owned())),
+            Packet::RLogOp(Some(Xid::default())),
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
             }),
-            Packet::TRequestData(TRequestData {
-                id: "1234".to_owned(),
-            }),
+            Packet::TRequestData(TRequestData { id: Xid::default() }),
             {
                 let master_key = keys::MasterKey::gen();
                 Packet::RRequestData(RRequestData {
@@ -391,8 +390,8 @@ mod tests {
             }),
             Packet::SyncLogOps(vec![(
                 765756,
-                Some("abdef".to_owned()),
-                itemset::LogOp::RemoveItems(vec!["123".to_owned()]),
+                Some(Xid::default()),
+                itemset::LogOp::RemoveItems(vec![Xid::new()]),
             )]),
             Packet::TRequestChunk(Address::default()),
             Packet::RRequestChunk(vec![1, 2, 3]),
