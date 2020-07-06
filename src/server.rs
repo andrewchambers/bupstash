@@ -52,12 +52,12 @@ pub fn serve(
                 }
                 item_sync(&mut repo, req.after, req.gc_generation, w)?;
             }
-            Packet::TLogOp(op) => {
+            Packet::TRmItems(items) => {
                 if !cfg.allow_edit {
                     failure::bail!("server has disabled delete/edit for this client")
                 }
-                let (_op_id, item_id) = repo.do_op(op)?;
-                write_packet(w, &Packet::RLogOp(item_id))?;
+                repo.remove_items(items)?;
+                write_packet(w, &Packet::RRmItems)?;
             }
             Packet::EndOfTransmission => break Ok(()),
             _ => failure::bail!("protocol error, unexpected packet kind"),
@@ -89,15 +89,10 @@ fn recv(
             Packet::Chunk(chunk) => {
                 store_engine.add_chunk(&chunk.address, chunk.data)?;
             }
-            Packet::TLogOp(op) => {
+            Packet::TAddItem(md) => {
                 store_engine.sync()?;
-                match op {
-                    itemset::LogOp::AddItem(_) => {
-                        let (_op_id, item_id) = repo.do_op(op)?;
-                        write_packet(w, &Packet::RLogOp(item_id))?;
-                    }
-                    _ => failure::bail!("protocol error, expected add item log op"),
-                }
+                let item_id = repo.add_item(md)?;
+                write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
             }
             _ => failure::bail!("protocol error, unexpected packet"),

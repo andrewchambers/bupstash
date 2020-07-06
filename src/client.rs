@@ -177,30 +177,23 @@ pub fn send(
 
     write_packet(
         w,
-        &Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
-            itemset::ItemMetadata {
-                plain_text_metadata,
-                encrypted_metadata: ctx.metadata_ectx.encrypt_data(
-                    bincode::serialize(&e_metadata)?,
-                    crypto::DataCompression::Zstd,
-                ),
-            },
-        ))),
+        &Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+            plain_text_metadata,
+            encrypted_metadata: ctx.metadata_ectx.encrypt_data(
+                bincode::serialize(&e_metadata)?,
+                crypto::DataCompression::Zstd,
+            ),
+        })),
     )?;
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RLogOp(id) => {
-            let id = if let Some(id) = id {
-                id
-            } else {
-                failure::bail!("protocol error, expected item id in ack packet");
-            };
+        Packet::RAddItem(id) => {
             if send_log_tx.is_some() {
                 send_log_tx.unwrap().commit(&id)?;
             }
             Ok(id)
         }
-        _ => failure::bail!("protocol error, expected ack packet"),
+        _ => failure::bail!("protocol error, expected an RAddItem packet"),
     }
 }
 
@@ -491,10 +484,10 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::TLogOp(itemset::LogOp::RemoveItems(ids)))?;
+    write_packet(w, &Packet::TRmItems(ids))?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RLogOp(_) => {}
-        _ => failure::bail!("protocol error, expected ack log op packet"),
+        Packet::RRmItems => {}
+        _ => failure::bail!("protocol error, expected RRmItems"),
     }
     Ok(())
 }

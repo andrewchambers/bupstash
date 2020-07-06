@@ -162,7 +162,7 @@ impl<'a> QueryCacheTx<'a> {
         item_id: Option<Xid>,
         op: itemset::LogOp,
     ) -> Result<(), failure::Error> {
-        itemset::do_op_with_ids(&self.tx, op_id, item_id, &op)
+        itemset::sync_ops(&self.tx, op_id, item_id, &op)
     }
 
     pub fn commit(self: Self) -> Result<(), failure::Error> {

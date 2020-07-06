@@ -341,11 +341,21 @@ impl Repo {
         )?)
     }
 
-    pub fn do_op(&mut self, op: itemset::LogOp) -> Result<(i64, Option<Xid>), failure::Error> {
+    pub fn add_item(
+        &mut self,
+        item: itemset::VersionedItemMetadata,
+    ) -> Result<Xid, failure::Error> {
         let tx = self.conn.transaction()?;
-        let id = itemset::do_op(&tx, &op)?;
+        let id = itemset::add_item(&tx, item)?;
         tx.commit()?;
         Ok(id)
+    }
+
+    pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), failure::Error> {
+        let tx = self.conn.transaction()?;
+        itemset::remove_items(&tx, items)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn lookup_item_by_id(

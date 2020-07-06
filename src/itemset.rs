@@ -84,30 +84,35 @@ fn checked_serialize_log_op(op: &LogOp) -> Result<Vec<u8>, failure::Error> {
     Ok(serialized_op)
 }
 
-pub fn do_op(tx: &rusqlite::Transaction, op: &LogOp) -> Result<(i64, Option<Xid>), failure::Error> {
-    let serialized_op = checked_serialize_log_op(op)?;
-    match &op {
-        LogOp::AddItem(_) => {
-            let item_id = Xid::new();
-            tx.execute(
-                "insert into ItemOpLog(OpData, ItemId) values(?, ?);",
-                rusqlite::params![serialized_op, item_id],
-            )?;
-            let op_id = tx.last_insert_rowid();
-            tx.execute("insert into Items(ItemId) values(?);", &[&item_id])?;
-            Ok((op_id, Some(item_id)))
-        }
-        LogOp::RemoveItems(items) => {
-            for itemid in items {
-                tx.execute("delete from Items where ItemId = ?;", &[itemid])?;
-            }
-            tx.execute("insert into ItemOpLog(OpData) values(?);", &[serialized_op])?;
-            Ok((tx.last_insert_rowid(), None))
-        }
-    }
+pub fn add_item(
+    tx: &rusqlite::Transaction,
+    md: VersionedItemMetadata,
+) -> Result<Xid, failure::Error> {
+    let item_id = Xid::new();
+    let op = LogOp::AddItem(md);
+    tx.execute(
+        "insert into ItemOpLog(OpData, ItemId) values(?, ?);",
+        rusqlite::params![checked_serialize_log_op(&op)?, item_id],
+    )?;
+    tx.execute("insert into Items(ItemId) values(?);", &[&item_id])?;
+    Ok(item_id)
 }
 
-pub fn do_op_with_ids(
+pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), failure::Error> {
+    let mut existed = Vec::new();
+    for item_id in items.iter() {
+        let n_deleted = tx.execute("delete from Items where ItemId = ?;", &[item_id])?;
+        if n_deleted != 0 {
+            existed.push(*item_id);
+        }
+    }
+    let op = LogOp::RemoveItems(existed);
+    let serialized_op = checked_serialize_log_op(&op)?;
+    tx.execute("insert into ItemOpLog(OpData) values(?);", &[serialized_op])?;
+    Ok(())
+}
+
+pub fn sync_ops(
     tx: &rusqlite::Transaction,
     op_id: i64,
     item_id: Option<Xid>,

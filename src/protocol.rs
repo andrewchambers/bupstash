@@ -73,8 +73,10 @@ pub enum Packet {
     TBeginSend(TBeginSend),
     RBeginSend(RBeginSend),
     Chunk(Chunk),
-    TLogOp(itemset::LogOp),
-    RLogOp(Option<Xid>),
+    TAddItem(itemset::VersionedItemMetadata),
+    RAddItem(Xid),
+    TRmItems(Vec<Xid>),
+    RRmItems,
     TRequestData(TRequestData),
     RRequestData(RRequestData),
     TGc(TGc),
@@ -98,24 +100,26 @@ const PACKET_KIND_SERVER_INFO: u8 = 0;
 const PACKET_KIND_T_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_R_BEGIN_SEND: u8 = 2;
 const PACKET_KIND_CHUNK: u8 = 3;
-const PACKET_KIND_T_LOG_OP: u8 = 4;
-const PACKET_KIND_R_LOG_OP: u8 = 5;
-const PACKET_KIND_T_REQUEST_DATA: u8 = 6;
-const PACKET_KIND_R_REQUEST_DATA: u8 = 7;
-const PACKET_KIND_T_GC: u8 = 8;
-const PACKET_KIND_R_GC: u8 = 9;
-const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 10;
-const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 11;
-const PACKET_KIND_SYNC_LOG_OPS: u8 = 12;
-const PACKET_KIND_T_REQUEST_CHUNK: u8 = 13;
-const PACKET_KIND_R_REQUEST_CHUNK: u8 = 14;
-const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 15;
-const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 16;
-const PACKET_KIND_STORAGE_CONNECT: u8 = 17;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 18;
-const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 19;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 20;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 21;
+const PACKET_KIND_T_ADD_ITEM: u8 = 4;
+const PACKET_KIND_R_ADD_ITEM: u8 = 5;
+const PACKET_KIND_T_RM_ITEMS: u8 = 6;
+const PACKET_KIND_R_RM_ITEMS: u8 = 7;
+const PACKET_KIND_T_REQUEST_DATA: u8 = 8;
+const PACKET_KIND_R_REQUEST_DATA: u8 = 9;
+const PACKET_KIND_T_GC: u8 = 10;
+const PACKET_KIND_R_GC: u8 = 11;
+const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 12;
+const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 13;
+const PACKET_KIND_SYNC_LOG_OPS: u8 = 14;
+const PACKET_KIND_T_REQUEST_CHUNK: u8 = 15;
+const PACKET_KIND_R_REQUEST_CHUNK: u8 = 16;
+const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 17;
+const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 18;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 19;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 20;
+const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 21;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 22;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 23;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -170,8 +174,10 @@ pub fn read_packet(
         PACKET_KIND_SERVER_INFO => Packet::ServerInfo(bincode::deserialize(&buf)?),
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(bincode::deserialize(&buf)?),
         PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_LOG_OP => Packet::TLogOp(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_LOG_OP => Packet::RLogOp(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(bincode::deserialize(&buf)?),
+        PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
         PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(bincode::deserialize(&buf)?),
         PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(bincode::deserialize(&buf)?),
         PACKET_KIND_T_GC => Packet::TGc(bincode::deserialize(&buf)?),
@@ -231,15 +237,23 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::TLogOp(ref v) => {
+        Packet::TAddItem(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_T_LOG_OP, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_T_ADD_ITEM, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::RLogOp(ref v) => {
+        Packet::RAddItem(ref v) => {
             let b = bincode::serialize(&v)?;
-            send_hdr(w, PACKET_KIND_R_LOG_OP, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_ADD_ITEM, b.len().try_into()?)?;
             w.write_all(&b)?;
+        }
+        Packet::TRmItems(ref v) => {
+            let b = bincode::serialize(&v)?;
+            send_hdr(w, PACKET_KIND_T_RM_ITEMS, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::RRmItems => {
+            send_hdr(w, PACKET_KIND_R_RM_ITEMS, 0)?;
         }
         Packet::TRequestData(ref v) => {
             let b = bincode::serialize(&v)?;
@@ -342,18 +356,18 @@ mod tests {
             Packet::RBeginSend(RBeginSend { has_delta_id: true }),
             {
                 let master_key = keys::MasterKey::gen();
-                Packet::TLogOp(itemset::LogOp::AddItem(itemset::VersionedItemMetadata::V1(
-                    itemset::ItemMetadata {
-                        plain_text_metadata: itemset::PlainTextItemMetadata {
-                            address: Address::default(),
-                            tree_height: 3,
-                            master_key_id: master_key.id,
-                        },
-                        encrypted_metadata: vec![1, 2, 3],
+                Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+                    plain_text_metadata: itemset::PlainTextItemMetadata {
+                        address: Address::default(),
+                        tree_height: 3,
+                        master_key_id: master_key.id,
                     },
-                )))
+                    encrypted_metadata: vec![1, 2, 3],
+                }))
             },
-            Packet::RLogOp(Some(Xid::default())),
+            Packet::RAddItem(Xid::default()),
+            Packet::TRmItems(vec![Xid::default()]),
+            Packet::RRmItems,
             Packet::Chunk(Chunk {
                 address: Address::default(),
                 data: vec![1, 2, 3],
