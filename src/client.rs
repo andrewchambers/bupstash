@@ -125,7 +125,7 @@ pub fn send(
         w,
     };
 
-    let min_size = 1024;
+    let min_size = 1 * 256 * 1024;
     let max_size = 8 * 1024 * 1024;
     let chunk_mask = 0x000f_ffff;
     // XXX TODO these chunk parameters need to be investigated and tuned.

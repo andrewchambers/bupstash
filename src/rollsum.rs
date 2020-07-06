@@ -31,11 +31,9 @@
  */
 
 const WINDOW_BITS: usize = 6;
-const WINDOW_SIZE: usize = 1 << WINDOW_BITS;
-
-const CHAR_OFFSET: usize = 31;
-
+pub const WINDOW_SIZE: usize = 1 << WINDOW_BITS;
 pub const CHUNK_MASK: u32 = 0x1fff;
+const CHAR_OFFSET: usize = 31;
 
 /// Rolling checksum method used by `bup`
 /// based on: https://github.com/bup/bup/lib/bup/bupsplit.c

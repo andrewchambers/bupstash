@@ -1,4 +1,4 @@
-use super::rollsum::Rollsum;
+use super::rollsum::{Rollsum, WINDOW_SIZE};
 
 pub struct RollsumChunker {
     rs: Rollsum,
@@ -59,6 +59,15 @@ impl RollsumChunker {
             self.cur_vec.reserve(growth);
             debug_assert!(self.spare_capacity() >= n_bytes);
         }
+
+        // None of the bytes we are adding will count towards the
+        // next chunk, simply add them all, the bytes don't matter
+        // as we will cycle WINDOW_SIZE too.
+        if self.cur_vec.len() + n_bytes < (self.min_sz - WINDOW_SIZE) {
+            self.cur_vec.extend_from_slice(&buf[0..n_bytes]);
+            return (n_bytes, None);
+        }
+
         let mut n_added = 0;
         for b in buf[0..n_bytes].iter() {
             self.cur_vec.push(*b);

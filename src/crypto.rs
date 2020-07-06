@@ -314,7 +314,7 @@ impl DecryptionContext {
 
     pub fn decrypt_data(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
         if ct.len() < BOX_PUBLICKEYBYTES + BOX_NONCEBYTES + BOX_MACBYTES {
-            failure::bail!("data chunk corrupt");
+            failure::bail!("data corrupt (too small)");
         }
 
         {
@@ -337,7 +337,7 @@ impl DecryptionContext {
             &ct[..ct.len() - BOX_PUBLICKEYBYTES],
             &self.ephemeral_bk,
         ) {
-            failure::bail!("data chunk corrupt");
+            failure::bail!("data corrupt");
         }
 
         decompress_chunk(pt)
