@@ -110,12 +110,12 @@ impl<'a> QueryCacheTx<'a> {
         Ok(last_id)
     }
 
-    pub fn current_gc_generation(&mut self) -> Result<Option<String>, failure::Error> {
+    pub fn current_gc_generation(&mut self) -> Result<Option<Xid>, failure::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
             |r| {
-                let generation: String = r.get(0)?;
+                let generation: Xid = r.get(0)?;
                 Ok(generation)
             },
         ) {
@@ -125,12 +125,12 @@ impl<'a> QueryCacheTx<'a> {
         }
     }
 
-    pub fn start_sync(self: &mut Self, gc_generation: String) -> Result<(), failure::Error> {
+    pub fn start_sync(self: &mut Self, gc_generation: Xid) -> Result<(), failure::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
             |r| {
-                let generation: String = r.get(0)?;
+                let generation: Xid = r.get(0)?;
                 Ok(generation)
             },
         ) {

@@ -2,15 +2,9 @@ Remove dependency on codemap? We should be able to have a small simple version.
 
 think of different name.
 
-Reconsider if we want a default, or if it should be optional.
-
-merge write log and stat cache into one database?
-
-A way to truly disable the write log and stat cache?
+Reconsider if we want a send log default, or if it should be optional.
 
 Rename send -> put ?
-
-Finalize send/put cli syntax. stdin/file/command output.
 
 Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
 
@@ -28,8 +22,6 @@ Tests shouldn't depend on bash.
 
 Should allow running of single tests.
 
-We should use random id's for our oplog items, using the integer primary key
-
 Sendlog + Statcache should NOT be invalidated by gc. We could instead only allow
 memory == 1 and check if the server still has an item via it's random id.
 (see above.)
@@ -41,12 +33,9 @@ Default tags? A way to set custom default tags?
 Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
 we can avoid the gc quiescent period on proper shutdown.
 
-Send gc generation alongside put for potential future use as an upload fence with
-no locking.
-
-item id fixed size? not a string but its own type? stored in database as binary?
-
-gc_generation and send_id different lengths? 
-
 refactor, make additem its own protocol message, this way item_id can be omitted from other ops?
 Maybe not worth it.
+
+GC_GENERATION -> xid.
+key ids -> xid.
+repository id -> xid.

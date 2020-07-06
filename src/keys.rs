@@ -1,15 +1,14 @@
 use super::crypto;
+use super::xid::*;
 use failure::{Error, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
-pub const KEYID_SZ: usize = 32;
-
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct MasterKey {
-    pub id: [u8; KEYID_SZ],
+    pub id: Xid,
     /*
        Hash key is used for content addressing, similar
        to git, but with an HMAC. This means plaintext
@@ -34,8 +33,8 @@ pub struct MasterKey {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SendKey {
-    pub id: [u8; KEYID_SZ],
-    pub master_key_id: [u8; KEYID_SZ],
+    pub id: Xid,
+    pub master_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
@@ -44,8 +43,8 @@ pub struct SendKey {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MetadataKey {
-    pub id: [u8; KEYID_SZ],
-    pub master_key_id: [u8; KEYID_SZ],
+    pub id: Xid,
+    pub master_key_id: Xid,
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
 }
@@ -100,7 +99,7 @@ impl Key {
         Ok(k)
     }
 
-    pub fn master_key_id(&self) -> [u8; KEYID_SZ] {
+    pub fn master_key_id(&self) -> Xid {
         match self {
             Key::MasterKeyV1(k) => k.id,
             Key::SendKeyV1(k) => k.master_key_id,
@@ -109,15 +108,9 @@ impl Key {
     }
 }
 
-fn keyid_gen() -> [u8; KEYID_SZ] {
-    let mut id = [0; KEYID_SZ];
-    crypto::randombytes(&mut id[..]);
-    id
-}
-
 impl MasterKey {
     pub fn gen() -> MasterKey {
-        let id = keyid_gen();
+        let id = Xid::new();
         let hash_key_part_1 = crypto::PartialHashKey::new();
         let hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
@@ -138,7 +131,7 @@ impl SendKey {
     pub fn gen(mk: &MasterKey) -> SendKey {
         let hash_key_part_2 = crypto::PartialHashKey::new();
         SendKey {
-            id: keyid_gen(),
+            id: Xid::new(),
             master_key_id: mk.id,
             hash_key_part_1: mk.hash_key_part_1.clone(),
             hash_key_part_2,
@@ -151,7 +144,7 @@ impl SendKey {
 impl MetadataKey {
     pub fn gen(mk: &MasterKey) -> MetadataKey {
         MetadataKey {
-            id: keyid_gen(),
+            id: Xid::new(),
             master_key_id: mk.id,
             metadata_pk: mk.metadata_pk.clone(),
             metadata_sk: mk.metadata_sk.clone(),

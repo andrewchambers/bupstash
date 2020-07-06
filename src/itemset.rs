@@ -1,8 +1,6 @@
 use super::address::*;
 use super::crypto;
 use super::xid::*;
-
-use super::keys;
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TAG_SET_SIZE: usize = 32 * 1024;
@@ -11,7 +9,7 @@ pub const MAX_OPLOG_ITEM_SIZE: usize = MAX_TAG_SET_SIZE + 8 * 1024;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PlainTextItemMetadata {
-    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub master_key_id: Xid,
     pub tree_height: usize,
     pub address: Address,
 }

@@ -4,7 +4,6 @@ use super::crypto;
 use super::fsutil;
 use super::htree;
 use super::itemset;
-use super::keys;
 use super::protocol::*;
 use super::querycache;
 use super::repository;
@@ -79,7 +78,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
 pub struct SendContext {
     pub compression: crypto::DataCompression,
     pub use_stat_cache: bool,
-    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub master_key_id: Xid,
     pub hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
@@ -361,7 +360,7 @@ fn send_dir(
 }
 
 pub struct RequestContext {
-    pub master_key_id: [u8; keys::KEYID_SZ],
+    pub master_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub data_dctx: crypto::DecryptionContext,
     pub metadata_dctx: crypto::DecryptionContext,

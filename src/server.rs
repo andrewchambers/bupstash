@@ -199,7 +199,7 @@ fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), fai
 fn item_sync(
     repo: &mut repository::Repo,
     after: i64,
-    request_gc_generation: Option<String>,
+    request_gc_generation: Option<Xid>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     let current_generation = repo.gc_generation()?;

@@ -10,7 +10,7 @@ pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ServerInfo {
     pub protocol: String,
-    pub repo_id: String,
+    pub repo_id: Xid,
 }
 
 #[derive(Debug, PartialEq)]
@@ -50,12 +50,12 @@ pub struct RGc {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TRequestItemSync {
     pub after: i64,
-    pub gc_generation: Option<String>,
+    pub gc_generation: Option<Xid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RRequestItemSync {
-    pub gc_generation: String,
+    pub gc_generation: Xid,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -333,7 +333,7 @@ mod tests {
     fn send_recv() {
         let packets = vec![
             Packet::ServerInfo(ServerInfo {
-                repo_id: "abc".to_string(),
+                repo_id: Xid::new(),
                 protocol: "foobar".to_owned(),
             }),
             Packet::TBeginSend(TBeginSend {
@@ -383,10 +383,10 @@ mod tests {
             }),
             Packet::TRequestItemSync(TRequestItemSync {
                 after: 123,
-                gc_generation: Some("123".to_owned()),
+                gc_generation: Some(Xid::new()),
             }),
             Packet::RRequestItemSync(RRequestItemSync {
-                gc_generation: "123".to_owned(),
+                gc_generation: Xid::new(),
             }),
             Packet::SyncLogOps(vec![(
                 765756,

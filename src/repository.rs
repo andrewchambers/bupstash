@@ -1,9 +1,7 @@
 use super::address::*;
 use super::chunk_storage;
-use super::crypto;
 use super::external_chunk_storage;
 use super::fsutil;
-use super::hex;
 use super::htree;
 use super::itemset;
 use super::local_chunk_storage;
@@ -83,12 +81,6 @@ impl Drop for FileLock {
     fn drop(&mut self) {
         self.f.unlock().unwrap();
     }
-}
-
-fn new_random_token() -> String {
-    let mut gen: [u8; 32] = [0; 32];
-    crypto::randombytes(&mut gen);
-    hex::easy_encode_to_string(&gen)
 }
 
 impl Repo {
@@ -171,11 +163,11 @@ impl Repo {
         )?;
         tx.execute(
             "insert into RepositoryMeta(Key, Value) values('id', ?);",
-            rusqlite::params![new_random_token()],
+            rusqlite::params![Xid::new()],
         )?;
         tx.execute(
             "insert into RepositoryMeta(Key, Value) values('gc-generation', ?);",
-            rusqlite::params![new_random_token()],
+            rusqlite::params![Xid::new()],
         )?;
         tx.execute(
             "insert into RepositoryMeta(Key, Value) values('gc-dirty', ?);",
@@ -333,7 +325,7 @@ impl Repo {
         Ok(storage_engine)
     }
 
-    pub fn gc_generation(&self) -> Result<String, failure::Error> {
+    pub fn gc_generation(&self) -> Result<Xid, failure::Error> {
         Ok(self.conn.query_row(
             "select value from RepositoryMeta where Key='gc-generation';",
             rusqlite::NO_PARAMS,
@@ -341,7 +333,7 @@ impl Repo {
         )?)
     }
 
-    pub fn id(&self) -> Result<String, failure::Error> {
+    pub fn id(&self) -> Result<Xid, failure::Error> {
         Ok(self.conn.query_row(
             "select value from RepositoryMeta where Key='id';",
             rusqlite::NO_PARAMS,
@@ -392,7 +384,7 @@ impl Repo {
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
         self.conn.execute(
             "update RepositoryMeta set value = ? where key = 'gc-generation';",
-            rusqlite::params![new_random_token()],
+            rusqlite::params![Xid::new()],
         )?;
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
