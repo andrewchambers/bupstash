@@ -36,6 +36,3 @@ we can avoid the gc quiescent period on proper shutdown.
 refactor, make additem its own protocol message, this way item_id can be omitted from other ops?
 Maybe not worth it.
 
-GC_GENERATION -> xid.
-key ids -> xid.
-repository id -> xid.
