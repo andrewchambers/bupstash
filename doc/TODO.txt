@@ -13,17 +13,15 @@ ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com/archivist serve"
 
 Prefetch system should also work for non leaf tree nodes. htree peek api?
 
-Split encrypted metadata and unencrypted so gc doesn't need to fetch encrypted metadata?
-
 Improve documentation on key exchange packet and 'box' structure.
 
 Tests shouldn't depend on bash.
 
 Should allow running of single tests.
 
-Sendlog + Statcache should NOT be invalidated by gc. We could instead only allow
-memory == 1 and check if the server still has an item via it's random id.
-(see above.)
+Upload checkpointing/resume?
+
+Protocol, add specific sync message for use with checkpointing code.
 
 Default tags? A way to set custom default tags? 
 
@@ -32,7 +30,8 @@ Default tags? A way to set custom default tags?
 Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
 we can avoid the gc quiescent period on proper shutdown.
 
-refactor, make additem its own protocol message, this way item_id can be omitted from other ops?
-Maybe not worth it.
+editing of items - work out a scheme that is either backwards compatible, OR implement it.
 
-editing of items?
+busy timeout or other mechanism for send log and query cache.
+
+consider/benchmark PRAGMA synchronous 

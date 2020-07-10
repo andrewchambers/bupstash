@@ -14,7 +14,7 @@ incremental = false
 
 crossbeam = "0.7"
 libc = "0.2"
-rusqlite = { version = "0.21.0", features = ["bundled"] }
+rusqlite = { version = "0.23.1" }
 getopts = "0.2"
 failure = "0.1.6"
 fs2 = "0.4.3"
