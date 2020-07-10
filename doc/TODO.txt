@@ -34,4 +34,6 @@ editing of items - work out a scheme that is either backwards compatible, OR imp
 
 busy timeout or other mechanism for send log and query cache.
 
-consider/benchmark PRAGMA synchronous 
+consider/benchmark PRAGMA synchronous.
+
+consider/prototype changing encoding scheme to bare.

@@ -98,9 +98,12 @@ impl Repo {
         db_path.push("archivist.sqlite3");
 
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
+
+        conn.execute("pragma temp_store=MEMORY;", rusqlite::NO_PARAMS)?;
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
             Ok(())
         })?;
+
         Ok(conn)
     }
 
@@ -198,6 +201,7 @@ impl Repo {
         let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
+
         let v: i32 = conn.query_row(
             "select value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
@@ -365,9 +369,9 @@ impl Repo {
         itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn item_with_id_in_oplog(&mut self, id: &Xid) -> Result<bool, failure::Error> {
+    pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, failure::Error> {
         let tx = self.conn.transaction()?;
-        itemset::item_with_id_in_oplog(&tx, id)
+        itemset::has_item_with_id(&tx, id)
     }
 
     pub fn walk_log(

@@ -75,7 +75,7 @@ fn recv(
         w,
         &Packet::RBeginSend(RBeginSend {
             has_delta_id: if let Some(delta_id) = begin.delta_id {
-                repo.item_with_id_in_oplog(&delta_id)?
+                repo.has_item_with_id(&delta_id)?
             } else {
                 false
             },
