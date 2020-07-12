@@ -171,27 +171,27 @@ pub fn read_packet(
 
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(bincode::deserialize(&buf)?),
+        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
-        PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_GC => Packet::TGc(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_GC => Packet::RGc(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(bincode::deserialize(&buf)?),
-        PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(bincode::deserialize(&buf)?),
-        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(bincode::deserialize(&buf)?),
-        PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(bincode::deserialize(&buf)?),
+        PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_GC => Packet::TGc(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_GC => Packet::RGc(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
-        PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(bincode::deserialize(&buf)?),
+        PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
         PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
         PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
-        PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(bincode::deserialize(&buf)?),
+        PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
@@ -223,32 +223,32 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.data)?;
         }
         Packet::ServerInfo(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TBeginSend(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RBeginSend(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TAddItem(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_ADD_ITEM, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RAddItem(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_ADD_ITEM, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TRmItems(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_RM_ITEMS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
@@ -256,42 +256,42 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_R_RM_ITEMS, 0)?;
         }
         Packet::TRequestData(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RRequestData(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_DATA, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TGc(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_GC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RGc(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_GC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TRequestItemSync(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::RRequestItemSync(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::SyncLogOps(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TRequestChunk(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
@@ -300,7 +300,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v)?;
         }
         Packet::StorageConnect(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
@@ -319,7 +319,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_STORAGE_GC_HEARTBEAT, 0)?;
         }
         Packet::StorageGCComplete(ref v) => {
-            let b = bincode::serialize(&v)?;
+            let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
@@ -432,6 +432,7 @@ mod tests {
         ];
 
         for p1 in packets.iter() {
+            eprintln!("testing packet encoding: {:?}", p1);
             let mut c1 = std::io::Cursor::new(Vec::new());
             write_packet(&mut c1, p1).unwrap();
             let b = c1.into_inner();

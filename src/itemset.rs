@@ -17,7 +17,7 @@ pub struct PlainTextItemMetadata {
 impl PlainTextItemMetadata {
     pub fn hash(&self) -> [u8; crypto::HASH_BYTES] {
         let mut hst = crypto::HashState::new(None);
-        hst.update(&bincode::serialize(&self).unwrap());
+        hst.update(&serde_bare::to_vec(&self).unwrap());
         hst.finish()
     }
 }
@@ -43,7 +43,7 @@ impl ItemMetadata {
         dctx: &mut crypto::DecryptionContext,
     ) -> Result<EncryptedItemMetadata, failure::Error> {
         let data = dctx.decrypt_data(self.encrypted_metadata.clone())?;
-        let emd: EncryptedItemMetadata = bincode::deserialize(&data)?;
+        let emd: EncryptedItemMetadata = serde_bare::from_slice(&data)?;
         if self.plain_text_metadata.hash() != emd.plain_text_hash {
             failure::bail!("item metadata is corrupt or tampered with");
         }
@@ -78,7 +78,7 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
 }
 
 fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, failure::Error> {
-    let serialized_op = bincode::serialize(&md)?;
+    let serialized_op = serde_bare::to_vec(&md)?;
     if serialized_op.len() > MAX_METADATA_SIZE {
         failure::bail!("itemset log item too big!");
     }
@@ -96,7 +96,7 @@ pub fn add_item(
         rusqlite::params![&item_id, serialized_md],
     )?;
     let op = LogOp::AddItem(md);
-    let serialized_op = bincode::serialize(&op)?;
+    let serialized_op = serde_bare::to_vec(&op)?;
     tx.execute(
         "insert into ItemOpLog(OpData, ItemId) values(?, ?);",
         rusqlite::params![serialized_op, item_id],
@@ -113,7 +113,7 @@ pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), f
         }
     }
     let op = LogOp::RemoveItems(existed);
-    let serialized_op = bincode::serialize(&op)?;
+    let serialized_op = serde_bare::to_vec(&op)?;
     tx.execute("insert into ItemOpLog(OpData) values(?);", &[serialized_op])?;
     Ok(())
 }
@@ -124,7 +124,7 @@ pub fn sync_ops(
     item_id: Option<Xid>,
     op: &LogOp,
 ) -> Result<(), failure::Error> {
-    let serialized_op = bincode::serialize(&op)?;
+    let serialized_op = serde_bare::to_vec(&op)?;
     match &op {
         LogOp::AddItem(_) => {
             if item_id.is_none() {
@@ -185,7 +185,7 @@ pub fn lookup_item_by_id(
             Ok(serialized_md)
         },
     ) {
-        Ok(data) => Ok(Some(bincode::deserialize(&data)?)),
+        Ok(data) => Ok(Some(serde_bare::from_slice(&data)?)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e.into()),
     }
@@ -205,7 +205,7 @@ pub fn walk_items(
                 let op_id: i64 = row.get(0)?;
                 let item_id: Xid = row.get(1)?;
                 let op: Vec<u8> = row.get(2)?;
-                let op: LogOp = bincode::deserialize(&op)?;
+                let op: LogOp = serde_bare::from_slice(&op)?;
                 let metadata: VersionedItemMetadata = match op {
                     LogOp::AddItem(metadata) => metadata,
                     _ => failure::bail!("itemset/item log is corrupt"),
@@ -233,7 +233,7 @@ pub fn walk_log(
                 let op_id: i64 = row.get(0)?;
                 let item_id: Option<Xid> = row.get(1)?;
                 let op: Vec<u8> = row.get(2)?;
-                let op: LogOp = bincode::deserialize(&op)?;
+                let op: LogOp = serde_bare::from_slice(&op)?;
                 f(op_id, item_id, op)?;
             }
             None => {

@@ -24,7 +24,7 @@ codemap = "0.1.2"
 codemap-diagnostic = "0.1.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-bincode = "1"
+serde_bare = { git = "https://git.sr.ht/~tdeo/serde_bare", rev = "2e330a7e37ca433c515d2a05128308fc98335300" }
 pem = "0.8"
 path-clean = "0.1.0"
 walkdir = "2"
