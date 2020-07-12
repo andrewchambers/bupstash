@@ -1,39 +1,58 @@
+Need to do:
 
-think of different name.
+- think of different name.
+- Rename send -> put ?
+- ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com archivist serve -r /foo"
+- Improve documentation on key exchange packet and 'box' structure.
+- Detailed and nice man pages, scdoc.
+- Default tags? A way to set custom default tags? 
+  (mime)type tag - A way to see what the actual contents of a snapshot are.
+- Editing of items - work out a scheme that is either backwards compatible, OR implement it.
+- Consider/prototype changing encoding scheme to bare. (Canonical documentation format at least.)
+- init -r 
+- Remote init.
+- Rename send-log to --cache ?
 
-Reconsider if we want a send log default, or if it should be optional.
+Can do later (medium term):
 
-Rename send -> put ?
+- Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
 
-Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
+- Upload checkpointing/resume? A checkpoint should be invalidated by the gc generation, but
+  lets us remember things we already sent. Protocol, add specific sync message for use with checkpointing code. If we add this,
+  we can add checkpointing later perhaps.
 
-Ways to tune chunking algorithm. Fixed size/others? Min size/max size?
+- Tests shouldn't depend on bash.
 
-ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com/archivist serve"
+- Should allow running of single cli tests.
 
-Prefetch system should also work for non leaf tree nodes. htree peek api?
+- Ways to tune chunking algorithm.
+  - Fixed size chunking?
+  - Min size/max size/average size?
+  - Alternative chunking algorithms?
 
-Improve documentation on key exchange packet and 'box' structure.
+- busy timeout or other mechanism for send log and query cache.
 
-Tests shouldn't depend on bash.
+- Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
+  we can avoid the gc quiescent period on proper shutdown.
 
-Should allow running of single tests.
+- Concurrent garbage collector, walk htrees in parallel and/or walk multiple entries
+  in parallel.
 
-Upload checkpointing/resume?
+- Upload progress indicator.
 
-Protocol, add specific sync message for use with checkpointing code.
+- GC progress indicator.
 
-Default tags? A way to set custom default tags? 
+Long term:
 
-(mime)type tag - A way to see what the actual contents of a snapshot are.
+  - External backends.
 
-Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
-we can avoid the gc quiescent period on proper shutdown.
+Unclassified:
 
-editing of items - work out a scheme that is either backwards compatible, OR implement it.
+- Prefetch system should also work for non leaf tree nodes.
 
-busy timeout or other mechanism for send log and query cache.
+- consider/benchmark PRAGMA synchronous.
 
-consider/benchmark PRAGMA synchronous.
+- Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
-consider/prototype changing encoding scheme to bare.
+- Reconsider if we want a send log default, or if it should be optional. The default one doesn't
+  make too much sense. (Note, Yes, with checkpointing it makes sense!)
