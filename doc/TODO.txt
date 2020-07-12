@@ -8,12 +8,13 @@ Need to do:
 - Default tags? A way to set custom default tags? 
   (mime)type tag - A way to see what the actual contents of a snapshot are.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
-- Consider/prototype changing encoding scheme to bare. (Canonical documentation format at least.)
 - init -r 
 - Remote init.
 - Rename send-log to --cache ?
 
 Can do later (medium term):
+
+- Make tarballs with libarchive.
 
 - Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
 
