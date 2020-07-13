@@ -12,7 +12,7 @@ use super::sendlog;
 use super::xid::*;
 use failure::Fail;
 use std::collections::BTreeMap;
-use std::convert::{From, TryInto};
+use std::convert::From;
 use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Fail)]
@@ -125,7 +125,7 @@ pub fn send(
         w,
     };
 
-    let min_size = 1 * 256 * 1024;
+    let min_size = 256 * 1024;
     let max_size = 8 * 1024 * 1024;
     let chunk_mask = 0x000f_ffff;
     // XXX TODO these chunk parameters need to be investigated and tuned.
@@ -233,6 +233,34 @@ fn send_chunks(
     }
 }
 
+/*
+cfg_if::cfg_if! {
+    if #[cfg(linux)] {
+
+        fn dev_major(dev: dev_t) -> Result<u64, failure::Error> {
+            ((dev >> 32) & 0xffff_f000) |
+            ((dev >>  8) & 0x0000_0fff)
+        }
+
+        fn dev_minor(dev: dev_t) -> Result<u64, failure::Error> {
+            ((dev >> 12) & 0xffff_ff00) |
+            ((dev      ) & 0x0000_00ff)
+        }
+
+    } else {
+
+        fn dev_major(dev: dev_t) -> Result<u64, failure::Error> {
+            failure::bail!("unable to get device major number on this platform (file a bug report)");
+        }
+
+        fn dev_minor(dev: dev_t) -> Result<u64, failure::Error> {
+            failure::bail!("unable to get device minor number on this platform (file a bug report)");
+        }
+
+    }
+}
+*/
+
 fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
@@ -254,26 +282,32 @@ fn send_dir(
             short_entry_path
         };
         let metadata = entry.metadata()?;
-        let ft = metadata.file_type();
         let mut hdr = tar::Header::new_ustar();
+        hdr.set_metadata(&metadata);
         hdr.set_path(&short_entry_path)?;
-        hdr.set_uid(metadata.uid().into());
-        hdr.set_gid(metadata.gid().into());
-        hdr.set_mtime(metadata.mtime().try_into()?);
-        hdr.set_mode(metadata.mode());
-        if ft.is_file() {
-            hdr.set_entry_type(tar::EntryType::Regular);
-            hdr.set_size(metadata.len());
-        } else if ft.is_dir() {
-            hdr.set_entry_type(tar::EntryType::Directory);
-            hdr.set_size(0);
-        } else if ft.is_symlink() {
-            hdr.set_entry_type(tar::EntryType::Symlink);
-            hdr.set_size(0);
-            let target = std::fs::read_link(entry.path())?;
-            hdr.set_link_name(target)?;
-        } else {
-            failure::bail!("unsupported file entry at {}", entry.path().display());
+
+        match hdr.entry_type() {
+            tar::EntryType::Char | tar::EntryType::Block => {
+                fn dev_major(_dev: u64) -> Result<u32, failure::Error> {
+                    failure::bail!(
+                        "unable to get device major number on this platform (file a bug report)"
+                    );
+                }
+
+                fn dev_minor(_dev: u64) -> Result<u32, failure::Error> {
+                    failure::bail!(
+                        "unable to get device minor number on this platform (file a bug report)"
+                    );
+                }
+
+                hdr.set_device_major(dev_major(metadata.rdev())?)?;
+                hdr.set_device_minor(dev_minor(metadata.rdev())?)?;
+            }
+            tar::EntryType::Symlink => {
+                let target = std::fs::read_link(entry.path())?;
+                hdr.set_link_name(target)?;
+            }
+            _ => (),
         }
         hdr.set_cksum();
         let hdr_bytes = hdr.as_bytes();
@@ -308,7 +342,7 @@ fn send_dir(
                 let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
                 send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
 
-                if ft.is_file() {
+                if hdr.entry_type().is_file() {
                     let mut f = std::fs::File::open(&entry_path)?;
                     let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
                     /* Tar entries are rounded to 512 bytes */
@@ -484,10 +518,13 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::TRmItems(ids))?;
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRmItems => {}
-        _ => failure::bail!("protocol error, expected RRmItems"),
+    for chunked_ids in ids.chunks(1000000) {
+        let ids = chunked_ids.to_vec();
+        write_packet(w, &Packet::TRmItems(ids))?;
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::RRmItems => {}
+            _ => failure::bail!("protocol error, expected RRmItems"),
+        }
     }
     Ok(())
 }

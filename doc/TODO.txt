@@ -11,10 +11,11 @@ Need to do:
 - init -r 
 - Remote init.
 - Rename send-log to --cache ?
+- Upload progress indicator.
+- GC progress indicator.
+
 
 Can do later (medium term):
-
-- Make tarballs with libarchive.
 
 - Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
 
@@ -39,15 +40,15 @@ Can do later (medium term):
 - Concurrent garbage collector, walk htrees in parallel and/or walk multiple entries
   in parallel.
 
-- Upload progress indicator.
-
-- GC progress indicator.
+- Sparse file support in snapshots.
 
 Long term:
 
   - External backends.
 
 Unclassified:
+
+- use WITHOUT ROWID in address table in sendlog.
 
 - Prefetch system should also work for non leaf tree nodes.
 

@@ -21,7 +21,7 @@ impl Xid {
         if s.len() != 32 {
             failure::bail!("invalid id, should be 32 characters long");
         }
-        if let Err(_) = hex::decode(&s[..], &mut bytes[..]) {
+        if hex::decode(&s[..], &mut bytes[..]).is_err() {
             failure::bail!("invalid id, should be a hex value");
         }
         Ok(Xid { bytes })

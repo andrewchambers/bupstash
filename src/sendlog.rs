@@ -85,7 +85,7 @@ impl SendLog {
         Ok(SendLog { conn })
     }
 
-    pub fn transaction<'a>(self: &'a mut Self) -> Result<SendLogTx<'a>, failure::Error> {
+    pub fn transaction(self: &mut Self) -> Result<SendLogTx, failure::Error> {
         let tx = self.conn.transaction()?;
 
         let sequence_number = match tx.query_row(

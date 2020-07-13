@@ -767,10 +767,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     };
 
-    for ids in ids.chunks(128) {
-        client::remove(ids.to_vec(), &mut serve_out, &mut serve_in)?;
-    }
-
+    client::remove(ids, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
     Ok(())

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 fn main() {
     let bindings = bindgen::Builder::default()
-        .header("csrc/libsodium/bindings.h")
+        .header("csrc/sodium-bindings.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .whitelist_function("crypto_.*")
         .whitelist_type("crypto_.*")

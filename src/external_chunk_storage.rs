@@ -72,7 +72,8 @@ impl ExternalStorage {
                         // The problem is that we need a valid socket so we can report
                         // io errors via the normal code path, socket pair is an ok way
                         // to get a valid, but disconnected socket.
-                        let (s, _) = UnixStream::pair().unwrap();
+                        let (s, s_disconnected) = UnixStream::pair().unwrap();
+                        std::mem::drop(s_disconnected);
                         s
                     }
                 };
