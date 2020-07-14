@@ -9,7 +9,7 @@ pub const MAX_METADATA_SIZE: usize = MAX_TAG_SET_SIZE + 2048;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PlainTextItemMetadata {
-    pub master_key_id: Xid,
+    pub primary_key_id: Xid,
     pub tree_height: usize,
     pub address: Address,
 }

@@ -355,12 +355,12 @@ mod tests {
             }),
             Packet::RBeginSend(RBeginSend { has_delta_id: true }),
             {
-                let master_key = keys::MasterKey::gen();
+                let primary_key = keys::PrimaryKey::gen();
                 Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
                     plain_text_metadata: itemset::PlainTextItemMetadata {
                         address: Address::default(),
                         tree_height: 3,
-                        master_key_id: master_key.id,
+                        primary_key_id: primary_key.id,
                     },
                     encrypted_metadata: vec![1, 2, 3],
                 }))
@@ -374,13 +374,13 @@ mod tests {
             }),
             Packet::TRequestData(TRequestData { id: Xid::default() }),
             {
-                let master_key = keys::MasterKey::gen();
+                let primary_key = keys::PrimaryKey::gen();
                 Packet::RRequestData(RRequestData {
                     metadata: Some(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
                         plain_text_metadata: itemset::PlainTextItemMetadata {
                             address: Address::default(),
                             tree_height: 3,
-                            master_key_id: master_key.id,
+                            primary_key_id: primary_key.id,
                         },
                         encrypted_metadata: vec![1, 2, 3],
                     })),

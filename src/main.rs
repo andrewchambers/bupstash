@@ -48,7 +48,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
     let brief = match subcommand {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
-        "new-master-key" => include_str!("../doc/cli/new-master-key.txt"),
+        "new-key" => include_str!("../doc/cli/new-key.txt"),
         "new-send-key" => include_str!("../doc/cli/new-send-key.txt"),
         _ => panic!(),
     };
@@ -116,28 +116,51 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     repository::Repo::init(std::path::Path::new(&matches.free[0]), backend)
 }
 
-fn new_master_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
+    match matches.opt_str("key") {
+        Some(k) => Ok(keys::Key::load_from_file(&k)?),
+        None => {
+            if let Some(k) = std::env::var_os("ARCHIVIST_KEY") {
+                Ok(keys::Key::load_from_file(&k.into_string().unwrap())?)
+            } else if let Some(cmd) = std::env::var_os("ARCHIVIST_KEY_COMMAND") {
+                match shlex::split(&cmd.into_string().unwrap()) {
+                    Some(mut args) => {
+                        if args.is_empty() {
+                            failure::bail!("ARCHIVIST_KEY_COMMAND must not be empty")
+                        }
+                        let bin = args.remove(0);
+
+                        match std::process::Command::new(bin).args(args).output() {
+                            Ok(key_data) => Ok(keys::Key::from_slice(&key_data.stdout)?),
+                            Err(e) => failure::bail!("error running ARCHIVIST_KEY_COMMAND: {}", e),
+                        }
+                    }
+                    None => failure::bail!("unable to parse ARCHIVIST_KEY_COMMAND"),
+                }
+            } else {
+                failure::bail!("please set --key, ARCHIVIST_KEY or ARCHIVIST_KEY_COMMAND");
+            }
+        }
+    }
+}
+
+fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt("o", "output", "set output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
-    let master_key = keys::Key::MasterKeyV1(keys::MasterKey::gen());
-    master_key.write_to_file(&matches.opt_str("o").unwrap())
+    let primary_key = keys::Key::PrimaryKeyV1(keys::PrimaryKey::gen());
+    primary_key.write_to_file(&matches.opt_str("o").unwrap())
 }
 
 fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt(
-        "m",
-        "master-key",
-        "master key to derive send key from.",
-        "PATH",
-    );
+    opts.reqopt("k", "key", "primary key to derive send key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
-    let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
+    let k = matches_to_key(&matches)?;
     match k {
-        keys::Key::MasterKeyV1(master_key) => {
-            let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&master_key));
+        keys::Key::PrimaryKeyV1(primary_key) => {
+            let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => failure::bail!("key is not a master key"),
@@ -147,17 +170,17 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt(
-        "m",
-        "master-key",
-        "master key to derive metadata key from.",
+        "k",
+        "key",
+        "primary key to derive metadata key from.",
         "PATH",
     );
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
-    let k = keys::Key::load_from_file(&matches.opt_str("m").unwrap())?;
+    let k = matches_to_key(&matches)?;
     match k {
-        keys::Key::MasterKeyV1(master_key) => {
-            let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&master_key));
+        keys::Key::PrimaryKeyV1(primary_key) => {
+            let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => failure::bail!("key is not a master key"),
@@ -277,7 +300,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "k",
         "key",
-        "master key to decrypt items during listing/search.",
+        "primary or metadata key to decrypt item metadata with during listing.",
         "PATH",
     );
     opts.optopt(
@@ -299,20 +322,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         None => ListFormat::Human,
     };
 
-    let key = if matches.opt_present("key") {
-        matches.opt_str("key").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
-    };
-
-    let key = keys::Key::load_from_file(&key)?;
-    let master_key_id = key.master_key_id();
+    let key = matches_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
     let mut metadata_dctx = match key {
-        keys::Key::MasterKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
         keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-        _ => failure::bail!("provided key is a not a master decryption key"),
+        _ => failure::bail!("provided key is a not a primary key"),
     };
     let mut query: Option<tquery::Query> = None;
 
@@ -332,11 +347,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut f =
         |_op_id: i64, item_id: xid::Xid, metadata: itemset::VersionedItemMetadata| match metadata {
             itemset::VersionedItemMetadata::V1(metadata) => {
-                if metadata.plain_text_metadata.master_key_id != master_key_id {
+                if metadata.plain_text_metadata.primary_key_id != primary_key_id {
                     if !*warned_wrong_key {
                         *warned_wrong_key = true;
                         eprintln!(
-                            "NOTE: Search skipping items encrypted with different master key."
+                            "NOTE: Search skipping items encrypted with different primary key."
                         )
                     }
                     return Ok(());
@@ -420,7 +435,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
-    opts.optopt("k", "key", "Encryption key.", "PATH");
+    opts.optopt(
+        "k",
+        "key",
+        "Primary or put key to encrypt data with.",
+        "PATH",
+    );
     opts.optopt(
         "r",
         "repository",
@@ -507,18 +527,10 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         }
     };
 
-    let key = if matches.opt_present("key") {
-        matches.opt_str("key").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_SEND_KEY");
-    };
-
-    let key = keys::Key::load_from_file(&key)?;
-    let master_key_id = key.master_key_id();
+    let key = matches_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
     let (hash_key, data_ectx, metadata_ectx) = match key {
-        keys::Key::MasterKeyV1(k) => {
+        keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
@@ -608,7 +620,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut ctx = client::SendContext {
         compression,
         use_stat_cache,
-        master_key_id,
+        primary_key_id,
         hash_key,
         data_ectx,
         metadata_ectx,
@@ -632,7 +644,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
-    opts.optopt("k", "key", "Decryption key.", "PATH");
+    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
     opts.optopt(
         "r",
         "repository",
@@ -643,17 +655,10 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let matches = default_parse_opts(opts, &args[..]);
 
-    let key = if matches.opt_present("key") {
-        matches.opt_str("key").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
-    };
-    let key = keys::Key::load_from_file(&key)?;
-    let master_key_id = key.master_key_id();
+    let key = matches_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
     let (hash_key_part_1, data_dctx, mut metadata_dctx) = match key {
-        keys::Key::MasterKeyV1(k) => {
+        keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
             let data_dctx = crypto::DecryptionContext::new(k.data_sk);
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk);
@@ -684,7 +689,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                          metadata: itemset::VersionedItemMetadata| {
                 match metadata {
                     itemset::VersionedItemMetadata::V1(metadata) => {
-                        if master_key_id != metadata.plain_text_metadata.master_key_id {
+                        if primary_key_id != metadata.plain_text_metadata.primary_key_id {
                             return Ok(());
                         }
 
@@ -715,7 +720,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     client::request_data_stream(
         client::RequestContext {
-            master_key_id,
+            primary_key_id,
             hash_key_part_1,
             data_dctx,
             metadata_dctx,
@@ -739,7 +744,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         "REPO",
     );
     query_cache_opt(&mut opts);
-    opts.optopt("k", "key", "decryption key for querying.", "PATH");
+    opts.optopt(
+        "k",
+        "key",
+        "Primary or metadata key to decrypt metadata with.",
+        "PATH",
+    );
     opts.optflag("", "allow-many", "Allow multiple removals.");
 
     let matches = default_parse_opts(opts, &args[..]);
@@ -759,18 +769,10 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
 
-            let key = if matches.opt_present("key") {
-                matches.opt_str("key").unwrap()
-            } else if let Some(s) = std::env::var_os("ARCHIVIST_MASTER_KEY") {
-                s.into_string().unwrap()
-            } else {
-                failure::bail!("please set --key or the env var ARCHIVIST_MASTER_KEY");
-            };
-
-            let key = keys::Key::load_from_file(&key)?;
-            let master_key_id = key.master_key_id();
+            let key = matches_to_key(&matches)?;
+            let primary_key_id = key.primary_key_id();
             let mut metadata_dctx = match key {
-                keys::Key::MasterKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+                keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
                 keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
                 _ => failure::bail!("provided key is a not a master decryption key"),
             };
@@ -781,7 +783,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                          metadata: itemset::VersionedItemMetadata| {
                 match metadata {
                     itemset::VersionedItemMetadata::V1(metadata) => {
-                        if metadata.plain_text_metadata.master_key_id != master_key_id {
+                        if metadata.plain_text_metadata.primary_key_id != primary_key_id {
                             return Ok(());
                         }
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
@@ -911,7 +913,7 @@ fn main() {
 
     let result = match subcommand.as_str() {
         "init" => init_main(args),
-        "new-master-key" => new_master_key_main(args),
+        "new-key" => new_key_main(args),
         "new-send-key" => new_send_key_main(args),
         "new-metadata-key" => new_metadata_key_main(args),
         "list" => list_main(args),

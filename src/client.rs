@@ -78,7 +78,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
 pub struct SendContext {
     pub compression: crypto::DataCompression,
     pub use_stat_cache: bool,
-    pub master_key_id: Xid,
+    pub primary_key_id: Xid,
     pub hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
@@ -164,7 +164,7 @@ pub fn send(
     let (tree_height, address) = tw.finish()?;
 
     let plain_text_metadata = itemset::PlainTextItemMetadata {
-        master_key_id: ctx.master_key_id,
+        primary_key_id: ctx.primary_key_id,
         tree_height,
         address,
     };
@@ -373,7 +373,7 @@ fn send_dir(
 }
 
 pub struct RequestContext {
-    pub master_key_id: Xid,
+    pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub data_dctx: crypto::DecryptionContext,
     pub metadata_dctx: crypto::DecryptionContext,
@@ -398,7 +398,7 @@ pub fn request_data_stream(
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
-            if ctx.master_key_id != metadata.plain_text_metadata.master_key_id {
+            if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
                 failure::bail!("decryption key does not match master key used for encryption");
             }
 

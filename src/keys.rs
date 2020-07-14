@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
-pub struct MasterKey {
+pub struct PrimaryKey {
     pub id: Xid,
     /*
        Hash key is used for content addressing, similar
@@ -34,7 +34,7 @@ pub struct MasterKey {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SendKey {
     pub id: Xid,
-    pub master_key_id: Xid,
+    pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
@@ -44,21 +44,21 @@ pub struct SendKey {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct MetadataKey {
     pub id: Xid,
-    pub master_key_id: Xid,
+    pub primary_key_id: Xid,
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
-    MasterKeyV1(MasterKey),
+    PrimaryKeyV1(PrimaryKey),
     SendKeyV1(SendKey),
     MetadataKeyV1(MetadataKey),
 }
 
 fn pem_tag(k: &Key) -> &str {
     match k {
-        Key::MasterKeyV1(_) => "ARCHIVIST MASTER KEY",
+        Key::PrimaryKeyV1(_) => "ARCHIVIST PRIMARY KEY",
         Key::SendKeyV1(_) => "ARCHIVIST SEND KEY",
         Key::MetadataKeyV1(_) => "ARCHIVIST METADATA KEY",
     }
@@ -83,14 +83,7 @@ impl Key {
         Ok(())
     }
 
-    pub fn load_from_file(path: &str) -> Result<Key, Error> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .with_context(|e| format!("error opening {}: {}", path, e))?;
-
-        let mut pem_data = Vec::new();
-        f.read_to_end(&mut pem_data)?;
+    pub fn from_slice(pem_data: &[u8]) -> Result<Key, Error> {
         let pem_data = pem::parse(pem_data)?;
         let k: Key = serde_bare::from_slice(&pem_data.contents)?;
         if pem_tag(&k) != pem_data.tag {
@@ -99,23 +92,34 @@ impl Key {
         Ok(k)
     }
 
-    pub fn master_key_id(&self) -> Xid {
+    pub fn load_from_file(path: &str) -> Result<Key, Error> {
+        let mut f = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .with_context(|e| format!("error opening {}: {}", path, e))?;
+
+        let mut pem_data = Vec::new();
+        f.read_to_end(&mut pem_data)?;
+        Key::from_slice(&pem_data)
+    }
+
+    pub fn primary_key_id(&self) -> Xid {
         match self {
-            Key::MasterKeyV1(k) => k.id,
-            Key::SendKeyV1(k) => k.master_key_id,
-            Key::MetadataKeyV1(k) => k.master_key_id,
+            Key::PrimaryKeyV1(k) => k.id,
+            Key::SendKeyV1(k) => k.primary_key_id,
+            Key::MetadataKeyV1(k) => k.primary_key_id,
         }
     }
 }
 
-impl MasterKey {
-    pub fn gen() -> MasterKey {
+impl PrimaryKey {
+    pub fn gen() -> PrimaryKey {
         let id = Xid::new();
         let hash_key_part_1 = crypto::PartialHashKey::new();
         let hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
-        MasterKey {
+        PrimaryKey {
             id,
             hash_key_part_1,
             hash_key_part_2,
@@ -128,11 +132,11 @@ impl MasterKey {
 }
 
 impl SendKey {
-    pub fn gen(mk: &MasterKey) -> SendKey {
+    pub fn gen(mk: &PrimaryKey) -> SendKey {
         let hash_key_part_2 = crypto::PartialHashKey::new();
         SendKey {
             id: Xid::new(),
-            master_key_id: mk.id,
+            primary_key_id: mk.id,
             hash_key_part_1: mk.hash_key_part_1.clone(),
             hash_key_part_2,
             data_pk: mk.data_pk.clone(),
@@ -142,10 +146,10 @@ impl SendKey {
 }
 
 impl MetadataKey {
-    pub fn gen(mk: &MasterKey) -> MetadataKey {
+    pub fn gen(mk: &PrimaryKey) -> MetadataKey {
         MetadataKey {
             id: Xid::new(),
-            master_key_id: mk.id,
+            primary_key_id: mk.id,
             metadata_pk: mk.metadata_pk.clone(),
             metadata_sk: mk.metadata_sk.clone(),
         }
