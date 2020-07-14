@@ -16,7 +16,8 @@ Everything in this guide is also covered in our introduction to bupstash video (
 
 We offer statically linked precompiled versions at our releases page (make link XXX).
 
-Simply extract the desired bupstash binary, and add it your path:
+Simply extract the bupstash binary for your platform, and add it your system PATH:
+
 ```
 wget TODO
 tar xvf ./bupstash-*.tar.gz
@@ -198,4 +199,3 @@ XXX TODO
 
 All bupstash commands and file formats are fully documented in the user manuals.
 
-Optional, managed hosting is offered ay bupstash.io.
