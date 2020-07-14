@@ -34,6 +34,7 @@ glob = "0.3"
 zstd = "0.5"
 chrono = "0.4"
 cfg-if = "0.1"
+shlex = "0.1.1"
 
 [build-dependencies]
 pkg-config = "0.3"

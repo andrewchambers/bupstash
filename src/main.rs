@@ -200,38 +200,53 @@ fn matches_to_id_and_query(
 }
 
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
-    let repo = if matches.opt_present("repository") {
-        matches.opt_str("repository").unwrap()
-    } else if let Some(s) = std::env::var_os("ARCHIVIST_REPOSITORY") {
-        s.into_string().unwrap()
-    } else {
-        failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
-    };
-
-    let mut serve_cmd_args = if repo.starts_with("ssh://") {
-        let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
-        let caps = re.captures(&repo).unwrap();
-
-        let mut args = vec!["ssh".to_owned()];
-
-        if let Some(user) = caps.get(1) {
-            args.push("-o".to_owned());
-            args.push("User=".to_owned() + user.as_str());
+    let mut serve_cmd_args = if let Some(connect_cmd) =
+        std::env::var_os("ARCHIVIST_CONNECT_COMMAND")
+    {
+        match shlex::split(&connect_cmd.into_string().unwrap()) {
+            Some(args) => {
+                if args.is_empty() {
+                    failure::bail!("ARCHIVIST_CONNECT_COMMAND should have at least one element");
+                }
+                args
+            }
+            None => failure::bail!("unable to parse ARCHIVIST_CONNECT_COMMAND"),
         }
-        args.push(caps[2].to_string());
-        args.push("--".to_owned());
-        args.push("archivist".to_owned());
-        args.push("serve".to_owned());
-        let repo_path = caps[3].to_string();
-        if !repo_path.is_empty() {
-            args.push(repo_path);
-        }
-        args
     } else {
-        vec!["archivist".to_owned(), "serve".to_owned(), repo]
+        let repo = if matches.opt_present("repository") {
+            matches.opt_str("repository").unwrap()
+        } else if let Some(r) = std::env::var_os("ARCHIVIST_REPOSITORY") {
+            r.into_string().unwrap()
+        } else {
+            failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
+        };
+
+        if repo.starts_with("ssh://") {
+            let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
+            let caps = re.captures(&repo).unwrap();
+
+            let mut args = vec!["ssh".to_owned()];
+
+            if let Some(user) = caps.get(1) {
+                args.push("-o".to_owned());
+                args.push("User=".to_owned() + user.as_str());
+            }
+            args.push(caps[2].to_string());
+            args.push("--".to_owned());
+            args.push("archivist".to_owned());
+            args.push("serve".to_owned());
+            let repo_path = caps[3].to_string();
+            if !repo_path.is_empty() {
+                args.push(repo_path);
+            }
+            args
+        } else {
+            vec!["archivist".to_owned(), "serve".to_owned(), repo]
+        }
     };
 
     let bin = serve_cmd_args.remove(0);
+
     let serve_proc = match std::process::Command::new(bin)
         .args(serve_cmd_args)
         .stderr(std::process::Stdio::inherit())
