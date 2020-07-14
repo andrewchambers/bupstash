@@ -84,26 +84,32 @@ impl Drop for FileLock {
 }
 
 impl Repo {
-    fn ensure_file_exists(p: &Path) -> Result<(), failure::Error> {
-        if p.exists() {
-            Ok(())
-        } else {
-            Err(RepoError::NotInitializedProperly.into())
-        }
+    fn gc_lock_path(repo_path: &Path) -> PathBuf {
+        let mut lock_path = repo_path.to_path_buf();
+        lock_path.push("gc.lock");
+        lock_path
     }
 
-    fn check_sane(repo_path: &Path) -> Result<(), failure::Error> {
-        if !repo_path.exists() {
-            return Err(RepoError::RepoDoesNotExist.into());
-        }
-        let mut path_buf = PathBuf::from(repo_path);
-        path_buf.push("data");
-        Repo::ensure_file_exists(&path_buf.as_path())?;
-        path_buf.pop();
-        path_buf.push("archivist.sqlite3");
-        Repo::ensure_file_exists(&path_buf.as_path())?;
-        path_buf.pop();
-        Ok(())
+    fn open_db_with_flags(
+        repo_path: &Path,
+        flags: rusqlite::OpenFlags,
+    ) -> rusqlite::Result<rusqlite::Connection> {
+        let mut db_path = repo_path.to_path_buf();
+        db_path.push("archivist.sqlite3");
+
+        let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
+
+        conn.execute("pragma temp_store=MEMORY;", rusqlite::NO_PARAMS)?;
+        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
+
+        Ok(conn)
+    }
+
+    fn open_db(repo_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+        let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
+        Repo::open_db_with_flags(repo_path, default_flags)
     }
 
     pub fn init(repo_path: &Path, engine: StorageEngineSpec) -> Result<(), failure::Error> {
@@ -148,10 +154,17 @@ impl Repo {
         fsutil::atomic_add_file(path_buf.as_path(), &engine_buf)?;
         path_buf.pop();
 
-        let mut conn = Repo::open_db(&path_buf)?;
+        let mut conn = Repo::open_db_with_flags(
+            &path_buf,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
 
-        conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
         let tx = conn.transaction()?;
+
+        /* *NOTE*, we do not want WAL mode so we can potentially run on NFS. */
+        tx.query_row("PRAGMA journal_mode = DELETE;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
 
         tx.execute(
             "create table RepositoryMeta(Key, Value, UNIQUE(key, value));",
@@ -184,26 +197,11 @@ impl Repo {
         Ok(())
     }
 
-    fn gc_lock_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("gc.lock");
-        lock_path
-    }
-
-    fn open_db(repo_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
-        let mut db_path = repo_path.to_path_buf();
-        db_path.push("archivist.sqlite3");
-        let conn = rusqlite::Connection::open(db_path)?;
-        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
-        Ok(conn)
-    }
-
     pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
-        Repo::check_sane(&repo_path)?;
+        let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
+
         let v: i32 = conn.query_row(
             "select value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
@@ -212,8 +210,6 @@ impl Repo {
         if v != 0 {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
-
-        let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let r = Repo {
             conn,
@@ -237,14 +233,16 @@ impl Repo {
         //
         // 1. We are deleting a set of objects in an external storage engine.
         // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
-        // 3. The archivist repository process crashes.
-        // 4. A new archivist put starts.
+        // 3. The repository process crashes.
+        // 4. A new put starts.
         // 5. The new process resends the same object that is in the process of deletion.
         // 6. The delete object message gets processed by the backend.
         //
-        // We would then have data loss. Without having the backend participate in some of our locking
-        // somehow, I cannot see a precise way to avoid this problem assuming the presence of arbitrary network
-        // delays.
+        // I cannot see a precise way to avoid this problem assuming the presence of arbitrary network
+        // delays without the storage backend being made aware of gc generations somehow.
+        //
+        // I think in an ideal world, the external storage engine must be made aware of the gc generation
+        // then be able to use it as as a 'fence' (condition that stops the upload or delete from succeeding).
         //
         // The current mitigation introduces the idea of a quiescent_period to an external storage implementation.
         // The idea is that between steps 4 and 5 we introduce a mandatory delay if the gc process crashed. This
@@ -292,7 +290,7 @@ impl Repo {
         }
     }
 
-    fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
+    pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
         let mut p = self.repo_path.clone();
         p.push("storage-engine.json");
         let mut f = std::fs::OpenOptions::new().read(true).open(p)?;
@@ -302,9 +300,10 @@ impl Repo {
         Ok(spec)
     }
 
-    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
-        let spec = self.storage_engine_spec()?;
-
+    pub fn storage_engine_from_spec(
+        &self,
+        spec: &StorageEngineSpec,
+    ) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::Local => {
                 let mut data_dir = self.repo_path.to_path_buf();
@@ -317,12 +316,16 @@ impl Repo {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
-                    path,
+                    path.to_string(),
                 )?)
             }
         };
-
         Ok(storage_engine)
+    }
+
+    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
+        let spec = self.storage_engine_spec()?;
+        self.storage_engine_from_spec(&spec)
     }
 
     pub fn gc_generation(&self) -> Result<Xid, failure::Error> {
@@ -366,9 +369,9 @@ impl Repo {
         itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn item_with_id_in_oplog(&mut self, id: &Xid) -> Result<bool, failure::Error> {
+    pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, failure::Error> {
         let tx = self.conn.transaction()?;
-        itemset::item_with_id_in_oplog(&tx, id)
+        itemset::has_item_with_id(&tx, id)
     }
 
     pub fn walk_log(
@@ -386,12 +389,8 @@ impl Repo {
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
-        let on_progress = || -> Result<(), failure::Error> {
-            /* TODO... */
-            Ok(())
-        };
-
-        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+        // We must COMMIT the new gc generation before we start
+        // deleting any chunks.
         self.conn.execute(
             "update RepositoryMeta set value = ? where key = 'gc-generation';",
             rusqlite::params![Xid::new()],
@@ -399,6 +398,8 @@ impl Repo {
 
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
         let mut storage_engine = self.storage_engine()?;
+
+        let on_progress = || -> Result<(), failure::Error> { Ok(()) };
 
         {
             let tx = self.conn.transaction()?;
@@ -425,16 +426,15 @@ impl Repo {
                     Ok(())
                 }
             })?;
-
-            tx.execute(
-                "update RepositoryMeta set value = ? where key = 'gc-dirty';",
-                rusqlite::params![true],
-            )?;
-
-            // We MUST commit the new gc generation before we start
-            // deleting any chunks.
             tx.commit()?;
         }
+
+        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+
+        self.conn.execute(
+            "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+            rusqlite::params![true],
+        )?;
 
         let stats = storage_engine.gc(&on_progress, reachable)?;
 

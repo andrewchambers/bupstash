@@ -180,7 +180,7 @@ pub fn send(
         &Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
             plain_text_metadata,
             encrypted_metadata: ctx.metadata_ectx.encrypt_data(
-                bincode::serialize(&e_metadata)?,
+                serde_bare::to_vec(&e_metadata)?,
                 crypto::DataCompression::Zstd,
             ),
         })),
