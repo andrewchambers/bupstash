@@ -32,7 +32,8 @@ tar = "0.4"
 regex = "1"
 glob = "0.3"
 zstd = "0.5"
-# cfg_if = "0.1"
+chrono = "0.4"
+cfg-if = "0.1"
 
 [build-dependencies]
 pkg-config = "0.3"

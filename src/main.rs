@@ -337,9 +337,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 };
 
                 let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+                // Custom sort to be more human friendly.
                 tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
                     ("id", _) => std::cmp::Ordering::Less,
                     (_, "id") => std::cmp::Ordering::Greater,
+                    ("name", _) => std::cmp::Ordering::Less,
+                    (_, "name") => std::cmp::Ordering::Greater,
                     _ => k1.partial_cmp(k2).unwrap(),
                 });
 
@@ -415,6 +418,11 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "Disable compression (Use for for already compressed/encrypted data).",
     );
     opts.optflag(
+        "",
+        "no-default-tags",
+        "Disable the default tags 'name', 'timestamp'",
+    );
+    opts.optflag(
         "e",
         "exec",
         "Treat all arguments after '::' as a command to run, ensuring it succeeds before committing the send.",
@@ -457,6 +465,33 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
     let matches = default_parse_opts(opts, &args);
 
+    let compression = if matches.opt_present("no-compression") {
+        crypto::DataCompression::None
+    } else {
+        crypto::DataCompression::Zstd
+    };
+
+    let use_stat_cache = !matches.opt_present("no-stat-cache");
+
+    let send_log = if matches.opt_present("no-send-log") {
+        None
+    } else {
+        match matches.opt_str("send-log") {
+            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
+            None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
+                Some(send_log) => {
+                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
+                }
+                None => {
+                    let mut p = cache_dir()?;
+                    std::fs::create_dir_all(&p)?;
+                    p.push("send-log.sqlite3");
+                    Some(sendlog::SendLog::open(&p)?)
+                }
+            },
+        }
+    };
+
     let key = if matches.opt_present("key") {
         matches.opt_str("key").unwrap()
     } else if let Some(s) = std::env::var_os("ARCHIVIST_SEND_KEY") {
@@ -485,80 +520,72 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
     let mut tags = BTreeMap::<String, Option<String>>::new();
 
+    let default_tags = !matches.opt_present("no-default-tags");
+    if default_tags {
+        use chrono::prelude::*;
+        let now = Local::now();
+        tags.insert("timestamp".to_string(), Some(now.to_rfc3339()));
+    }
+
+    let data_source: client::DataSource;
+
+    if matches.opt_present("exec") {
+        data_source = client::DataSource::Subprocess(source_args)
+    } else if source_args.is_empty() {
+        data_source = client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
+    } else {
+        if !source_args.len() == 1 {
+            failure::bail!("expected a single data source, got {:?}", source_args);
+        }
+        let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
+
+        let md = match std::fs::metadata(&input_path) {
+            Ok(md) => md,
+            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
+        };
+
+        let name = match input_path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => "root-snapshot".to_string(),
+        };
+
+        if md.is_dir() {
+            if default_tags {
+                tags.insert("name".to_string(), Some(name + ".tar"));
+            }
+
+            data_source = client::DataSource::Directory(std::convert::From::from(input_path))
+        } else if md.is_file() {
+            if default_tags {
+                tags.insert("name".to_string(), Some(name));
+            }
+
+            data_source = client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+        } else {
+            failure::bail!("{} is not a file or a directory", source_args[0]);
+        }
+    };
+
     let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
-    let mut tag_size: usize = 0;
     for a in &matches.free {
         match tag_re.captures(&a) {
             Some(caps) => {
                 let t = &caps[1];
                 let v = caps.get(2);
                 match v {
-                    Some(v) => {
-                        tag_size += t.len() + v.as_str().len();
-                        tags.insert(t.to_string(), Some(v.as_str().to_string()))
-                    }
-                    None => {
-                        tag_size += t.len();
-                        tags.insert(t.to_string(), None)
-                    }
+                    Some(v) => tags.insert(t.to_string(), Some(v.as_str().to_string())),
+                    None => tags.insert(t.to_string(), None),
                 };
             }
             None => failure::bail!("argument '{}' is not a valid tag value.", a),
         }
-
-        if tag_size > itemset::MAX_TAG_SET_SIZE {
-            failure::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
-        }
     }
 
-    let data_source = if matches.opt_present("exec") {
-        client::DataSource::Subprocess(source_args)
-    } else if source_args.is_empty() {
-        client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
-    } else {
-        if !source_args.len() == 1 {
-            failure::bail!("expected a single data source, got {:?}", source_args);
-        }
-        let input_path = &source_args[0];
-        let md = match std::fs::metadata(input_path) {
-            Ok(md) => md,
-            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
-        };
-        if md.is_dir() {
-            client::DataSource::Directory(std::convert::From::from(input_path))
-        } else if md.is_file() {
-            client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
-        } else {
-            failure::bail!("{} is not a file or a directory", source_args[0]);
-        }
-    };
-
-    let compression = if matches.opt_present("no-compression") {
-        crypto::DataCompression::None
-    } else {
-        crypto::DataCompression::Zstd
-    };
-
-    let use_stat_cache = !matches.opt_present("no-stat-cache");
-
-    let send_log = if matches.opt_present("no-send-log") {
-        None
-    } else {
-        match matches.opt_str("send-log") {
-            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
-            None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
-                Some(send_log) => {
-                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
-                }
-                None => {
-                    let mut p = cache_dir()?;
-                    std::fs::create_dir_all(&p)?;
-                    p.push("send-log.sqlite3");
-                    Some(sendlog::SendLog::open(&p)?)
-                }
-            },
-        }
-    };
+    // No easy way to compute the tag set length without actually encoding it due
+    // to var ints in the bare encoding.
+    if serde_bare::to_vec(&tags)?.len() > itemset::MAX_TAG_SET_SIZE {
+        failure::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
+    }
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();

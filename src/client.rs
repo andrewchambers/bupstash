@@ -233,34 +233,6 @@ fn send_chunks(
     }
 }
 
-/*
-cfg_if::cfg_if! {
-    if #[cfg(linux)] {
-
-        fn dev_major(dev: dev_t) -> Result<u64, failure::Error> {
-            ((dev >> 32) & 0xffff_f000) |
-            ((dev >>  8) & 0x0000_0fff)
-        }
-
-        fn dev_minor(dev: dev_t) -> Result<u64, failure::Error> {
-            ((dev >> 12) & 0xffff_ff00) |
-            ((dev      ) & 0x0000_00ff)
-        }
-
-    } else {
-
-        fn dev_major(dev: dev_t) -> Result<u64, failure::Error> {
-            failure::bail!("unable to get device major number on this platform (file a bug report)");
-        }
-
-        fn dev_minor(dev: dev_t) -> Result<u64, failure::Error> {
-            failure::bail!("unable to get device minor number on this platform (file a bug report)");
-        }
-
-    }
-}
-*/
-
 fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
@@ -288,16 +260,30 @@ fn send_dir(
 
         match hdr.entry_type() {
             tar::EntryType::Char | tar::EntryType::Block => {
-                fn dev_major(_dev: u64) -> Result<u32, failure::Error> {
-                    failure::bail!(
-                        "unable to get device major number on this platform (file a bug report)"
-                    );
-                }
+                cfg_if::cfg_if! {
+                    if #[cfg(linux)] {
 
-                fn dev_minor(_dev: u64) -> Result<u32, failure::Error> {
-                    failure::bail!(
-                        "unable to get device minor number on this platform (file a bug report)"
-                    );
+                        fn dev_major(dev: u64) -> Result<u32, failure::Error> {
+                            ((dev >> 32) & 0xffff_f000) |
+                            ((dev >>  8) & 0x0000_0fff)
+                        }
+
+                        fn dev_minor(dev: u64) -> Result<u32, failure::Error> {
+                            ((dev >> 12) & 0xffff_ff00) |
+                            ((dev      ) & 0x0000_00ff)
+                        }
+
+                    } else {
+
+                        fn dev_major(_dev: u64) -> Result<u32, failure::Error> {
+                            failure::bail!("unable to get device major number on this platform (file a bug report)");
+                        }
+
+                        fn dev_minor(_dev: u64) -> Result<u32, failure::Error> {
+                            failure::bail!("unable to get device minor number on this platform (file a bug report)");
+                        }
+
+                    }
                 }
 
                 hdr.set_device_major(dev_major(metadata.rdev())?)?;
