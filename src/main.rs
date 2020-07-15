@@ -63,12 +63,17 @@ fn default_cli_opts() -> Options {
     opts
 }
 
-fn query_cache_opt(opts: &mut Options) {
+fn query_opts(opts: &mut Options) {
     opts.optopt(
         "",
         "query-cache",
         "Path to the query cache (used for storing synced items before search).",
         "PATH",
+    );
+    opts.optflag(
+        "",
+        "utc-timestamps",
+        "Do not convert the 'timestamp' tag to local time (as is done by default).",
     );
 }
 
@@ -223,48 +228,57 @@ fn matches_to_id_and_query(
 }
 
 fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
-    let mut serve_cmd_args = if let Some(connect_cmd) =
-        std::env::var_os("ARCHIVIST_CONNECT_COMMAND")
-    {
-        match shlex::split(&connect_cmd.into_string().unwrap()) {
-            Some(args) => {
-                if args.is_empty() {
-                    failure::bail!("ARCHIVIST_CONNECT_COMMAND should have at least one element");
-                }
-                args
-            }
-            None => failure::bail!("unable to parse ARCHIVIST_CONNECT_COMMAND"),
-        }
-    } else {
+    let mut serve_cmd_args = {
         let repo = if matches.opt_present("repository") {
-            matches.opt_str("repository").unwrap()
+            Some(matches.opt_str("repository").unwrap())
         } else if let Some(r) = std::env::var_os("ARCHIVIST_REPOSITORY") {
-            r.into_string().unwrap()
+            Some(r.into_string().unwrap())
         } else {
-            failure::bail!("please set --respository or the env var ARCHIVIST_REPOSITORY");
+            None
         };
 
-        if repo.starts_with("ssh://") {
-            let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
-            let caps = re.captures(&repo).unwrap();
+        match repo {
+            Some(repo) => {
+                if repo.starts_with("ssh://") {
+                    let re = regex::Regex::new(r"^ssh://(?:([a-zA-Z0-9]+)@)?([^/]*)(.*)$")?;
+                    let caps = re.captures(&repo).unwrap();
 
-            let mut args = vec!["ssh".to_owned()];
+                    let mut args = vec!["ssh".to_owned()];
 
-            if let Some(user) = caps.get(1) {
-                args.push("-o".to_owned());
-                args.push("User=".to_owned() + user.as_str());
+                    if let Some(user) = caps.get(1) {
+                        args.push("-o".to_owned());
+                        args.push("User=".to_owned() + user.as_str());
+                    }
+                    args.push(caps[2].to_string());
+                    args.push("--".to_owned());
+                    args.push("archivist".to_owned());
+                    args.push("serve".to_owned());
+                    let repo_path = caps[3].to_string();
+                    if !repo_path.is_empty() {
+                        args.push(repo_path);
+                    }
+                    args
+                } else {
+                    vec!["archivist".to_owned(), "serve".to_owned(), repo]
+                }
             }
-            args.push(caps[2].to_string());
-            args.push("--".to_owned());
-            args.push("archivist".to_owned());
-            args.push("serve".to_owned());
-            let repo_path = caps[3].to_string();
-            if !repo_path.is_empty() {
-                args.push(repo_path);
+            None => {
+                if let Some(connect_cmd) = std::env::var_os("ARCHIVIST_CONNECT_COMMAND") {
+                    match shlex::split(&connect_cmd.into_string().unwrap()) {
+                        Some(args) => {
+                            if args.is_empty() {
+                                failure::bail!(
+                                    "ARCHIVIST_CONNECT_COMMAND should have at least one element"
+                                );
+                            }
+                            args
+                        }
+                        None => failure::bail!("unable to parse ARCHIVIST_CONNECT_COMMAND"),
+                    }
+                } else {
+                    failure::bail!("please set --repository, ARCHIVIST_REPOSITORY or ARCHIVIST_CONNECT_COMMAND");
+                }
             }
-            args
-        } else {
-            vec!["archivist".to_owned(), "serve".to_owned(), repo]
         }
     };
 
@@ -282,6 +296,27 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     };
 
     Ok(serve_proc)
+}
+
+fn localize_timestamp_tag(tags: &mut std::collections::BTreeMap<String, Option<String>>) {
+    let ts = match tags.get("timestamp") {
+        Some(Some(ts)) => match chrono::NaiveDateTime::parse_from_str(ts, "%F %T") {
+            Ok(ts) => {
+                let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
+                let ts: chrono::DateTime<chrono::Local> = chrono::DateTime::from(ts);
+                Some(ts)
+            }
+            Err(_) => None,
+        },
+        _ => None,
+    };
+
+    if let Some(ts) = ts {
+        tags.insert(
+            "timestamp".to_string(),
+            Some(ts.format("%F %T").to_string()),
+        );
+    }
 }
 
 enum ListFormat {
@@ -309,7 +344,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         "Output format, valid values are human | jsonl",
         "PATH",
     );
-    query_cache_opt(&mut opts);
+    query_opts(&mut opts);
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -360,7 +395,9 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                 let mut tags = encrypted_metadata.tags;
                 tags.insert("id".to_string(), Some(item_id.to_string()));
-
+                if !matches.opt_present("utc-timestamps") {
+                    localize_timestamp_tag(&mut tags);
+                }
                 let doprint = match query {
                     Some(ref query) => tquery::query_matches(query, &tags),
                     None => true,
@@ -550,8 +587,9 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let default_tags = !matches.opt_present("no-default-tags");
     if default_tags {
         use chrono::prelude::*;
-        let now = Local::now();
-        tags.insert("timestamp".to_string(), Some(now.to_rfc3339()));
+        let now: DateTime<Utc> = Utc::now();
+        let now = now.format("%F %T");
+        tags.insert("timestamp".to_string(), Some(now.to_string()));
     }
 
     let data_source: client::DataSource;
@@ -573,7 +611,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
         let name = match input_path.file_name() {
             Some(name) => name.to_string_lossy().to_string(),
-            None => "root-snapshot".to_string(),
+            None => "rootfs".to_string(),
         };
 
         if md.is_dir() {
@@ -651,7 +689,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
-    query_cache_opt(&mut opts);
+    query_opts(&mut opts);
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -696,6 +734,9 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                         let mut tags = encrypted_metadata.tags;
                         tags.insert("id".to_string(), Some(item_id.to_string()));
+                        if !matches.opt_present("utc-timestamps") {
+                            localize_timestamp_tag(&mut tags);
+                        }
                         if tquery::query_matches(&query, &tags) {
                             n_matches += 1;
                             id = item_id;
@@ -743,7 +784,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         "URI of repository to fetch data from.",
         "REPO",
     );
-    query_cache_opt(&mut opts);
+    query_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
@@ -790,6 +831,10 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let mut tags = encrypted_metadata.tags;
 
                         tags.insert("id".to_string(), Some(item_id.to_string()));
+                        if !matches.opt_present("utc-timestamps") {
+                            localize_timestamp_tag(&mut tags);
+                        }
+
                         if tquery::query_matches(&query, &tags) {
                             ids.push(item_id);
                         }
