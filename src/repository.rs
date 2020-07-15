@@ -167,7 +167,7 @@ impl Repo {
         })?;
 
         tx.execute(
-            "create table RepositoryMeta(Key, Value, UNIQUE(key, value));",
+            "create table RepositoryMeta(Key primary key, Value) without rowid;",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(

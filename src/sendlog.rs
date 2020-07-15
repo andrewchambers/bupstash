@@ -18,7 +18,7 @@ impl SendLog {
         conn.busy_timeout(std::time::Duration::new(600, 0))?;
         let tx = conn.transaction()?;
         tx.execute(
-            "create table if not exists LogMeta(Key, Value, unique(Key)); ",
+            "create table if not exists LogMeta(Key primary key, Value) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -61,17 +61,12 @@ impl SendLog {
         };
 
         tx.execute(
-            "create table if not exists Sent(Addr, Seq, unique(Addr)); ",
+            "create table if not exists Sent(Addr primary key, Seq) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
         tx.execute(
-            "create table if not exists StatCache(Path, Hash, Addresses, Seq, unique(Path)); ",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        tx.execute(
-            "create index if not exists StateCachePathHashIndex on StatCache(Path, Hash);",
+            "create table if not exists StatCache(Path primary key, Hash, Addresses, Seq) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 

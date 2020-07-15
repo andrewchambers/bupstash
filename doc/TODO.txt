@@ -5,17 +5,17 @@ Need to do:
 - ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com archivist serve -r /foo"
 - Improve documentation on key exchange packet and 'box' structure.
 - Detailed and nice man pages, scdoc.
-- Default tags? A way to set custom default tags? 
-  (mime)type tag - A way to see what the actual contents of a snapshot are.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
-- init -r 
-- Remote init.
 - Rename send-log to --cache ?
-- Upload progress indicator.
-- GC progress indicator.
-
+- Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
 
 Can do later (medium term):
+
+- Remote init.
+
+- Upload progress indicator.
+
+- GC progress indicator.
 
 - Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
 
@@ -56,5 +56,3 @@ Unclassified:
 
 - Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
-- Reconsider if we want a send log default, or if it should be optional. The default one doesn't
-  make too much sense. (Note, Yes, with checkpointing it makes sense!)
