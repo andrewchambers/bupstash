@@ -1,6 +1,6 @@
-# archivist
+# bupstash
 
-archivist is a secure data store for uses ranging from business critical data archiving,
+bupstash is a secure data store for uses ranging from business critical data archiving,
 to small scale personal data collections.
 
 Some key features:

@@ -1,16 +1,10 @@
-Archivist init: Initialize an archivist repository.
+bupstash init: Initialize an bupstash repository.
 
 Description:
-  Init creates an archivist data repository at a specified
-  local path.
-
-  For more information on the repository format see TODO.
-
-  For more information on supported storage backends see TODO.
-
-Quick examples:
-  $ archivist init ./backups
-  $ archivist init --storage '{"s3" : ...}' ./backups
+  Create an bupstash repository at the specified path.
 
 Usage:
-  archivist init [FLAGS] PATH
+  bupstash init [FLAGS] PATH
+
+Examples:
+  $ bupstash init ./backups

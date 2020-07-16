@@ -1,14 +1,13 @@
-Archivist new-master-key: Create a new master archive key.
+bupstash new-master-key
 
 Description:
-  Creates a new master key and writes it to disk with permissions that
-  are readable only by the creating user.
+  Create a new key readable by only the creating user.
 
   Keep this key private and secure as it is needed to read any archived
   data sent using send keys derived from the master key.
 
 Quick examples:
-  $ archivist new-master-key -o ./backups-master.key
+  $ bupstash new-key -o ./backups.key
 
 Usage:
-  archivist new-master-key [OPTIONS]
+  bupstash new-key [OPTIONS]

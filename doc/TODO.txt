@@ -1,8 +1,6 @@
 Need to do:
 
-- think of different name.
 - Rename send -> put ?
-- ARCHIVIST_CONNECT/ARCHIVIST_PROXY/???="ssh foo.com archivist serve -r /foo"
 - Improve documentation on key exchange packet and 'box' structure.
 - Detailed and nice man pages, scdoc.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
@@ -34,7 +32,7 @@ Can do later (medium term):
 
 - busy timeout or other mechanism for send log and query cache.
 
-- Handle ctrl+c gracefully in archivist serve during gc. It would be nice if
+- Handle ctrl+c gracefully in bupstash serve during gc. It would be nice if
   we can avoid the gc quiescent period on proper shutdown.
 
 - Concurrent garbage collector, walk htrees in parallel and/or walk multiple entries

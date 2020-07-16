@@ -40,7 +40,7 @@ fn cache_dir() -> Result<std::path::PathBuf, failure::Error> {
             None => failure::bail!("unable to determine cache dir from XDG_CACHE_HOME or HOME"),
         },
     };
-    cache_dir.push("archivist");
+    cache_dir.push("bupstash");
     Ok(cache_dir)
 }
 
@@ -125,25 +125,25 @@ fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
     match matches.opt_str("key") {
         Some(k) => Ok(keys::Key::load_from_file(&k)?),
         None => {
-            if let Some(k) = std::env::var_os("ARCHIVIST_KEY") {
+            if let Some(k) = std::env::var_os("BUPSTASH_KEY") {
                 Ok(keys::Key::load_from_file(&k.into_string().unwrap())?)
-            } else if let Some(cmd) = std::env::var_os("ARCHIVIST_KEY_COMMAND") {
+            } else if let Some(cmd) = std::env::var_os("BUPSTASH_KEY_COMMAND") {
                 match shlex::split(&cmd.into_string().unwrap()) {
                     Some(mut args) => {
                         if args.is_empty() {
-                            failure::bail!("ARCHIVIST_KEY_COMMAND must not be empty")
+                            failure::bail!("BUPSTASH_KEY_COMMAND must not be empty")
                         }
                         let bin = args.remove(0);
 
                         match std::process::Command::new(bin).args(args).output() {
                             Ok(key_data) => Ok(keys::Key::from_slice(&key_data.stdout)?),
-                            Err(e) => failure::bail!("error running ARCHIVIST_KEY_COMMAND: {}", e),
+                            Err(e) => failure::bail!("error running BUPSTASH_KEY_COMMAND: {}", e),
                         }
                     }
-                    None => failure::bail!("unable to parse ARCHIVIST_KEY_COMMAND"),
+                    None => failure::bail!("unable to parse BUPSTASH_KEY_COMMAND"),
                 }
             } else {
-                failure::bail!("please set --key, ARCHIVIST_KEY or ARCHIVIST_KEY_COMMAND");
+                failure::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
             }
         }
     }
@@ -195,7 +195,7 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, failure::Error> {
     match matches.opt_str("query-cache") {
         Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache)),
-        None => match std::env::var_os("ARCHIVIST_QUERY_CACHE") {
+        None => match std::env::var_os("BUPSTASH_QUERY_CACHE") {
             Some(query_cache) => {
                 querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))
             }
@@ -231,7 +231,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     let mut serve_cmd_args = {
         let repo = if matches.opt_present("repository") {
             Some(matches.opt_str("repository").unwrap())
-        } else if let Some(r) = std::env::var_os("ARCHIVIST_REPOSITORY") {
+        } else if let Some(r) = std::env::var_os("BUPSTASH_REPOSITORY") {
             Some(r.into_string().unwrap())
         } else {
             None
@@ -251,7 +251,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                     }
                     args.push(caps[2].to_string());
                     args.push("--".to_owned());
-                    args.push("archivist".to_owned());
+                    args.push("bupstash".to_owned());
                     args.push("serve".to_owned());
                     let repo_path = caps[3].to_string();
                     if !repo_path.is_empty() {
@@ -259,24 +259,24 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                     }
                     args
                 } else {
-                    vec!["archivist".to_owned(), "serve".to_owned(), repo]
+                    vec!["bupstash".to_owned(), "serve".to_owned(), repo]
                 }
             }
             None => {
-                if let Some(connect_cmd) = std::env::var_os("ARCHIVIST_CONNECT_COMMAND") {
+                if let Some(connect_cmd) = std::env::var_os("BUPSTASH_CONNECT_COMMAND") {
                     match shlex::split(&connect_cmd.into_string().unwrap()) {
                         Some(args) => {
                             if args.is_empty() {
                                 failure::bail!(
-                                    "ARCHIVIST_CONNECT_COMMAND should have at least one element"
+                                    "BUPSTASH_CONNECT_COMMAND should have at least one element"
                                 );
                             }
                             args
                         }
-                        None => failure::bail!("unable to parse ARCHIVIST_CONNECT_COMMAND"),
+                        None => failure::bail!("unable to parse BUPSTASH_CONNECT_COMMAND"),
                     }
                 } else {
-                    failure::bail!("please set --repository, ARCHIVIST_REPOSITORY or ARCHIVIST_CONNECT_COMMAND");
+                    failure::bail!("please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_CONNECT_COMMAND");
                 }
             }
         }
@@ -550,7 +550,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     } else {
         match matches.opt_str("send-log") {
             Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
-            None => match std::env::var_os("ARCHIVIST_SEND_LOG") {
+            None => match std::env::var_os("BUPSTASH_SEND_LOG") {
                 Some(send_log) => {
                     Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
                 }
@@ -978,6 +978,6 @@ fn main() {
     };
 
     if let Err(err) = result {
-        die(format!("archivist {}: {}", subcommand, err));
+        die(format!("bupstash {}: {}", subcommand, err));
     }
 }

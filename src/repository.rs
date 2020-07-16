@@ -95,7 +95,7 @@ impl Repo {
         flags: rusqlite::OpenFlags,
     ) -> rusqlite::Result<rusqlite::Connection> {
         let mut db_path = repo_path.to_path_buf();
-        db_path.push("archivist.sqlite3");
+        db_path.push("bupstash.sqlite3");
 
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
 
@@ -132,7 +132,7 @@ impl Repo {
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(""))
             .to_os_string();
-        tmpname.push(".archivist-repo-init-tmp");
+        tmpname.push(".bupstash-repo-init-tmp");
         path_buf.push(&tmpname);
         if path_buf.exists() {
             return Err(RepoError::AlreadyExists {

@@ -34,37 +34,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "archivist"
-version = "0.1.0"
-dependencies = [
- "bindgen",
- "cfg-if",
- "chrono",
- "codemap",
- "codemap-diagnostic",
- "crossbeam",
- "failure",
- "fs2",
- "getopts",
- "glob",
- "libc",
- "path-clean",
- "pem",
- "pkg-config",
- "rand",
- "regex",
- "rusqlite",
- "serde",
- "serde_bare",
- "serde_json",
- "shlex",
- "tar",
- "tempfile",
- "walkdir",
- "zstd",
-]
-
-[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -130,6 +99,37 @@ name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf1de2fe8c75bc145a2f577add951f8134889b4795d47466a54a5c846d691693"
+
+[[package]]
+name = "bupstash"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "cfg-if",
+ "chrono",
+ "codemap",
+ "codemap-diagnostic",
+ "crossbeam",
+ "failure",
+ "fs2",
+ "getopts",
+ "glob",
+ "libc",
+ "path-clean",
+ "pem",
+ "pkg-config",
+ "rand",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_bare",
+ "serde_json",
+ "shlex",
+ "tar",
+ "tempfile",
+ "walkdir",
+ "zstd",
+]
 
 [[package]]
 name = "cc"
