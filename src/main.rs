@@ -276,7 +276,9 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                         None => failure::bail!("unable to parse BUPSTASH_CONNECT_COMMAND"),
                     }
                 } else {
-                    failure::bail!("please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_CONNECT_COMMAND");
+                    failure::bail!(
+                        "please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_CONNECT_COMMAND"
+                    );
                 }
             }
         }

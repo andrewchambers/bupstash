@@ -9,6 +9,9 @@ Need to do:
 
 Can do later (medium term):
 
+- Localization
+  - tests for localized tags.
+
 - Remote init.
 
 - Upload progress indicator.
@@ -25,11 +28,6 @@ Can do later (medium term):
 
 - Should allow running of single cli tests.
 
-- Ways to tune chunking algorithm.
-  - Fixed size chunking?
-  - Min size/max size/average size?
-  - Alternative chunking algorithms?
-
 - busy timeout or other mechanism for send log and query cache.
 
 - Handle ctrl+c gracefully in bupstash serve during gc. It would be nice if
@@ -42,9 +40,15 @@ Can do later (medium term):
 
 - Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
+- External backends.
+
 Long term:
 
-  - External backends.
+- Ways to tune chunking algorithm.
+  - Fixed size chunking?
+  - Min size/max size/average size?
+  - Alternative chunking algorithms?
+
 
 Unclassified:
 
