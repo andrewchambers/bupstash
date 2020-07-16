@@ -42,17 +42,15 @@ Can do later (medium term):
 
 - Sparse file support in snapshots.
 
+- Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
+
 Long term:
 
   - External backends.
 
 Unclassified:
 
-- use WITHOUT ROWID in address table in sendlog.
-
 - Prefetch system should also work for non leaf tree nodes.
 
 - consider/benchmark PRAGMA synchronous.
-
-- Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
