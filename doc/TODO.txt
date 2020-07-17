@@ -6,8 +6,13 @@ Need to do:
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
 - Rename send-log to --cache ?
 - Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
+- RRequestChunk optional in reply.
+- Init should respect BUPSTASH_REPOSITORY.
+- init should work for remote repositories.
 
 Can do later (medium term):
+
+- Snapshots can fail if paths are too long
 
 - Localization
   - tests for localized tags.

@@ -1,6 +1,6 @@
 
 
-unset BUPSTASH_CONNECT_COMMAND
+unset BUPSTASH_REPOSITORY_COMMAND
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
 export REPO="$SCRATCH/bupstash-test-repo"
 export PRIMARY_KEY="$SCRATCH/bupstash-test-primary.key"
@@ -238,8 +238,8 @@ _concurrent_send_test_worker () {
   bupstash get -k "$PRIMARY_KEY" id=$id > /dev/null
 }
 
-@test "connect command" {
-  export BUPSTASH_CONNECT_COMMAND="bupstash serve $BUPSTASH_REPOSITORY"
+@test "repository command" {
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve $BUPSTASH_REPOSITORY"
   unset BUPSTASH_REPOSITORY
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"

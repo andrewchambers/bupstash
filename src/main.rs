@@ -263,21 +263,21 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                 }
             }
             None => {
-                if let Some(connect_cmd) = std::env::var_os("BUPSTASH_CONNECT_COMMAND") {
+                if let Some(connect_cmd) = std::env::var_os("BUPSTASH_REPOSITORY_COMMAND") {
                     match shlex::split(&connect_cmd.into_string().unwrap()) {
                         Some(args) => {
                             if args.is_empty() {
                                 failure::bail!(
-                                    "BUPSTASH_CONNECT_COMMAND should have at least one element"
+                                    "BUPSTASH_REPOSITORY_COMMAND should have at least one element"
                                 );
                             }
                             args
                         }
-                        None => failure::bail!("unable to parse BUPSTASH_CONNECT_COMMAND"),
+                        None => failure::bail!("unable to parse BUPSTASH_REPOSITORY_COMMAND"),
                     }
                 } else {
                     failure::bail!(
-                        "please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_CONNECT_COMMAND"
+                        "please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_REPOSITORY_COMMAND"
                     );
                 }
             }
