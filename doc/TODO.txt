@@ -9,6 +9,7 @@ Need to do:
 - RRequestChunk optional in reply.
 - Init should respect BUPSTASH_REPOSITORY.
 - init should work for remote repositories.
+- Metadata must track sending key id in case we need to audit it.
 
 Can do later (medium term):
 

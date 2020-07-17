@@ -20,7 +20,7 @@ data stored using that key.
 ## OPTIONS
 
 * -o, --output:
-  Path to where key will be written.
+  Path to where the new key will be written.
 
 ## EXAMPLES
 
