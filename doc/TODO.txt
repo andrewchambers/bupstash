@@ -10,10 +10,12 @@ Need to do:
 - Init should respect BUPSTASH_REPOSITORY.
 - init should work for remote repositories.
 - Metadata must track sending key id in case we need to audit it.
+- change name to no-stat-caching
+- Verify we handle atime correctly when snapshotting.
+- Tests for hardlinks
+- Snapshots can fail if paths are too long
 
 Can do later (medium term):
-
-- Snapshots can fail if paths are too long
 
 - Localization
   - tests for localized tags.

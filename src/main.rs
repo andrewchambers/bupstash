@@ -159,7 +159,7 @@ fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt("k", "key", "primary key to derive send key from.", "PATH");
+    opts.reqopt("k", "key", "primary key to derive put-key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = matches_to_key(&matches)?;
@@ -168,7 +168,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
             let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
-        _ => failure::bail!("key is not a master key"),
+        _ => failure::bail!("key is not a primary key"),
     }
 }
 
@@ -188,7 +188,7 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
             let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
-        _ => failure::bail!("key is not a master key"),
+        _ => failure::bail!("key is not a primary key"),
     }
 }
 
@@ -364,7 +364,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut metadata_dctx = match key {
         keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
         keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-        _ => failure::bail!("provided key is a not a primary key"),
+        _ => failure::bail!("provided key is not a primary key"),
     };
     let mut query: Option<tquery::Query> = None;
 
@@ -552,7 +552,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     } else {
         match matches.opt_str("send-log") {
             Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
-            None => match std::env::var_os("BUPSTASH_SEND_LOG") {
+            None => match std::env::var_os("BUPSTASH_PUT_CACHE") {
                 Some(send_log) => {
                     Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
                 }
@@ -581,7 +581,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
             (hash_key, data_ectx, metadata_ectx)
         }
-        _ => failure::bail!("can only send data with a master key or send key."),
+        _ => failure::bail!("can only send data with a primary-key or put-key."),
     };
 
     let mut tags = BTreeMap::<String, Option<String>>::new();
@@ -704,7 +704,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk);
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
-        _ => failure::bail!("provided key is a not a master decryption key"),
+        _ => failure::bail!("provided key is not a decryption key"),
     };
 
     let (id, query) = matches_to_id_and_query(&matches)?;
@@ -817,7 +817,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let mut metadata_dctx = match key {
                 keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
                 keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-                _ => failure::bail!("provided key is a not a master decryption key"),
+                _ => failure::bail!("provided key is not a decryption key"),
             };
             let mut ids = Vec::new();
 
@@ -889,13 +889,13 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.optflag(
         "",
-        "allow-add",
-        "allow client to add more entry to the repository.",
+        "allow-put",
+        "allow client to put more entries into the repository.",
     );
     opts.optflag(
         "",
-        "allow-edit",
-        "allow client to edit and remove repository entries.",
+        "allow-remove",
+        "allow client to remove repository entries.",
     );
     opts.optflag(
         "",
@@ -904,8 +904,13 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     );
     opts.optflag(
         "",
-        "allow-read",
-        "allow client to read and query the repository.",
+        "allow-get",
+        "allow client to get data from the repository.",
+    );
+    opts.optflag(
+        "",
+        "allow-list",
+        "allow client to list repository entries.",
     );
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -913,28 +918,32 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         die("Expected a single path to initialize.".to_string());
     }
 
-    let mut allow_add = true;
-    let mut allow_edit = true;
+    let mut allow_put = true;
+    let mut allow_remove = true;
     let mut allow_gc = true;
-    let mut allow_read = true;
+    let mut allow_get = true;
+    let mut allow_list = true;
 
-    if matches.opt_present("allow-add")
-        || matches.opt_present("allow-edit")
+    if matches.opt_present("allow-put")
+        || matches.opt_present("allow-remove")
         || matches.opt_present("allow-gc")
-        || matches.opt_present("allow-read")
+        || matches.opt_present("allow-get")
+        || matches.opt_present("allow-list")
     {
-        allow_add = matches.opt_present("allow-add");
-        allow_edit = matches.opt_present("allow-edit");
+        allow_put = matches.opt_present("allow-put");
+        allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
-        allow_read = matches.opt_present("allow-read");
+        allow_get = matches.opt_present("allow-get");
+        allow_list = matches.opt_present("allow-list");
     }
 
     server::serve(
         server::ServerConfig {
-            allow_add,
-            allow_edit,
+            allow_put,
+            allow_remove,
             allow_gc,
-            allow_read,
+            allow_get,
+            allow_list,
             repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut std::io::stdin(),

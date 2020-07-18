@@ -7,9 +7,10 @@ use super::xid::*;
 pub struct ServerConfig {
     pub repo_path: std::path::PathBuf,
     pub allow_gc: bool,
-    pub allow_read: bool,
-    pub allow_add: bool,
-    pub allow_edit: bool,
+    pub allow_get: bool,
+    pub allow_put: bool,
+    pub allow_remove: bool,
+    pub allow_list: bool,
 }
 
 pub fn serve(
@@ -29,14 +30,14 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TBeginSend(begin) => {
-                if !cfg.allow_add {
-                    failure::bail!("server has add writing data for this client")
+                if !cfg.allow_put {
+                    failure::bail!("server has disabled put for this client")
                 }
                 recv(&mut repo, begin, r, w)?;
             }
             Packet::TRequestData(req) => {
-                if !cfg.allow_read {
-                    failure::bail!("server has disabled reading data for this client")
+                if !cfg.allow_get {
+                    failure::bail!("server has disabled get for this client")
                 }
                 send(&mut repo, req.id, w)?;
             }
@@ -47,14 +48,14 @@ pub fn serve(
                 gc(&mut repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
-                if !cfg.allow_read {
+                if !cfg.allow_list {
                     failure::bail!("server has disabled query and search for this client")
                 }
                 item_sync(&mut repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
-                if !cfg.allow_edit {
-                    failure::bail!("server has disabled delete/edit for this client")
+                if !cfg.allow_remove {
+                    failure::bail!("server has disabled remove for this client")
                 }
                 repo.remove_items(items)?;
                 write_packet(w, &Packet::RRmItems)?;
