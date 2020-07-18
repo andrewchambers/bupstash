@@ -621,7 +621,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
                 tags.insert("name".to_string(), Some(name + ".tar"));
             }
 
-            data_source = client::DataSource::Directory(std::convert::From::from(input_path))
+            data_source = client::DataSource::Directory(input_path)
         } else if md.is_file() {
             if default_tags {
                 tags.insert("name".to_string(), Some(name));
@@ -907,11 +907,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         "allow-get",
         "allow client to get data from the repository.",
     );
-    opts.optflag(
-        "",
-        "allow-list",
-        "allow client to list repository entries.",
-    );
+    opts.optflag("", "allow-list", "allow client to list repository entries.");
     let matches = default_parse_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {

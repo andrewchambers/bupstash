@@ -254,3 +254,27 @@ _concurrent_send_test_worker () {
   id="$(bupstash send :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
+
+@test "long path" {
+  mkdir "$SCRATCH/foo"
+  mkdir -p "$SCRATCH/foo/"aaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa
+  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l
+  test 7 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+}
+
+@test "long link target" {
+  mkdir "$SCRATCH/foo"
+  ln -s llllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
+llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
+    "$SCRATCH/foo/l"
+  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+}
