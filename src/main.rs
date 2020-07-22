@@ -3,6 +3,7 @@ pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
 pub mod crypto;
+pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
@@ -115,8 +116,8 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
             Ok(s) => s,
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
         },
-        None => repository::StorageEngineSpec::Sqlite3 {
-            db_path: "./data.sqlite3".to_string(),
+        None => repository::StorageEngineSpec::Dir {
+            dir_path: "./data".to_string(),
         },
     };
 

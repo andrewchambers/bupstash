@@ -1,5 +1,6 @@
 use super::address::*;
 use super::chunk_storage;
+use super::dir_chunk_storage;
 use super::external_chunk_storage;
 use super::fsutil;
 use super::htree;
@@ -32,6 +33,9 @@ pub enum RepoError {
 pub enum StorageEngineSpec {
     Sqlite3 {
         db_path: String,
+    },
+    Dir {
+        dir_path: String,
     },
     External {
         socket_path: String,
@@ -265,6 +269,7 @@ impl Repo {
                         quiescent_period_ms.unwrap_or(10000),
                     ))
                 }
+                StorageEngineSpec::Dir { .. } => (),
                 StorageEngineSpec::Sqlite3 { .. } => (),
             }
             self.conn.execute(
@@ -314,6 +319,17 @@ impl Repo {
                     db_path
                 };
                 Box::new(sqlite3_chunk_storage::Sqlite3Storage::new(&db_path)?)
+            }
+            StorageEngineSpec::Dir { dir_path } => {
+                let dir_path: std::path::PathBuf = dir_path.into();
+                let dir_path = if dir_path.is_relative() {
+                    let mut path_buf = self.repo_path.to_path_buf();
+                    path_buf.push(dir_path);
+                    path_buf
+                } else {
+                    dir_path
+                };
+                Box::new(dir_chunk_storage::DirStorage::new(&dir_path)?)
             }
             StorageEngineSpec::External {
                 socket_path, path, ..
