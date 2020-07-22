@@ -1,5 +1,4 @@
 
-
 unset BUPSTASH_REPOSITORY_COMMAND
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
 export REPO="$SCRATCH/bupstash-test-repo"
@@ -13,7 +12,7 @@ export BUPSTASH_STAT_CACHE="$SCRATCH/stat-cache.sqlite3"
 
 setup () {
   mkdir "$SCRATCH"
-  bupstash init "$REPO"
+  bupstash init '--storage={"Sqlite3":{"db_path": "./data.sqlite3"}}' "$REPO"
   bupstash new-key -o "$PRIMARY_KEY"
   bupstash new-send-key -k "$PRIMARY_KEY" -o "$SEND_KEY"
   bupstash new-metadata-key -k "$PRIMARY_KEY" -o "$METADATA_KEY"
@@ -25,9 +24,9 @@ teardown () {
 
 @test "init repository" {
   test -d "$REPO"
-  test -d "$REPO/data"
   test -f "$REPO/bupstash.sqlite3"
   test -f "$REPO/gc.lock"
+  test -f "$REPO/storage-engine.json"
   test -f "$PRIMARY_KEY"
   test -f "$SEND_KEY"
   test -f "$METADATA_KEY"
@@ -95,8 +94,9 @@ teardown () {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
-  echo -n x >> "$REPO/data/"*
+  sqlite3 "$REPO"/data.sqlite3 "update Chunks set Data = X'00000011102222222222044446';";
   run bupstash get -k "$PRIMARY_KEY" id=$id
+  echo "$output"
   echo "$output" | grep -q "corrupt"
   if test $status = 0
   then
@@ -144,26 +144,26 @@ _concurrent_send_test_worker () {
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO/data" | wc -l)"
+  test 2 = "$(sqlite3 "$REPO"/data.sqlite3 "select count(*) from Chunks")"
   bupstash rm id=$id1
   bupstash list -k "$PRIMARY_KEY"
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 3 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO/data" | wc -l)"
+  test 2 = "$(sqlite3 "$REPO"/data.sqlite3 "select count(*) from Chunks")"
   bupstash gc
   bupstash list -k "$PRIMARY_KEY"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
   test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 1 = "$(ls "$REPO/data" | wc -l)"
+  test 1 = "$(sqlite3 "$REPO"/data.sqlite3 "select count(*) from Chunks")"
   bupstash rm id=$id2
   bupstash gc
   bupstash list -k "$PRIMARY_KEY"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
   test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 0 = "$(ls "$REPO/data" | wc -l)"
+  test 0 = "$(sqlite3 "$REPO"/data.sqlite3 "select count(*) from Chunks")"
 }
 
 @test "query sync" {

@@ -110,6 +110,14 @@ impl Key {
             Key::MetadataKeyV1(k) => k.primary_key_id,
         }
     }
+
+    pub fn id(&self) -> Xid {
+        match self {
+            Key::PrimaryKeyV1(k) => k.id,
+            Key::SendKeyV1(k) => k.id,
+            Key::MetadataKeyV1(k) => k.id,
+        }
+    }
 }
 
 impl PrimaryKey {

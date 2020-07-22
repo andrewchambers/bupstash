@@ -9,13 +9,13 @@ pub mod hex;
 pub mod htree;
 pub mod itemset;
 pub mod keys;
-pub mod local_chunk_storage;
 pub mod protocol;
 pub mod querycache;
 pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
+pub mod sqlite3_chunk_storage;
 pub mod tquery;
 pub mod xid;
 
@@ -115,7 +115,9 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
             Ok(s) => s,
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
         },
-        None => repository::StorageEngineSpec::Local,
+        None => repository::StorageEngineSpec::Sqlite3 {
+            db_path: "./data.sqlite3".to_string(),
+        },
     };
 
     repository::Repo::init(std::path::Path::new(&matches.free[0]), backend)
@@ -568,6 +570,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
+    let send_key_id = key.id();
     let (hash_key, data_ectx, metadata_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
@@ -661,6 +664,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         compression,
         use_stat_cache,
         primary_key_id,
+        send_key_id,
         hash_key,
         data_ectx,
         metadata_ectx,

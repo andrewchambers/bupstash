@@ -81,6 +81,7 @@ pub struct SendContext {
     pub compression: crypto::DataCompression,
     pub use_stat_cache: bool,
     pub primary_key_id: Xid,
+    pub send_key_id: Xid,
     pub hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
@@ -173,6 +174,7 @@ pub fn send(
 
     let e_metadata = itemset::EncryptedItemMetadata {
         plain_text_hash: plain_text_metadata.hash(),
+        send_key_id: ctx.send_key_id,
         hash_key_part_2: ctx.hash_key.part2.clone(),
         tags,
     };

@@ -4,7 +4,7 @@ use super::external_chunk_storage;
 use super::fsutil;
 use super::htree;
 use super::itemset;
-use super::local_chunk_storage;
+use super::sqlite3_chunk_storage;
 use super::xid::*;
 use failure::Fail;
 use fs2::FileExt;
@@ -30,7 +30,9 @@ pub enum RepoError {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum StorageEngineSpec {
-    Local,
+    Sqlite3 {
+        db_path: String,
+    },
     External {
         socket_path: String,
         path: String,
@@ -99,7 +101,6 @@ impl Repo {
 
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
 
-        conn.execute("pragma temp_store=MEMORY;", rusqlite::NO_PARAMS)?;
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
             Ok(())
         })?;
@@ -128,6 +129,7 @@ impl Repo {
             }
             .into());
         }
+
         let mut tmpname = repo_path
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(""))
@@ -140,10 +142,8 @@ impl Repo {
             }
             .into());
         }
+
         fs::DirBuilder::new().create(path_buf.as_path())?;
-        path_buf.push("data");
-        fs::DirBuilder::new().create(path_buf.as_path())?;
-        path_buf.pop();
 
         path_buf.push("gc.lock");
         fsutil::create_empty_file(path_buf.as_path())?;
@@ -159,12 +159,11 @@ impl Repo {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
 
-        let tx = conn.transaction()?;
-
-        /* *NOTE*, we do not want WAL mode so we can potentially run on NFS. */
-        tx.query_row("PRAGMA journal_mode = DELETE;", rusqlite::NO_PARAMS, |_r| {
+        conn.query_row("PRAGMA journal_mode = WAL;", rusqlite::NO_PARAMS, |_r| {
             Ok(())
         })?;
+
+        let tx = conn.transaction()?;
 
         tx.execute(
             "create table RepositoryMeta(Key primary key, Value) without rowid;",
@@ -266,7 +265,7 @@ impl Repo {
                         quiescent_period_ms.unwrap_or(10000),
                     ))
                 }
-                StorageEngineSpec::Local => (),
+                StorageEngineSpec::Sqlite3 { .. } => (),
             }
             self.conn.execute(
                 "update RepositoryMeta set value = ? where key = 'gc-dirty';",
@@ -305,10 +304,16 @@ impl Repo {
         spec: &StorageEngineSpec,
     ) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
-            StorageEngineSpec::Local => {
-                let mut data_dir = self.repo_path.to_path_buf();
-                data_dir.push("data");
-                Box::new(local_chunk_storage::LocalStorage::new(&data_dir))
+            StorageEngineSpec::Sqlite3 { db_path } => {
+                let db_path: std::path::PathBuf = db_path.into();
+                let db_path = if db_path.is_relative() {
+                    let mut path_buf = self.repo_path.to_path_buf();
+                    path_buf.push(db_path);
+                    path_buf
+                } else {
+                    db_path
+                };
+                Box::new(sqlite3_chunk_storage::Sqlite3Storage::new(&db_path)?)
             }
             StorageEngineSpec::External {
                 socket_path, path, ..
@@ -452,11 +457,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn add_get_chunk() {
+    fn sanity_test() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
-        Repo::init(path_buf.as_path(), StorageEngineSpec::Local).unwrap();
+        Repo::init(
+            path_buf.as_path(),
+            StorageEngineSpec::Sqlite3 {
+                db_path: "./data.sqlite3".to_string(),
+            },
+        )
+        .unwrap();
         let repo = Repo::open(path_buf.as_path()).unwrap();
         let mut storage_engine = repo.storage_engine().unwrap();
         let addr = Address::default();

@@ -18,7 +18,7 @@ impl QueryCache {
         let tx = conn.transaction()?;
 
         tx.execute(
-            "create table if not exists QueryCacheMeta(Key, Value, unique(Key)); ",
+            "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
             rusqlite::NO_PARAMS,
         )?;
 

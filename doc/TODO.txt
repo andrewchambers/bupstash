@@ -6,14 +6,14 @@ Need to do:
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
 - Rename send-log to --cache ?
 - Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
-- RRequestChunk optional in reply.
+- RRequestChunk optional in reply?
 - Init should respect BUPSTASH_REPOSITORY.
 - init should work for remote repositories.
 - Metadata must track sending key id in case we need to audit it.
 - change name to no-stat-caching
 - Verify we handle atime correctly when snapshotting.
-- Tests for hardlinks
-- Snapshots can fail if paths are too long
+- Hardlink support
+- timestamp in encrypted metadata header instead of tags?
 
 Can do later (medium term):
 
