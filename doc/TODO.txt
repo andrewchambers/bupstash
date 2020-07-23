@@ -14,7 +14,9 @@ Need to do:
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support
 - timestamp in encrypted metadata header instead of tags?
-- Add gc generation fence .
+- Add gc generation fence.
+
+- Send permission denied: Permission denied (os error 13), add path.
 
 Can do later (medium term):
 
