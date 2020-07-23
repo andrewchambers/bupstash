@@ -429,56 +429,47 @@ fn send_dir(
                 }
             }
             None => {
-                {
-                    let mut on_chunk = |addr: &Address| {
-                        addresses.extend_from_slice(&addr.bytes[..]);
-                    };
+                let mut on_chunk = |addr: &Address| {
+                    addresses.extend_from_slice(&addr.bytes[..]);
+                };
 
-                    for (ent_path, metadata, hdr_bytes) in tar_dir_ents.drain(..) {
-                        let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
-                        send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
+                for (ent_path, metadata, hdr_bytes) in tar_dir_ents.drain(..) {
+                    let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
+                    send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
 
-                        if metadata.is_file() {
-                            let mut f = std::fs::File::open(&ent_path)?;
-                            let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
-                            /* Tar entries are rounded to 512 bytes */
-                            let remaining = 512 - (len % 512);
-                            if remaining < 512 {
-                                let buf = [0; 512];
-                                let mut hdr_cursor =
-                                    std::io::Cursor::new(&buf[..remaining as usize]);
-                                send_chunks(
-                                    ctx,
-                                    chunker,
-                                    tw,
-                                    &mut hdr_cursor,
-                                    Some(&mut on_chunk),
-                                )?;
-                            }
-                            if len != metadata.len() as usize {
-                                failure::bail!(
-                                    "length of {} changed while sending data",
-                                    ent_path.display()
-                                );
-                            }
+                    if metadata.is_file() {
+                        let mut f = std::fs::File::open(&ent_path)?;
+                        let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
+                        /* Tar entries are rounded to 512 bytes */
+                        let remaining = 512 - (len % 512);
+                        if remaining < 512 {
+                            let buf = [0; 512];
+                            let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
+                            send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
+                        }
+                        if len != metadata.len() as usize {
+                            failure::bail!(
+                                "length of {} changed while sending data",
+                                ent_path.display()
+                            );
                         }
                     }
+                }
 
-                    if let Some(chunk_data) = chunker.force_split() {
-                        let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
-                        on_chunk(&addr);
-                        tw.add(
-                            &addr,
-                            ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
-                        )?
-                    }
+                if let Some(chunk_data) = chunker.force_split() {
+                    let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                    on_chunk(&addr);
+                    tw.add(
+                        &addr,
+                        ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
+                    )?
+                }
 
-                    if send_log_tx.is_some() && ctx.use_stat_cache {
-                        send_log_tx
-                            .as_ref()
-                            .unwrap()
-                            .add_stat(&cur_dir, &hash[..], &addresses)?;
-                    }
+                if send_log_tx.is_some() && ctx.use_stat_cache {
+                    send_log_tx
+                        .as_ref()
+                        .unwrap()
+                        .add_stat(&cur_dir, &hash[..], &addresses)?;
                 }
             }
         }
