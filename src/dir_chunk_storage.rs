@@ -52,15 +52,13 @@ impl DirStorage {
         let mut data_path = self.dir_path.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam::channel::bounded(0);
-        let write_worker_tx_clone = write_worker_tx.clone();
 
         let mut pending_batch_rename = Vec::new();
 
         fn do_batch_rename(
             batch: &mut Vec<(PathBuf, PathBuf, std::fs::File)>,
         ) -> Result<(), std::io::Error> {
-            for i in 0..batch.len() {
-                let (_, _, f) = &batch[i];
+            for (_, _, f) in batch.iter() {
                 f.sync_data()?;
             }
 
@@ -170,7 +168,7 @@ impl DirStorage {
             .unwrap();
 
         self.write_worker_handles.push(worker);
-        self.write_worker_tx.push(write_worker_tx_clone);
+        self.write_worker_tx.push(write_worker_tx);
         Ok(())
     }
 

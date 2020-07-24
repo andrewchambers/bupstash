@@ -26,6 +26,7 @@ pub struct TBeginSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RBeginSend {
+    pub gc_generation: Xid,
     pub has_delta_id: bool,
 }
 
@@ -73,6 +74,8 @@ pub enum Packet {
     TBeginSend(TBeginSend),
     RBeginSend(RBeginSend),
     Chunk(Chunk),
+    TSendSync,
+    RSendSync,
     TAddItem(itemset::VersionedItemMetadata),
     RAddItem(Xid),
     TRmItems(Vec<Xid>),
@@ -99,27 +102,29 @@ pub enum Packet {
 const PACKET_KIND_SERVER_INFO: u8 = 0;
 const PACKET_KIND_T_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_R_BEGIN_SEND: u8 = 2;
-const PACKET_KIND_CHUNK: u8 = 3;
-const PACKET_KIND_T_ADD_ITEM: u8 = 4;
-const PACKET_KIND_R_ADD_ITEM: u8 = 5;
-const PACKET_KIND_T_RM_ITEMS: u8 = 6;
-const PACKET_KIND_R_RM_ITEMS: u8 = 7;
-const PACKET_KIND_T_REQUEST_DATA: u8 = 8;
-const PACKET_KIND_R_REQUEST_DATA: u8 = 9;
-const PACKET_KIND_T_GC: u8 = 10;
-const PACKET_KIND_R_GC: u8 = 11;
-const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 12;
-const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 13;
-const PACKET_KIND_SYNC_LOG_OPS: u8 = 14;
-const PACKET_KIND_T_REQUEST_CHUNK: u8 = 15;
-const PACKET_KIND_R_REQUEST_CHUNK: u8 = 16;
-const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 17;
-const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 18;
-const PACKET_KIND_STORAGE_CONNECT: u8 = 19;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 20;
-const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 21;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 22;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 23;
+const PACKET_KIND_T_SEND_SYNC: u8 = 3;
+const PACKET_KIND_R_SEND_SYNC: u8 = 4;
+const PACKET_KIND_CHUNK: u8 = 5;
+const PACKET_KIND_T_ADD_ITEM: u8 = 6;
+const PACKET_KIND_R_ADD_ITEM: u8 = 7;
+const PACKET_KIND_T_RM_ITEMS: u8 = 8;
+const PACKET_KIND_R_RM_ITEMS: u8 = 9;
+const PACKET_KIND_T_REQUEST_DATA: u8 = 10;
+const PACKET_KIND_R_REQUEST_DATA: u8 = 11;
+const PACKET_KIND_T_GC: u8 = 12;
+const PACKET_KIND_R_GC: u8 = 13;
+const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 14;
+const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 15;
+const PACKET_KIND_SYNC_LOG_OPS: u8 = 16;
+const PACKET_KIND_T_REQUEST_CHUNK: u8 = 17;
+const PACKET_KIND_R_REQUEST_CHUNK: u8 = 18;
+const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 19;
+const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 20;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 21;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 22;
+const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 23;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 24;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 25;
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -174,6 +179,8 @@ pub fn read_packet(
         PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_SEND_SYNC => Packet::TSendSync,
+        PACKET_KIND_R_SEND_SYNC => Packet::RSendSync,
         PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
@@ -236,6 +243,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             w.write_all(&b)?;
+        }
+        Packet::TSendSync => {
+            send_hdr(w, PACKET_KIND_T_SEND_SYNC, 0)?;
+        }
+        Packet::RSendSync => {
+            send_hdr(w, PACKET_KIND_R_SEND_SYNC, 0)?;
         }
         Packet::TAddItem(ref v) => {
             let b = serde_bare::to_vec(&v)?;
@@ -353,7 +366,10 @@ mod tests {
             Packet::TBeginSend(TBeginSend {
                 delta_id: Some(Xid::new()),
             }),
-            Packet::RBeginSend(RBeginSend { has_delta_id: true }),
+            Packet::RBeginSend(RBeginSend {
+                gc_generation: Xid::new(),
+                has_delta_id: true,
+            }),
             {
                 let primary_key = keys::PrimaryKey::gen();
                 Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {

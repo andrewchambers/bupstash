@@ -6,16 +6,31 @@ pub struct SendLog {
     conn: rusqlite::Connection,
 }
 
-pub struct SendLogTx<'a> {
-    sequence_number: i64,
-    tx: rusqlite::Transaction<'a>,
+pub struct SendLogSession<'a> {
+    gc_generation: Xid,
+    session_id: Xid,
+    tx_active: bool,
+    log: &'a mut SendLog,
 }
 
 impl SendLog {
     pub fn open(p: &PathBuf) -> Result<SendLog, failure::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
-        conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
+
         conn.busy_timeout(std::time::Duration::new(600, 0))?;
+        conn.set_prepared_statement_cache_capacity(8);
+
+        // We rely on exclusive locking for correctness, it is easier to
+        // reason about in terms of cache invalidation.
+        conn.query_row(
+            "pragma locking_mode = EXCLUSIVE;",
+            rusqlite::NO_PARAMS,
+            |_r| Ok(()),
+        )?;
+        conn.query_row("pragma journal_mode = WAL;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
+
         let tx = conn.transaction()?;
         tx.execute(
             "create table if not exists LogMeta(Key primary key, Value) without rowid; ",
@@ -49,7 +64,13 @@ impl SendLog {
             rusqlite::NO_PARAMS,
             |r| Ok(r.get(0)?),
         ) {
-            Ok(n) => n,
+            Ok(n) => {
+                tx.execute(
+                    "update LogMeta set Value = Value + 1 where Key = 'sequence-number';",
+                    rusqlite::NO_PARAMS,
+                )?;
+                n
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute(
                     "insert into LogMeta(Key, Value) values('sequence-number', 1);",
@@ -61,12 +82,12 @@ impl SendLog {
         };
 
         tx.execute(
-            "create table if not exists Sent(Addr primary key, Seq) without rowid; ",
+            "create table if not exists Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
         tx.execute(
-            "create table if not exists StatCache(Path primary key, Hash, Addresses, Seq) without rowid; ",
+            "create table if not exists StatCache(Hash primary key, Addresses, GCGeneration, LatestSessionId, ItemId) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -80,34 +101,22 @@ impl SendLog {
         Ok(SendLog { conn })
     }
 
-    pub fn transaction(self: &mut Self) -> Result<SendLogTx, failure::Error> {
-        let tx = self.conn.transaction()?;
+    pub fn session(self: &mut Self, gc_generation: Xid) -> Result<SendLogSession, failure::Error> {
+        // We manually control the sqlite3 transaction so we are able
+        // to issue checkpoints and commit part way through a send operation.
+        self.conn.execute("begin;", rusqlite::NO_PARAMS)?;
 
-        let sequence_number = match tx.query_row(
-            "select Value from LogMeta where Key = 'sequence-number';",
-            rusqlite::NO_PARAMS,
-            |r| Ok(r.get(0)?),
-        ) {
-            Ok(n) => n,
-            Err(err) => return Err(err.into()),
-        };
-
-        tx.execute(
-            "update LogMeta set Value = Value + 1 where Key = 'sequence-number';",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        Ok(SendLogTx {
-            sequence_number,
-            tx,
+        Ok(SendLogSession {
+            gc_generation,
+            session_id: Xid::new(),
+            log: self,
+            tx_active: true,
         })
     }
-}
 
-impl<'a> SendLogTx<'a> {
-    pub fn send_id(self: &Self) -> Result<Option<Xid>, failure::Error> {
-        match self.tx.query_row(
-            "select value from LogMeta where key = 'send-id';",
+    pub fn last_send_id(self: &Self) -> Result<Option<Xid>, failure::Error> {
+        match self.conn.query_row(
+            "select value from LogMeta where key = 'last-send-id';",
             rusqlite::NO_PARAMS,
             |r| {
                 let send_id: Xid = r.get(0)?;
@@ -119,88 +128,184 @@ impl<'a> SendLogTx<'a> {
             Err(err) => Err(err.into()),
         }
     }
+}
 
-    pub fn clear_log(self: &Self) -> Result<(), failure::Error> {
-        self.tx
-            .execute("delete from StatCache;", rusqlite::NO_PARAMS)?;
-        self.tx.execute("delete from Sent;", rusqlite::NO_PARAMS)?;
-        self.tx.execute(
-            "delete from LogMeta where Key = 'send-id';",
-            rusqlite::NO_PARAMS,
-        )?;
+impl<'a> SendLogSession<'a> {
+    pub fn last_send_id(self: &Self) -> Result<Option<Xid>, failure::Error> {
+        self.log.last_send_id()
+    }
+
+    pub fn perform_cache_invalidations(
+        self: &Self,
+        had_send_id: bool,
+    ) -> Result<(), failure::Error> {
+        if !self.tx_active {
+            panic!()
+        };
+
+        let last_send_id = self.log.last_send_id()?;
+
+        if had_send_id {
+            self.log.conn.execute(
+                "delete from Sent where (GCGeneration != ?) and (ItemId != ?);",
+                rusqlite::params![self.gc_generation, last_send_id],
+            )?;
+            self.log.conn.execute(
+                "delete from StatCache where (GCGeneration != ?) and (ItemId != ?);",
+                rusqlite::params![self.gc_generation, last_send_id],
+            )?;
+        } else {
+            self.log.conn.execute(
+                "delete from Sent where GCGeneration != ?;",
+                &[self.gc_generation],
+            )?;
+            self.log.conn.execute(
+                "delete from StatCache where GCGeneration != ?;",
+                &[self.gc_generation],
+            )?;
+        }
+
         Ok(())
     }
 
     pub fn add_address(self: &Self, addr: &Address) -> Result<(), failure::Error> {
-        let mut stmt = self
-            .tx
-            .prepare_cached("insert or replace into Sent(Addr, Seq) values(?, ?); ")?;
-        stmt.execute(rusqlite::params![&addr.bytes[..], self.sequence_number])?;
-        Ok(())
-    }
+        if !self.tx_active {
+            failure::bail!("no active transaction");
+        };
 
-    pub fn has_address(self: &Self, addr: &Address) -> Result<bool, failure::Error> {
-        let mut stmt = self.tx.prepare_cached("select 1 from Sent where Addr=?;")?;
-        match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
-            Ok(_) => Ok(true),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    pub fn add_stat(
-        &self,
-        p: &std::path::Path,
-        hash: &[u8],
-        addresses: &[u8],
-    ) -> Result<(), failure::Error> {
-        let p = p.to_str();
-        let mut stmt = self.tx.prepare_cached(
-            "insert or replace into StatCache(Seq, Path, Hash, Addresses) Values(?, ?, ?, ?);",
+        // We update and not replace so we can keep an old item id if it exists.
+        let mut stmt = self.log.conn.prepare_cached(
+            "insert into Sent(GCGeneration, LatestSessionId, Address) values($1, $2, $3) \
+             on conflict(Address) do update set LatestSessionId = $2;",
         )?;
-        stmt.execute(rusqlite::params![self.sequence_number, p, hash, addresses])?;
+
+        stmt.execute(rusqlite::params![
+            self.gc_generation,
+            self.session_id,
+            &addr.bytes[..]
+        ])?;
         Ok(())
     }
 
-    pub fn lookup_stat(
-        &self,
-        p: &std::path::Path,
-        hash: &[u8],
-    ) -> Result<Option<Vec<u8>>, failure::Error> {
-        let p = p.to_str();
-
+    pub fn cached_address(self: &Self, addr: &Address) -> Result<bool, failure::Error> {
         let mut stmt = self
-            .tx
-            .prepare_cached("select Addresses from StatCache where Path = ? and Hash = ?;")?;
+            .log
+            .conn
+            .prepare_cached("select 1 from Sent where Address = ?;")?;
 
-        let addresses = match stmt.query_row(rusqlite::params![p, hash], |r| Ok(r.get(0)?)) {
+        let hit = match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
+            Ok(_) => true,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(err) => return Err(err.into()),
+        };
+
+        Ok(hit)
+    }
+
+    pub fn add_stat_addresses(&self, hash: &[u8], addresses: &[u8]) -> Result<(), failure::Error> {
+        if !self.tx_active {
+            failure::bail!("no active transaction");
+        };
+
+        // We update and not replace so we can keep an old item id if it exists.
+        let mut stmt = self.log.conn.prepare_cached(
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses) Values($1, $2, $3, $4) \
+            on conflict(Hash) do update set LatestSessionId = $2;"
+        )?;
+
+        stmt.execute(rusqlite::params![
+            self.gc_generation,
+            self.session_id,
+            hash,
+            addresses
+        ])?;
+
+        // It's unclear to me if something like the following is worth doing:
+        //
+        // let mut addr = Address::default();
+        // for bytes in addresses.chunks(ADDRESS_SZ) {
+        //    addr.bytes[..].clone_from_slice(bytes);
+        // }
+        // self.add_address(&addr)?;
+        //
+        // We know the server has these addresses, but the higher level
+        // stat cache already skips sending them.
+
+        Ok(())
+    }
+
+    pub fn cached_stat_addresses(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, failure::Error> {
+        let mut stmt = self
+            .log
+            .conn
+            .prepare_cached("select Addresses from StatCache where Hash = ?;")?;
+
+        let addresses = match stmt.query_row(rusqlite::params![hash], |r| Ok(r.get(0)?)) {
             Ok(addresses) => addresses,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(err) => return Err(err.into()),
         };
 
-        let mut stmt = self
-            .tx
-            .prepare_cached("update StatCache set Seq = ? where Path = ? and Hash = ?;")?;
-
-        stmt.execute(rusqlite::params![self.sequence_number, p, hash])?;
-
         Ok(Some(addresses))
     }
 
-    pub fn commit(self: Self, id: &Xid) -> Result<(), failure::Error> {
-        self.tx.execute(
-            "delete from StatCache where Seq != ?;",
-            &[self.sequence_number],
+    pub fn checkpoint(&mut self) -> Result<(), failure::Error> {
+        debug_assert!(self.tx_active);
+
+        self.log.conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.tx_active = false;
+        self.log.conn.execute("begin;", rusqlite::NO_PARAMS)?;
+        self.tx_active = true;
+
+        Ok(())
+    }
+
+    pub fn commit(mut self, id: &Xid) -> Result<(), failure::Error> {
+        if !self.tx_active {
+            failure::bail!("no active transaction");
+        };
+
+        // To keep the cache bounded, delete everything
+        // that was not sent or updated during the current session.
+        self.log.conn.execute(
+            "delete from StatCache where LatestSessionId != ?;",
+            &[&self.session_id],
         )?;
-        self.tx
-            .execute("delete from Sent where Seq != ?;", &[self.sequence_number])?;
-        self.tx.execute(
-            "insert or replace into LogMeta(Key, Value) Values('send-id', ?);",
+
+        self.log.conn.execute(
+            "delete from Sent where LatestSessionId != ?;",
+            &[&self.session_id],
+        )?;
+
+        self.log.conn.execute(
+            "update StatCache set ItemId = ? where LatestSessionId = ?;",
+            &[id, &self.session_id],
+        )?;
+
+        self.log.conn.execute(
+            "update Sent set ItemId = ? where LatestSessionId = ?;",
+            &[id, &self.session_id],
+        )?;
+
+        self.log.conn.execute(
+            "insert or replace into LogMeta(Key, Value) Values('last-send-id', ?);",
             &[id],
         )?;
-        self.tx.commit()?;
+
+        self.log.conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.tx_active = false;
         Ok(())
+    }
+}
+
+impl<'a> Drop for SendLogSession<'a> {
+    fn drop(&mut self) {
+        if self.tx_active {
+            self.log
+                .conn
+                .execute("rollback;", rusqlite::NO_PARAMS)
+                .unwrap();
+        }
     }
 }
 
@@ -209,82 +314,185 @@ mod tests {
     use super::*;
 
     #[test]
-    fn send_log_sanity_test() {
+    fn cache_address_commit() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
             d.push("send.log");
             d
         };
-        let id1 = Xid::new();
-        let id2 = Xid::new();
+
+        let gc_generation = Xid::new();
+        let id = Xid::new();
+
+        let addr = Address::default();
+
         // Commit an address
         let mut sendlog = SendLog::open(&log_path).unwrap();
-        let addr = Address::default();
-        let tx = sendlog.transaction().unwrap();
-        assert_eq!(tx.send_id().unwrap(), None);
-        tx.add_address(&addr).unwrap();
-        assert!(tx.has_address(&addr).unwrap());
-        tx.commit(&id1).unwrap();
-        drop(sendlog);
+        {
+            let session = sendlog.session(gc_generation).unwrap();
 
-        // Ensure address is still present after reopening db.
-        let mut sendlog = SendLog::open(&log_path).unwrap();
-        let tx = sendlog.transaction().unwrap();
-        assert_eq!(tx.send_id().unwrap(), Some(id1));
-        assert!(tx.has_address(&addr).unwrap());
-
-        // Drop tx to avoid ab cycling
-        tx.commit(&id2).unwrap();
+            assert!(!session.cached_address(&addr).unwrap());
+            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            session.add_address(&addr).unwrap();
+            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            session.commit(&id).unwrap();
+        }
         drop(sendlog);
 
         let mut sendlog = SendLog::open(&log_path).unwrap();
-        let tx = sendlog.transaction().unwrap();
-        // Address should have been cycled.
-        assert!(!tx.has_address(&addr).unwrap());
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            assert_eq!(session.last_send_id().unwrap(), Some(id));
+            session.perform_cache_invalidations(false).unwrap();
+            // gc_generation is the same, so we keep cache.
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
+
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            assert_eq!(session.last_send_id().unwrap(), Some(id));
+            session.perform_cache_invalidations(true).unwrap();
+            // gc_generation is the same and we have the item id so we keep cache.
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
+
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(Xid::new()).unwrap();
+            assert_eq!(session.last_send_id().unwrap(), Some(id));
+            session.perform_cache_invalidations(false).unwrap();
+            // gc_generation differs, and we do not have the item id so we discard cache.
+            assert!(!session.cached_address(&addr).unwrap());
+            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
     }
 
     #[test]
-    fn stat_cache_sanity_test() {
+    fn cache_address_checkpoint() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
             d.push("send.log");
             d
         };
-        let id1 = Xid::new();
-        let id2 = Xid::new();
+
+        let gc_generation = Xid::new();
+        let addr = Address::default();
+
+        // checkpoint an address
         let mut sendlog = SendLog::open(&log_path).unwrap();
-        let tx = sendlog.transaction().unwrap();
-        let hash = &[0; 32][..];
-        let addresses = &[0; 64][..];
-        tx.add_stat(&PathBuf::from("/foo"), hash, addresses)
-            .unwrap();
+        {
+            let mut session = sendlog.session(gc_generation).unwrap();
+            session.add_address(&addr).unwrap();
+            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.checkpoint().unwrap();
+        }
+        drop(sendlog);
 
-        let addresses2: &[u8] = &tx
-            .lookup_stat(&PathBuf::from("/foo"), hash)
-            .unwrap()
-            .unwrap();
-        assert_eq!(addresses, addresses2);
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            session.perform_cache_invalidations(false).unwrap();
+            // gc_generation is the same, so we keep cache.
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
 
-        tx.commit(&id1).unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            session.perform_cache_invalidations(true).unwrap();
+            // gc_generation is the same so we keep cache.
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
 
-        let tx = sendlog.transaction().unwrap();
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(Xid::new()).unwrap();
+            session.perform_cache_invalidations(false).unwrap();
+            // gc_generation differs, so we discard cache.
+            assert!(!session.cached_address(&addr).unwrap());
+            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
+    }
 
-        assert!(&tx
-            .lookup_stat(&PathBuf::from("/foo"), hash)
-            .unwrap()
-            .is_some());
+    #[test]
+    fn cache_address_commit_then_checkpoint() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let log_path = {
+            let mut d = PathBuf::from(tmp_dir.path());
+            d.push("send.log");
+            d
+        };
 
-        tx.clear_log().unwrap();
+        let gc_generation = Xid::new();
+        let id = Xid::new();
 
-        assert!(&tx
-            .lookup_stat(&PathBuf::from("/foo"), hash)
-            .unwrap()
-            .is_none());
+        let addr = Address::default();
 
-        tx.commit(&id2).unwrap();
+        // Commit an address.
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            session.add_address(&addr).unwrap();
+            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.commit(&id).unwrap();
+        }
+        drop(sendlog);
 
+        // checkpoint that address.
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let mut session = sendlog.session(gc_generation).unwrap();
+            session.add_address(&addr).unwrap();
+            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.checkpoint().unwrap();
+        }
+        drop(sendlog);
+
+        // checkpoint again, without adding..
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let mut session = sendlog.session(gc_generation).unwrap();
+            session.checkpoint().unwrap();
+        }
+        drop(sendlog);
+
+        // check we still have the cache.
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(gc_generation).unwrap();
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            session.perform_cache_invalidations(true).unwrap();
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            session.perform_cache_invalidations(false).unwrap();
+            assert!(session.cached_address(&addr).unwrap());
+            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
+        drop(sendlog);
+
+        let mut sendlog = SendLog::open(&log_path).unwrap();
+        {
+            let session = sendlog.session(Xid::new()).unwrap();
+            session.perform_cache_invalidations(false).unwrap();
+            assert!(!session.cached_address(&addr).unwrap());
+            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+        }
         drop(sendlog);
     }
 }

@@ -555,7 +555,7 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     } else {
         match matches.opt_str("send-log") {
             Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
-            None => match std::env::var_os("BUPSTASH_PUT_CACHE") {
+            None => match std::env::var_os("BUPSTASH_SEND_LOG") {
                 Some(send_log) => {
                     Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
                 }

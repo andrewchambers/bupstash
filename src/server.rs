@@ -75,6 +75,7 @@ fn recv(
     write_packet(
         w,
         &Packet::RBeginSend(RBeginSend {
+            gc_generation: repo.gc_generation()?,
             has_delta_id: if let Some(delta_id) = begin.delta_id {
                 repo.has_item_with_id(&delta_id)?
             } else {
@@ -89,6 +90,10 @@ fn recv(
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
                 store_engine.add_chunk(&chunk.address, chunk.data)?;
+            }
+            Packet::TSendSync => {
+                store_engine.sync()?;
+                write_packet(w, &Packet::RSendSync)?;
             }
             Packet::TAddItem(md) => {
                 store_engine.sync()?;

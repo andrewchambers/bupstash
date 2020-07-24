@@ -35,7 +35,9 @@ pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failu
 }
 
 struct ConnectionHtreeSink<'a, 'b> {
-    tx: &'a Option<sendlog::SendLogTx<'b>>,
+    last_checkpoint_time: std::time::Instant,
+    send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
+    r: &'a mut dyn std::io::Read,
     w: &'a mut dyn std::io::Write,
 }
 
@@ -45,11 +47,11 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> std::result::Result<(), failure::Error> {
-        match self.tx {
-            Some(ref tx) => {
-                if tx.has_address(addr)? {
-                    tx.add_address(addr)?;
-                    Ok(())
+        match self.send_log_session {
+            Some(ref send_log_session) => {
+                let mut send_log_session = send_log_session.borrow_mut();
+                if send_log_session.cached_address(addr)? {
+                    send_log_session.add_address(addr)?;
                 } else {
                     write_packet(
                         self.w,
@@ -58,9 +60,26 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                             data,
                         }),
                     )?;
-                    tx.add_address(addr)?;
-                    Ok(())
+                    send_log_session.add_address(addr)?;
                 }
+
+                // Perform a data sync and checkpoint periodically to save our progress.
+                let now = std::time::Instant::now();
+                let duration_since_last_checkpoint =
+                    now.saturating_duration_since(self.last_checkpoint_time);
+
+                if std::time::Duration::from_secs(1800) < duration_since_last_checkpoint {
+                    self.last_checkpoint_time = now;
+                    write_packet(self.w, &Packet::TSendSync)?;
+                    match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
+                        Packet::RSendSync => {
+                            send_log_session.checkpoint()?;
+                        }
+                        _ => failure::bail!("protocol error, expected RSentSync packet"),
+                    }
+                }
+
+                Ok(())
             }
             None => {
                 write_packet(
@@ -100,13 +119,10 @@ pub fn send(
     tags: BTreeMap<String, Option<String>>,
     data: DataSource,
 ) -> Result<Xid, failure::Error> {
-    let (send_log_tx, send_id) = match send_log {
-        Some(ref mut send_log) => {
-            let tx = send_log.transaction()?;
-            let send_id = tx.send_id()?;
-            (Some(tx), send_id)
-        }
-        None => (None, None),
+    let send_id = match send_log {
+        Some(ref mut send_log) => send_log.last_send_id()?,
+
+        None => None,
     };
 
     write_packet(w, &Packet::TBeginSend(TBeginSend { delta_id: send_id }))?;
@@ -116,15 +132,24 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    if let Some(ref tx) = send_log_tx {
-        if !ack.has_delta_id {
-            tx.clear_log()?;
-        }
+    let send_log_session = match send_log {
+        Some(ref mut send_log) => Some(std::cell::RefCell::new(
+            send_log.session(ack.gc_generation)?,
+        )),
+        None => None,
+    };
+
+    if let Some(ref send_log_session) = send_log_session {
+        send_log_session
+            .borrow_mut()
+            .perform_cache_invalidations(ack.has_delta_id)?;
     }
 
     let mut sink = ConnectionHtreeSink {
-        tx: &send_log_tx,
+        last_checkpoint_time: std::time::Instant::now(),
+        send_log_session: &send_log_session,
         w,
+        r,
     };
 
     let min_size = 256 * 1024;
@@ -153,7 +178,7 @@ pub fn send(
             send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
         DataSource::Directory(path) => {
-            send_dir(ctx, &mut chunker, &mut tw, &send_log_tx, &path)?;
+            send_dir(ctx, &mut chunker, &mut tw, &send_log_session, &path)?;
         }
     }
 
@@ -191,8 +216,8 @@ pub fn send(
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RAddItem(id) => {
-            if send_log_tx.is_some() {
-                send_log_tx.unwrap().commit(&id)?;
+            if send_log_session.is_some() {
+                send_log_session.unwrap().into_inner().commit(&id)?;
             }
             Ok(id)
         }
@@ -272,8 +297,7 @@ fn dirent_to_tarheader(
     match ustar_hdr.set_path(&short_path) {
         Ok(()) => (),
         Err(e) => {
-            /* 100 is more than ustar can handle, this confirms the
-            reason for failure... */
+            /* 100 is more than ustar can handle as a path parget */
             if short_path.as_os_str().len() > 100 {
                 let path_bytes = short_path.as_os_str().as_bytes();
                 let path_record = format_pax_extended_record(b"path", path_bytes);
@@ -321,8 +345,7 @@ fn dirent_to_tarheader(
             match ustar_hdr.set_link_name(&target) {
                 Ok(()) => (),
                 Err(e) => {
-                    /* 100 is more than ustar can handle, this confirms the
-                    reason for failure... */
+                    /* 100 is more than ustar can handle as a link parget */
                     if target.as_os_str().len() > 100 {
                         let target_bytes = target.as_os_str().as_bytes();
                         let target_record = format_pax_extended_record(b"linkpath", target_bytes);
@@ -364,7 +387,7 @@ fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
-    send_log_tx: &Option<sendlog::SendLogTx>,
+    send_log_session: &Option<std::cell::RefCell<sendlog::SendLogSession>>,
     path: &std::path::PathBuf,
 ) -> Result<(), failure::Error> {
     let path = fsutil::absolute_path(&path)?;
@@ -376,6 +399,11 @@ fn send_dir(
     while let Some(cur_dir) = work_list.pop_front() {
         addresses.clear();
         let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
+        // Incorporate the absolute dir in our cache key.
+        hash_state.update(cur_dir.as_os_str().as_bytes());
+        // Null byte marks the end of path and tar headers in the hash space.
+        hash_state.update(&[0]);
+
         let mut dir_ents = Vec::new();
 
         for entry in std::fs::read_dir(&cur_dir)? {
@@ -413,8 +441,12 @@ fn send_dir(
 
         let hash = hash_state.finish();
 
-        let cache_lookup = if send_log_tx.is_some() && ctx.use_stat_cache {
-            send_log_tx.as_ref().unwrap().lookup_stat(&cur_dir, &hash)?
+        let cache_lookup = if send_log_session.is_some() && ctx.use_stat_cache {
+            send_log_session
+                .as_ref()
+                .unwrap()
+                .borrow_mut()
+                .cached_stat_addresses(&hash)?
         } else {
             None
         };
@@ -427,6 +459,12 @@ fn send_dir(
                     address.bytes[..].clone_from_slice(cached_address);
                     tw.add_addr(0, &address)?;
                 }
+
+                send_log_session
+                    .as_ref()
+                    .unwrap()
+                    .borrow_mut()
+                    .add_stat_addresses(&hash[..], &addresses)?;
             }
             None => {
                 let mut on_chunk = |addr: &Address| {
@@ -465,11 +503,12 @@ fn send_dir(
                     )?
                 }
 
-                if send_log_tx.is_some() && ctx.use_stat_cache {
-                    send_log_tx
+                if send_log_session.is_some() && ctx.use_stat_cache {
+                    send_log_session
                         .as_ref()
                         .unwrap()
-                        .add_stat(&cur_dir, &hash[..], &addresses)?;
+                        .borrow_mut()
+                        .add_stat_addresses(&hash[..], &addresses)?;
                 }
             }
         }
