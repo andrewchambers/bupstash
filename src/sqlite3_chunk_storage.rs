@@ -423,7 +423,9 @@ impl Engine for Sqlite3Storage {
         {
             let mut incr_vacuum_stmt = db.prepare("pragma incremental_vacuum;")?;
             let mut rows = incr_vacuum_stmt.query(rusqlite::NO_PARAMS)?;
-            while let Some(_) = rows.next()? {}
+            while rows.next()?.is_some() {
+                // do nothing, just process vacuum steps.
+            }
         }
 
         // Needed for db size change to appear, (at least on btrfs).
