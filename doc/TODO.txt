@@ -15,8 +15,8 @@ Need to do:
 - Hardlink support
 - timestamp in encrypted metadata header instead of tags?
 - Add gc generation fence.
-- Posix fadvise for dir send, we don't need to thrash fs page cache.
 - Torture test in cli suite for send checkpointing.
+- Allow user to specify checkpoint duration.
 
 - Send permission denied: Permission denied (os error 13), add path.
 

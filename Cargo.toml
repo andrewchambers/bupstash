@@ -35,6 +35,7 @@ zstd = "0.5"
 chrono = "0.4"
 cfg-if = "0.1"
 shlex = "0.1.1"
+nix= "0.17.0"
 
 [build-dependencies]
 pkg-config = "0.3"

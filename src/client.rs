@@ -7,14 +7,14 @@ use super::itemset;
 use super::protocol::*;
 use super::querycache;
 use super::repository;
-use super::xtar;
 use super::rollsum;
 use super::sendlog;
 use super::xid::*;
+use super::xtar;
 use failure::Fail;
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
-
+use std::os::unix::io::AsRawFd;
 
 #[derive(Debug, Fail)]
 pub enum ClientError {
@@ -355,7 +355,20 @@ fn send_dir(
 
                     if metadata.is_file() {
                         let mut f = std::fs::File::open(&ent_path)?;
+
+                        // For linux at least, shift file pages to the tail of the page cache, allowing
+                        // the kernel to quickly evict these pages. This works well for the case of system
+                        // backups, where we don't to trash the users current cache.
+                        // One source on how linux treats this hint - https://lwn.net/Articles/449420"
+                        nix::fcntl::posix_fadvise(
+                            f.as_raw_fd(),
+                            0,
+                            0,
+                            nix::fcntl::PosixFadviseAdvice::POSIX_FADV_NOREUSE,
+                        )?;
+
                         let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
+                        
                         /* Tar entries are rounded to 512 bytes */
                         let remaining = 512 - (len % 512);
                         if remaining < 512 {
@@ -391,6 +404,8 @@ fn send_dir(
             }
         }
     }
+
+    // The final entry in a tarball is two empty files.
     let buf = [0; 1024];
     let mut trailer_cursor = std::io::Cursor::new(&buf[..]);
     send_chunks(ctx, chunker, tw, &mut trailer_cursor, None)?;

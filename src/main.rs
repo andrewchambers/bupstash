@@ -16,10 +16,10 @@ pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
-pub mod xtar;
 pub mod sqlite3_chunk_storage;
 pub mod tquery;
 pub mod xid;
+pub mod xtar;
 
 use failure::Fail;
 use getopts::{Matches, Options};
