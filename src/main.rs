@@ -304,27 +304,6 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     Ok(serve_proc)
 }
 
-fn localize_timestamp_tag(tags: &mut std::collections::BTreeMap<String, Option<String>>) {
-    let ts = match tags.get("timestamp") {
-        Some(Some(ts)) => match chrono::NaiveDateTime::parse_from_str(ts, "%F %T") {
-            Ok(ts) => {
-                let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
-                let ts: chrono::DateTime<chrono::Local> = chrono::DateTime::from(ts);
-                Some(ts)
-            }
-            Err(_) => None,
-        },
-        _ => None,
-    };
-
-    if let Some(ts) = ts {
-        tags.insert(
-            "timestamp".to_string(),
-            Some(ts.format("%F %T").to_string()),
-        );
-    }
-}
-
 enum ListFormat {
     Human,
     Jsonl,
@@ -400,16 +379,26 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
                 let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                 let mut tags = encrypted_metadata.tags;
+
+                // Add special builtin tags.
                 tags.insert("id".to_string(), Some(item_id.to_string()));
-                if !matches.opt_present("utc-timestamps") {
-                    localize_timestamp_tag(&mut tags);
-                }
+
+                let ts = if matches.opt_present("utc-timestamps") {
+                    encrypted_metadata.timestamp.format("%F %T").to_string()
+                } else {
+                    let local_ts: chrono::DateTime<chrono::Local> =
+                        chrono::DateTime::from(encrypted_metadata.timestamp);
+                    local_ts.format("%F %T").to_string()
+                };
+                tags.insert("timestamp".to_string(), Some(ts));
+
                 let doprint = match query {
                     Some(ref query) => tquery::query_matches(query, &tags),
                     None => true,
                 };
 
                 let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+
                 // Custom sort to be more human friendly.
                 tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
                     ("id", _) => std::cmp::Ordering::Less,
@@ -475,7 +464,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
+fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
 
     opts.optopt(
@@ -508,18 +497,18 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag(
         "",
         "no-stat-cache",
-        "Do not use the stat caching when sending a directory snapshot.",
+        "Do not use stat caching to skip sending directories to the server.",
     );
     opts.optflag(
         "",
         "no-send-log",
-        "Do not use any memory remembering what data chunks have previously been sent to the server.",
+        "Disable logging of previously sent data, implies --no-stat-cache.",
     );
 
     opts.optopt(
         "",
         "send-log",
-        "Use send log to avoid resending data that was sent previously.",
+        "Use the file at PATH as a 'send log', used to skip data that was previously to the server.",
         "PATH",
     );
 
@@ -592,12 +581,6 @@ fn send_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut tags = BTreeMap::<String, Option<String>>::new();
 
     let default_tags = !matches.opt_present("no-default-tags");
-    if default_tags {
-        use chrono::prelude::*;
-        let now: DateTime<Utc> = Utc::now();
-        let now = now.format("%F %T");
-        tags.insert("timestamp".to_string(), Some(now.to_string()));
-    }
 
     let data_source: client::DataSource;
 
@@ -741,10 +724,19 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                         let mut tags = encrypted_metadata.tags;
+
+                        // Add special builtin tags.
                         tags.insert("id".to_string(), Some(item_id.to_string()));
-                        if !matches.opt_present("utc-timestamps") {
-                            localize_timestamp_tag(&mut tags);
-                        }
+
+                        let ts = if matches.opt_present("utc-timestamps") {
+                            encrypted_metadata.timestamp.format("%F %T").to_string()
+                        } else {
+                            let local_ts: chrono::DateTime<chrono::Local> =
+                                chrono::DateTime::from(encrypted_metadata.timestamp);
+                            local_ts.format("%F %T").to_string()
+                        };
+                        tags.insert("timestamp".to_string(), Some(ts));
+
                         if tquery::query_matches(&query, &tags) {
                             n_matches += 1;
                             id = item_id;
@@ -838,10 +830,17 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
                         let mut tags = encrypted_metadata.tags;
 
+                        // Add special builtin tags.
                         tags.insert("id".to_string(), Some(item_id.to_string()));
-                        if !matches.opt_present("utc-timestamps") {
-                            localize_timestamp_tag(&mut tags);
-                        }
+
+                        let ts = if matches.opt_present("utc-timestamps") {
+                            encrypted_metadata.timestamp.format("%F %T").to_string()
+                        } else {
+                            let local_ts: chrono::DateTime<chrono::Local> =
+                                chrono::DateTime::from(encrypted_metadata.timestamp);
+                            local_ts.format("%F %T").to_string()
+                        };
+                        tags.insert("timestamp".to_string(), Some(ts));
 
                         if tquery::query_matches(&query, &tags) {
                             ids.push(item_id);
@@ -972,10 +971,10 @@ fn main() {
     let result = match subcommand.as_str() {
         "init" => init_main(args),
         "new-key" => new_key_main(args),
-        "new-send-key" => new_send_key_main(args),
+        "new-put-key" => new_send_key_main(args),
         "new-metadata-key" => new_metadata_key_main(args),
         "list" => list_main(args),
-        "send" => send_main(args),
+        "put" => put_main(args),
         "get" => get_main(args),
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),

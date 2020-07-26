@@ -66,6 +66,12 @@ pub struct StorageConnect {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct AddItem {
+    pub gc_generation: Xid,
+    pub item: itemset::VersionedItemMetadata,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct StorageBeginGC {}
 
 #[derive(Debug, PartialEq)]
@@ -76,7 +82,7 @@ pub enum Packet {
     Chunk(Chunk),
     TSendSync,
     RSendSync,
-    TAddItem(itemset::VersionedItemMetadata),
+    TAddItem(AddItem),
     RAddItem(Xid),
     TRmItems(Vec<Xid>),
     RRmItems,
@@ -372,14 +378,17 @@ mod tests {
             }),
             {
                 let primary_key = keys::PrimaryKey::gen();
-                Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                    plain_text_metadata: itemset::PlainTextItemMetadata {
-                        address: Address::default(),
-                        tree_height: 3,
-                        primary_key_id: primary_key.id,
-                    },
-                    encrypted_metadata: vec![1, 2, 3],
-                }))
+                Packet::TAddItem(AddItem {
+                    gc_generation: Xid::new(),
+                    item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+                        plain_text_metadata: itemset::PlainTextItemMetadata {
+                            address: Address::default(),
+                            tree_height: 3,
+                            primary_key_id: primary_key.id,
+                        },
+                        encrypted_metadata: vec![1, 2, 3],
+                    }),
+                })
             },
             Packet::RAddItem(Xid::default()),
             Packet::TRmItems(vec![Xid::default()]),

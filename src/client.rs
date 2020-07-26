@@ -121,7 +121,6 @@ pub fn send(
 ) -> Result<Xid, failure::Error> {
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
-
         None => None,
     };
 
@@ -200,18 +199,22 @@ pub fn send(
         plain_text_hash: plain_text_metadata.hash(),
         send_key_id: ctx.send_key_id,
         hash_key_part_2: ctx.hash_key.part2.clone(),
+        timestamp: chrono::Utc::now(),
         tags,
     };
 
     write_packet(
         w,
-        &Packet::TAddItem(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-            plain_text_metadata,
-            encrypted_metadata: ctx.metadata_ectx.encrypt_data(
-                serde_bare::to_vec(&e_metadata)?,
-                crypto::DataCompression::Zstd,
-            ),
-        })),
+        &Packet::TAddItem(AddItem {
+            gc_generation: ack.gc_generation,
+            item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+                plain_text_metadata,
+                encrypted_metadata: ctx.metadata_ectx.encrypt_data(
+                    serde_bare::to_vec(&e_metadata)?,
+                    crypto::DataCompression::Zstd,
+                ),
+            }),
+        }),
     )?;
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -368,7 +371,7 @@ fn send_dir(
                         )?;
 
                         let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
-                        
+
                         /* Tar entries are rounded to 512 bytes */
                         let remaining = 512 - (len % 512);
                         if remaining < 512 {

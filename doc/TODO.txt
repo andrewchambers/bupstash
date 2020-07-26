@@ -1,19 +1,14 @@
 Need to do:
 
-- Rename send -> put ?
 - Improve documentation on key exchange packet and 'box' structure.
-- Detailed and nice man pages, scdoc.
+- Detailed and nice man pages.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
-- Rename send-log to --cache ?
 - Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
-- RRequestChunk optional in reply?
 - Init should respect BUPSTASH_REPOSITORY.
 - init should work for remote repositories.
 - Metadata must track sending key id in case we need to audit it.
-- change name to no-stat-caching
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support
-- timestamp in encrypted metadata header instead of tags?
 - Add gc generation fence.
 - Torture test in cli suite for send checkpointing.
 - Allow user to specify checkpoint duration.
@@ -69,3 +64,4 @@ Unclassified:
 
 - consider/benchmark PRAGMA synchronous.
 
+- failure error package is deprecated.

@@ -95,9 +95,24 @@ fn recv(
                 store_engine.sync()?;
                 write_packet(w, &Packet::RSendSync)?;
             }
-            Packet::TAddItem(md) => {
+            Packet::TAddItem(add_item) => {
+                /*
+                  We explicitly check the gc_generation again matches what it was
+                  when we started, this is not strictly needed with our current locking
+                  rules, but it easy to imagine a situation with flock failing on a network
+                  file system that uses leases. Essentially gc_generation is a fence token
+                  preventing gc and upload in parallel in the case exclusive locking failed.
+
+                  Since the protocol supports this fencing, we could potentially add optimisitc concurrency
+                  in the future with looser locking semantics.
+                */
+                if add_item.gc_generation != repo.gc_generation()? {
+                    failure::bail!("gc generation changed during send, aborting");
+                }
+
                 store_engine.sync()?;
-                let item_id = repo.add_item(md)?;
+
+                let item_id = repo.add_item(add_item.item)?;
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
             }

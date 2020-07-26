@@ -14,7 +14,7 @@ setup () {
   mkdir "$SCRATCH"
   bupstash init '--storage={"Sqlite3":{"db_path": "./data.sqlite3"}}' "$REPO"
   bupstash new-key -o "$PRIMARY_KEY"
-  bupstash new-send-key -k "$PRIMARY_KEY" -o "$SEND_KEY"
+  bupstash new-put-key -k "$PRIMARY_KEY" -o "$SEND_KEY"
   bupstash new-metadata-key -k "$PRIMARY_KEY" -o "$METADATA_KEY"
 }
 
@@ -32,24 +32,24 @@ teardown () {
   test -f "$METADATA_KEY"
 }
 
-@test "simple send recv primary key" {
+@test "simple put/get primary key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get -k "$PRIMARY_KEY" id=$id )"
 }
 
-@test "simple send recv send key" {
+@test "simple put/get put key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get -k "$PRIMARY_KEY" id=$id )"
 }
 
-@test "simple send recv no compression" {
+@test "simple put/get no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send --no-compression -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put --no-compression -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get -k "$PRIMARY_KEY" id=$id )"
 }
 
@@ -58,7 +58,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     head -c $i /dev/urandom > "$SCRATCH/rand.dat"
-    id="$(bupstash send -k "$SEND_KEY" :: "$SCRATCH/rand.dat")"
+    id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/rand.dat")"
     bupstash get -k "$PRIMARY_KEY" id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
@@ -70,7 +70,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     yes | head -c $i > "$SCRATCH/yes.dat"
-    id="$(bupstash send -k "$SEND_KEY" :: "$SCRATCH/yes.dat")"
+    id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/yes.dat")"
     bupstash get -k "$PRIMARY_KEY" id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
@@ -80,7 +80,7 @@ teardown () {
 @test "key mismatch" {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
   bupstash new-key -o "$SCRATCH/wrong.key"
   run bupstash get -k "$SCRATCH/wrong.key" id=$id
   echo "$output" | grep -q "key does not match"
@@ -93,7 +93,7 @@ teardown () {
 @test "corruption detected" {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
   sqlite3 "$REPO"/data.sqlite3 "update Chunks set Data = X'00000011102222222222044446';";
   run bupstash get -k "$PRIMARY_KEY" id=$id
   echo "$output"
@@ -108,7 +108,7 @@ _concurrent_send_test_worker () {
   set -e
   for i in $(seq 10)
   do
-    id="$(bupstash send -e --no-send-log -k "$PRIMARY_KEY" :: echo $i)"
+    id="$(bupstash put -e --no-send-log -k "$PRIMARY_KEY" :: echo $i)"
     test "$i" = "$(bupstash get -k "$PRIMARY_KEY" id=$id)"
   done
 }
@@ -125,7 +125,7 @@ _concurrent_send_test_worker () {
 @test "simple search and listing" {
   for i in $(seq 100) # Enough to trigger more than one sync packet.
   do
-    bupstash send -e -k "$PRIMARY_KEY"  "i=$i" :: echo $i
+    bupstash put -e -k "$PRIMARY_KEY"  "i=$i" :: echo $i
   done
   for k in $PRIMARY_KEY $METADATA_KEY
   do
@@ -138,8 +138,8 @@ _concurrent_send_test_worker () {
 @test "rm and gc" {
   bupstash list -k "$PRIMARY_KEY"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  id1="$(bupstash send -k "$PRIMARY_KEY" -e :: echo hello1)"
-  id2="$(bupstash send -k "$PRIMARY_KEY" -e :: echo hello2)"
+  id1="$(bupstash put -k "$PRIMARY_KEY" -e :: echo hello1)"
+  id2="$(bupstash put -k "$PRIMARY_KEY" -e :: echo hello2)"
   bupstash list -k "$PRIMARY_KEY"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
@@ -167,9 +167,9 @@ _concurrent_send_test_worker () {
 }
 
 @test "query sync" {
-  id1="$(bupstash send -k "$PRIMARY_KEY" -e :: echo hello1)"
+  id1="$(bupstash put -k "$PRIMARY_KEY" -e :: echo hello1)"
   test 1 = $(bupstash list -k "$PRIMARY_KEY" | wc -l)
-  id2="$(bupstash send -k "$PRIMARY_KEY" -e :: echo hello2)"
+  id2="$(bupstash put -k "$PRIMARY_KEY" -e :: echo hello2)"
   test 2 = $(bupstash list -k "$PRIMARY_KEY" | wc -l)
   bupstash rm id=$id1
   test 1 = $(bupstash list -k "$PRIMARY_KEY" | wc -l)
@@ -182,16 +182,16 @@ _concurrent_send_test_worker () {
 }
 
 @test "get via query" {
-  bupstash send -e -k "$PRIMARY_KEY" foo=bar ::  echo -n hello1 
-  bupstash send -e -k "$PRIMARY_KEY" foo=baz ::  echo -n hello2 
-  bupstash send -e -k "$PRIMARY_KEY" foo=bang :: echo -n hello2 
+  bupstash put -e -k "$PRIMARY_KEY" foo=bar ::  echo -n hello1 
+  bupstash put -e -k "$PRIMARY_KEY" foo=baz ::  echo -n hello2 
+  bupstash put -e -k "$PRIMARY_KEY" foo=bang :: echo -n hello2 
   test "hello2" = $(bupstash get -k "$PRIMARY_KEY" "foo=ban*")
 }
 
 @test "rm via query" {
-  bupstash send -e -k "$PRIMARY_KEY"  foo=bar :: echo -n hello1 
-  bupstash send -e -k "$PRIMARY_KEY"  foo=baz :: echo -n hello2
-  bupstash send -e -k "$PRIMARY_KEY"  foo=bang :: echo -n hello2
+  bupstash put -e -k "$PRIMARY_KEY"  foo=bar :: echo -n hello1 
+  bupstash put -e -k "$PRIMARY_KEY"  foo=baz :: echo -n hello2
+  bupstash put -e -k "$PRIMARY_KEY"  foo=bang :: echo -n hello2
   test 3 = $(bupstash list -k "$PRIMARY_KEY" | wc -l)
   if bupstash rm -k "$PRIMARY_KEY" "foo=*"
   then
@@ -209,10 +209,10 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   test 5 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
   # Test again to excercise stat caching.
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   test 5 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }
 
@@ -222,19 +222,19 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
-  id=$(bupstash send -k "$PRIMARY_KEY" --no-send-log :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" --no-send-log :: "$SCRATCH/foo")
   test 5 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
-  id=$(bupstash send -k "$PRIMARY_KEY" --no-stat-cache :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" --no-stat-cache :: "$SCRATCH/foo")
   test 5 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }
 
 @test "stat cache invalidated" {
   mkdir "$SCRATCH/foo"
   echo a > "$SCRATCH/foo/a.txt"
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   bupstash rm -k "$PRIMARY_KEY" id=$id
   bupstash gc
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   bupstash get -k "$PRIMARY_KEY" id=$id > /dev/null
 }
 
@@ -243,7 +243,7 @@ _concurrent_send_test_worker () {
   unset BUPSTASH_REPOSITORY
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get -k "$PRIMARY_KEY" id=$id )"
 }
 
@@ -251,7 +251,7 @@ _concurrent_send_test_worker () {
   export BUPSTASH_KEY_COMMAND="cat $PRIMARY_KEY"
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash send :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
@@ -262,7 +262,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l
   test 7 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }
@@ -275,6 +275,6 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
     "$SCRATCH/foo/l"
-  id=$(bupstash send -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }
