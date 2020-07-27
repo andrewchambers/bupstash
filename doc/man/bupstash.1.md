@@ -10,8 +10,8 @@ Run one of the following `bupstash` subcommands.
 `bupstash new-put-key ...`<br>
 `bupstash new-metadata-key ...`<br>
 `bupstash put ...`<br>
-`bupstash get ...`<br>
 `bupstash list ...`<br>
+`bupstash get ...`<br>
 `bupstash rm ...`<br>
 `bupstash gc ...`<br>
 `bupstash serve ...`<br>
@@ -73,22 +73,33 @@ $ export BUPSTASH_KEY=backups.key
 
 # Save a directory as a tarball snapshot.
 $ bupstash put hostname=$(hostname) :: ./some-data
-XXX
+ebb66f3baa5d432e9f9a28934888a23d
 
 # Save a file.
 $ bupstash put hostname=$(hostname) :: ./some-file.txt
-XXX
+bcb8684e6bf5cb453e77486decf61685
 
-# Save the output of a command, checking for errors 
+# Save the output of a command, checking for errors.
 $ bupstash put --exec hostname=$(hostname) name=database.sql :: pgdump ...
+14ebd2073b258b1f55c5bbc889c49db4
 
+# List items matching a query.
 $ bupstash list name=*.txt and hostname=$(hostname)
-XXX
-$ bupstash get id=
-...
-$ bupstash rm id=
+id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020-07-27 11:26:16"
+
+# Get an item matching a query.
+$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
+some data.
+
+# Remove items matching a query.
+$ bupstash rm name=some-data.txt
+
+# Remove everything.
+$ bupstash rm --allow-many id=*
+
+# Run the garbage collector to reclaim disk space.
 $ bupstash gc
-XXX
+
 ```
 
 ### Offline decryption key
@@ -103,8 +114,10 @@ $ bupstash new-put-key -k backups.key -o backups-put.key
 $ shred backups.key
 
 $ bupstash put -k backups-put.key :: ./data
-
+14ebd2073b258b1f55c5bbc889c49db4
 ... After emergency, get decryption key from offline storage ...
+
+$ bupstash get -k backups.key id=14ebd2073b258b1f55c5bbc889c49db4 | tar -C ./restore -xf - 
 ```
 
 

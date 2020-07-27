@@ -25,9 +25,9 @@ primary key.
 
 ## OPTIONS
 
-* -k, --key:
+* -k, --key PATH:
   Primary key to derive the new put-key from.
-* -o, --output:
+* -o, --output PATH:
   Path to where the put-key will be written.
 
 ## EXAMPLES

@@ -6,14 +6,10 @@ Need to do:
 - Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
 - Init should respect BUPSTASH_REPOSITORY.
 - init should work for remote repositories.
-- Metadata must track sending key id in case we need to audit it.
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support
-- Add gc generation fence.
-- Torture test in cli suite for send checkpointing.
-- Allow user to specify checkpoint duration.
-
-- Send permission denied: Permission denied (os error 13), add path.
+- Torture test in cli suite for send checkpointing.=-[[[[t duration.
+- Send permission denied: Permission denied (os error 13), add path to error message.
 
 Can do later (medium term):
 

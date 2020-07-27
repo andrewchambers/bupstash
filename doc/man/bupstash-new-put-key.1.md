@@ -28,19 +28,18 @@ to a put key from corrupting uploads made by other keys.
 
 ## OPTIONS
 
-* -k, --key:
+* -k, --key PATH:
   Primary key to derive the new put-key from.
-* -o, --output:
+* -o, --output PATH:
   Path to where the put-key will be written.
 
 ## EXAMPLES
 
-### Create a new put key
+### Create a new put key and use it
 ```
 $ bupstash new-key -o ./backups.key
 $ bupstash new-put-key -o ./backups-put.key
-$ ID=$(bupstash put -k ./backups-put.key :: ./data)
-$ bupstash get -k ./backups.key id=$ID
+$ bupstash put -k ./backups-put.key :: ./data
 ```
 
 ## SEE ALSO

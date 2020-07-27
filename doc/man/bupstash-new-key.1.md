@@ -19,7 +19,7 @@ data stored using that key.
 
 ## OPTIONS
 
-* -o, --output:
+* -o, --output PATH:
   Path to where the new key will be written.
 
 ## EXAMPLES

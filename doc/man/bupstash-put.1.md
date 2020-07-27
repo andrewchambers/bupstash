@@ -23,21 +23,32 @@ can be queried using bupstash-list(1). Tags are specified in a simple
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots do not take additional space.
 
-## Put caching
+## Efficient put operations
 
 When sending data, `bupstash` records what was sent in the previous
-'put' operation in a file known as the put-cache. 
+'put' operation in a file known as the send log. 
 
-The put-cache serves two main purposes, the first
-is that it remembers a set of data chunks that were previously sent to the repository,
-allowing us to avoid resending those chunks over the network repeatedly. The second
-purpose is to store a mapping of file paths, to a set of data chunk addresses,
-allowing bupstash to skip processing files when snapshotting the same
-directory many times repeatedly.
+The send log serves two main purposes:
 
-The path to the put-cache file, defaults to one of the following, in order, provided
-the appropriate environment variables are set, `$BUPSTASH_PUTCACHE`,
-`$XDG_CACHE_HOME/.cache/bupstash/putcache.sqlite3` or `$HOME/.cache/bupstash/putcache.sqlite3`.
+- it remembers a set of data chunks that were sent to the repository in the last 'put'
+  allowing `bupstash` to avoid resending those chunks over the network repeatedly.
+- It stores a mapping of file paths, to data that has already been sent, allowing bupstash
+  to skip processing files when snapshotting the same directory many times repeatedly.
+
+The send log has limited memory, so for efficient 'put' use, give each backup job
+a unique send log file. As an example, if you have a backup script, that runs a whole
+system backup, it is best to give that script its own send log so that all subsequent
+runs can with similar input data will share the same send log.
+
+Example: 
+
+```
+$ bupstash put --send-log /root/bupstash-backups-send-log :: /home/
+```
+
+The path to the send log file, defaults to one of the following, in order, provided
+the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
+`$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
 
 ## Default tags
 
@@ -52,11 +63,11 @@ Default tags can be overidden manually by simply specifying them.
 
 ## OPTIONS
 
-* -r, --repository:
+* -r, --repository REPO:
   The repository to connect to, may be prefixed with `ssh://$SERVER/$PATH` for
   remote repositories. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
-* -k, --key:
+* -k, --key KEY:
   Primary key or put-key to encrypt data and metadata with. If not set, defaults
   to `BUPSTASH_KEY`.
 
@@ -65,17 +76,17 @@ Default tags can be overidden manually by simply specifying them.
   in the bupstash repository. Only create the entry if the command
   exited with a successful status code.
 
-* --cache:
-  Path to the put-cache file, defaults to one of the following, in order, provided
-  the appropriate environment variables are set, `$BUPSTASH_PUTCACHE`,
-  `$XDG_CACHE_HOME/.cache/bupstash/putcache.sqlite3` or `$HOME/.cache/bupstash/putcache.sqlite3`.
+* --send-log PATH:
+  Path to the send log file, defaults to one of the following, in order, provided
+  the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
+  `$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
 
-* --no-cache:
-  Disable use of the put-cache, all data will be written over the network.
+* --no-send-log:
+  Disable use of a send log, all data will be written over the network. Implies --no-stat-caching.
 
 * --no-stat-caching:
   Disable the caching of file attributes to encrypted chunks. Only used
-  when `WHAT` is a directory.
+  when `WHAT` is a directory. 
 
 * --no-default-tags:
   Do no set default tags.
@@ -104,8 +115,8 @@ Default tags can be overidden manually by simply specifying them.
   A command to run that must print the key data, can be used instead of BUPSTASH_KEY
   to fetch the key from arbitrary locations such as the network or other secret storage.
 
-* BUPSTASH_PUTCACHE:
-  Path to the cache file to use.
+* BUPSTASH_SEND_LOG:
+  Path to the send log, overridden by --send-log.
 
 ## EXAMPLES
 
@@ -140,22 +151,11 @@ $ bupstash put --exec name=dbdump.sql :: pgdump mydb
 ### Connecting to an ssh server with a specific ssh config.
 
 ```
-$ export BUPSTASH_REPOSITORY_COMMAND="ssh -F ./my-ssh-config me@$SERVER bupstash serve"
+$ export BUPSTASH_REPOSITORY_COMMAND="ssh -F ./my-ssh-config me@$SERVER bupstash serve /my/repo"
 $ bupstash put :: ./files
 ```
 
-### Manually specifying the cache path
-
-```
-$ bupstash put --cache ~/backupjob.putcache :: /data
-```
-
 ## TIPS
-
-- The cache only stores information about the previous put operation, so 
-  for each operation you expect to repeat periodically (such as backups), you can ensure
-  good cache performance by specifying a cache for each operation 
-  and dramatically reduce network and disk access and greatly speed up snapshots.
 
 - `bupstash put` deduplicates and compresses data automatically, so avoid putting compressed
   or encrypted data if you want optimal deduplication and compression. 
@@ -164,8 +164,8 @@ $ bupstash put --cache ~/backupjob.putcache :: /data
   only add new backups but not list or remove old ones.
 
 - The differences between piping `tar` command output into `bupstash put`, and using `bupstash put` directly
-  on a directory, is the latter is able to use a stat cache and also ensure files are more precisely deduplicated
-  by storing each unique file in a single encrypted data chunk.
+  on a directory, is the latter is able to use a send log and avoid reading files that has already
+  been sent to the server.
 
 ## SEE ALSO
 
