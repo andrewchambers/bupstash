@@ -1,4 +1,4 @@
-bupstash-put(1) 
+bupstash-get(1) 
 ===============
 
 ## SYNOPSIS

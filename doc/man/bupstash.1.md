@@ -1,7 +1,9 @@
-bupstash(1) - Encrypted and deduplicated backups.
-=================================================
+bupstash(1) 
+===========
 
 ## SYNOPSIS
+
+Bupstash encrypted and deduplicated backups.
 
 Run one of the following `bupstash` subcommands.
 

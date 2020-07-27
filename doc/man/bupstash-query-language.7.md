@@ -3,7 +3,7 @@ bupstash-query-language(7)
 
 ## SYNOPSIS
 
-Description of the bupstash query language used by bupstash-get(1), bupstash-list(1) and bupstash-rm(1).
+The bupstash query language used by bupstash commands.
 
 ## DESCRIPTION
 
@@ -46,12 +46,12 @@ expression ```[A-Za-z0-9-_]+```.
 
 A values is a set of any characters except a delimiter.
 
-### DELIMITERS
+### Delimiters
 
 As queries may span multiple command line arguments, the gap between arguments is treated as a special
 delimiting character for the sake of query parsing.
 
-### GLOBBING
+### Globbing
 
 Some operators accept a glob to match against, the following describes the valid globbing meta characters.
 
@@ -69,10 +69,10 @@ Some operators accept a glob to match against, the following describes the valid
     The metacharacters ?, *, [, ] can be matched by using brackets (e.g. [?]). When a ] occurs immediately following [ or [! then it is interpreted as being part of, rather then ending, the character set, so ] and NOT ] can be matched by []] and [!]] respectively. The - character can be specified inside a character sequence pattern by placing it at the start or the end, e.g. [abc-].
 ```
 
-(Documentation taken from the underlying [software library](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html)).
+(Documentation taken from the underlying [glob software library](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html)).
 
 
-### BINARY OPERATORS
+### Binary operators
 
 Check a tag matches a glob:
 
@@ -98,7 +98,7 @@ Check a tag does not match a literal value.
 TAG ~== VALUE
 ```
 
-### UNARY OPERATORS
+### Unary operators
 
 Invert an expression.
 
@@ -117,7 +117,7 @@ Match if both expressions match.
 EXPR and EXPR
 ```
 
-### GROUPING
+### grouping
 
 Use brackets to alter the default precedence.
 ```

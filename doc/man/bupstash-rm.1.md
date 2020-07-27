@@ -1,5 +1,5 @@
-bupstash-put(1) 
-===============
+bupstash-rm(1) 
+==============
 
 ## SYNOPSIS
 
