@@ -1,0 +1,41 @@
+bupstash-gc(1) 
+================
+
+## SYNOPSIS
+
+Delete data and clear space from a `bupstash` repository.
+
+`bupstash gc options`
+
+## DESCRIPTION
+
+`bupstash gc` Walks the encrypted repository contents attempting to find
+unreachable data chunks and removing them, potentially reclaiming disk space.
+
+When garbage collection is in process, get and put operations are paused for the
+duration.
+
+The garbage collector only relies on unencrypted metadata, so does not need
+access to decryption keys to operate, and can thus be run on a storage server.
+
+
+## OPTIONS
+
+* -r, --repository REPO:
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
+  If not specified, is set to `BUPSTASH_REPOSITORY`.
+
+## ENVIRONMENT
+
+* BUPSTASH_REPOSITORY:
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
+
+* BUPSTASH_REPOSITORY_COMMAND:
+  A command to run to connect to an instance of bupstash-serve(1). This 
+  allows more complex connections to the repository for specialist cases,
+
+## SEE ALSO
+
+bupstash(1), bupstash-repository(7)

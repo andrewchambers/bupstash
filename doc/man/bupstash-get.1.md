@@ -9,48 +9,45 @@ Get data from a bupstash repository.
 
 ## DESCRIPTION
 
-`bupstash get` fetches and decrypts data stored in a bupstash repository. The
-item that is fetched is chosen based on a simple query against the 
+`bupstash get` fetches and decrypts data stored in a bupstash repository, sending
+it to stdout.
+
+The item that is fetched is chosen based on a simple query against the 
 tags specified when saving data with `bupstash put`.
 
-## Query language
+## QUERY LANGUAGE
 
 The bupstash query language is shared by commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1).
+For full documentation on the query language, see bupstash-query-language(7). 
 
-Get examples:
+### Get query examples:
 ```
 $ id=$(bupstash put  :: ./some-data)
 
 # Get an item by id.
 $ bupstash get id=$id
 
-# If you are feeling lazy, get using globbing.
+# get using globbing.
 $ bupstash get id=ab834*
 
 # When a query only returns a single item, we can use that.
-$ bupstash get name=backups.tar and date=2020/14
+$ bupstash get name=backups.tar and date=2019/*
 ```
 
-For full documentation on the query language, see bupstash-query-language(7). 
 
 ## Query caching
 
-Because all data is stored encrypted on the server, item metadata must first be synchronized to the local machine,
-and then decrypted on the client side to run a query. The file containing the synced and encrypted metadata
-is called the query cache.
-
-The path to the put-cache file, defaults to one of the following, in order, provided
-the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
-`$XDG_CACHE_HOME/.cache/bupstash/query-cache.sqlite3` or `$HOME/.cache/bupstash/query-cache.sqlite3`.
+The get command uses the same query caching mechanisms as bupstash-list(1), check that page for
+more information on the query cache.
 
 ## OPTIONS
 
 * -r, --repository REPO:
-  The repository to connect to, may be prefixed with `ssh://$SERVER/$PATH` for
-  remote repositories. If not specified, is set to `BUPSTASH_REPOSITORY`.
+  The repository to connect to, , may be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * -k, --key KEY:
-  Primary key decrypt data and metadata with. If not set, defaults
+  Primary key used to decrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
 * --query-cache PATH:
@@ -61,8 +58,8 @@ the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to, may be prefixed with `ssh://` for
-  remote repositories (see examples).
+  The repository to connect to, may be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 

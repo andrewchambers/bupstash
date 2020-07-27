@@ -64,8 +64,8 @@ Default tags can be overidden manually by simply specifying them.
 ## OPTIONS
 
 * -r, --repository REPO:
-  The repository to connect to, may be prefixed with `ssh://$SERVER/$PATH` for
-  remote repositories. If not specified, is set to `BUPSTASH_REPOSITORY`.
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * -k, --key KEY:
   Primary key or put-key to encrypt data and metadata with. If not set, defaults
@@ -98,8 +98,8 @@ Default tags can be overidden manually by simply specifying them.
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to, may be prefixed with `ssh://` for
-  remote repositories (see examples).
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
