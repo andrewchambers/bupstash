@@ -31,7 +31,7 @@ $ bupstash get id=ab834*
 $ bupstash get name=backups.tar and date=2020/14
 ```
 
-For full documentation on the query language, see bupstash-query(7). 
+For full documentation on the query language, see bupstash-query-language(7). 
 
 ## Query caching
 
@@ -111,4 +111,5 @@ $ bupstash get id=$id | tar -xvf -
 
 ## SEE ALSO
 
-bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-rm(1), bupstash-keyfiles(7),  bupstash-query(7)
+bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-rm(1), bupstash-keyfiles(7),
+bupstash-query-language(7)
