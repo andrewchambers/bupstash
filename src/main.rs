@@ -381,7 +381,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 let mut tags = encrypted_metadata.tags;
 
                 // Add special builtin tags.
-                tags.insert("id".to_string(), Some(item_id.to_string()));
+                tags.insert("id".to_string(), item_id.to_string());
 
                 let ts = if matches.opt_present("utc-timestamps") {
                     encrypted_metadata.timestamp.format("%F %T").to_string()
@@ -390,14 +390,14 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                         chrono::DateTime::from(encrypted_metadata.timestamp);
                     local_ts.format("%F %T").to_string()
                 };
-                tags.insert("timestamp".to_string(), Some(ts));
+                tags.insert("timestamp".to_string(), ts);
 
                 let doprint = match query {
                     Some(ref query) => tquery::query_matches(query, &tags),
                     None => true,
                 };
 
-                let mut tags: Vec<(String, Option<String>)> = tags.into_iter().collect();
+                let mut tags: Vec<(String, String)> = tags.into_iter().collect();
 
                 // Custom sort to be more human friendly.
                 tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
@@ -415,14 +415,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                                 if i != 0 {
                                     print!(" ");
                                 }
-                                print!("{}", k);
-                                match v {
-                                    Some(v) => print!(
-                                        "=\"{}\"",
-                                        v.replace("\\", "\\\\").replace("\"", "\\\"")
-                                    ),
-                                    None => (),
-                                }
+                                print!(
+                                    "{}=\"{}\"",
+                                    k,
+                                    v.replace("\\", "\\\\").replace("\"", "\\\"")
+                                );
                             }
                             println!();
                         }
@@ -432,14 +429,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                                 if i != 0 {
                                     print!(", ");
                                 }
-                                match v {
-                                    Some(v) => print!(
-                                        "{}:{}",
-                                        serde_json::to_string(&k)?,
-                                        serde_json::to_string(&v)?
-                                    ),
-                                    None => print!("{} : true", serde_json::to_string(&k)?),
-                                }
+                                print!(
+                                    "{}:{}",
+                                    serde_json::to_string(&k)?,
+                                    serde_json::to_string(&v)?
+                                )
                             }
                             println!("}}");
                         }
@@ -578,7 +572,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("can only send data with a primary-key or put-key."),
     };
 
-    let mut tags = BTreeMap::<String, Option<String>>::new();
+    let mut tags = BTreeMap::<String, String>::new();
 
     let default_tags = !matches.opt_present("no-default-tags");
 
@@ -606,13 +600,13 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
         if md.is_dir() {
             if default_tags {
-                tags.insert("name".to_string(), Some(name + ".tar"));
+                tags.insert("name".to_string(), name + ".tar");
             }
 
             data_source = client::DataSource::Directory(input_path)
         } else if md.is_file() {
             if default_tags {
-                tags.insert("name".to_string(), Some(name));
+                tags.insert("name".to_string(), name);
             }
 
             data_source = client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
@@ -621,16 +615,13 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         }
     };
 
-    let tag_re = regex::Regex::new(r"^([^=]+)(?:=(.+))?$")?;
+    let tag_re = regex::Regex::new(r"^([^=]+)=(.+)$")?;
     for a in &matches.free {
         match tag_re.captures(&a) {
             Some(caps) => {
                 let t = &caps[1];
-                let v = caps.get(2);
-                match v {
-                    Some(v) => tags.insert(t.to_string(), Some(v.as_str().to_string())),
-                    None => tags.insert(t.to_string(), None),
-                };
+                let v = &caps[2];
+                tags.insert(t.to_string(), v.to_string());
             }
             None => failure::bail!("argument '{}' is not a valid tag value.", a),
         }
@@ -726,7 +717,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let mut tags = encrypted_metadata.tags;
 
                         // Add special builtin tags.
-                        tags.insert("id".to_string(), Some(item_id.to_string()));
+                        tags.insert("id".to_string(), item_id.to_string());
 
                         let ts = if matches.opt_present("utc-timestamps") {
                             encrypted_metadata.timestamp.format("%F %T").to_string()
@@ -735,7 +726,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                                 chrono::DateTime::from(encrypted_metadata.timestamp);
                             local_ts.format("%F %T").to_string()
                         };
-                        tags.insert("timestamp".to_string(), Some(ts));
+                        tags.insert("timestamp".to_string(), ts);
 
                         if tquery::query_matches(&query, &tags) {
                             n_matches += 1;
@@ -831,7 +822,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         let mut tags = encrypted_metadata.tags;
 
                         // Add special builtin tags.
-                        tags.insert("id".to_string(), Some(item_id.to_string()));
+                        tags.insert("id".to_string(), item_id.to_string());
 
                         let ts = if matches.opt_present("utc-timestamps") {
                             encrypted_metadata.timestamp.format("%F %T").to_string()
@@ -840,7 +831,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                                 chrono::DateTime::from(encrypted_metadata.timestamp);
                             local_ts.format("%F %T").to_string()
                         };
-                        tags.insert("timestamp".to_string(), Some(ts));
+                        tags.insert("timestamp".to_string(), ts);
 
                         if tquery::query_matches(&query, &tags) {
                             ids.push(item_id);

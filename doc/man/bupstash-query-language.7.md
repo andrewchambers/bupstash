@@ -86,18 +86,6 @@ Check a tag matches an literal value.
 TAGNAME == VALUE
 ```
 
-Check a tag does not match a glob.
-
-```
-TAG ~= GLOB
-```
-
-Check a tag does not match a literal value.
-
-```
-TAG ~== VALUE
-```
-
 ### Unary operators
 
 Invert an expression.

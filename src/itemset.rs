@@ -29,7 +29,7 @@ pub struct EncryptedItemMetadata {
     pub hash_key_part_2: crypto::PartialHashKey,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     // We want ordered serialization.
-    pub tags: std::collections::BTreeMap<String, Option<String>>,
+    pub tags: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

@@ -116,7 +116,7 @@ pub fn send(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     mut send_log: Option<sendlog::SendLog>,
-    tags: BTreeMap<String, Option<String>>,
+    tags: BTreeMap<String, String>,
     data: DataSource,
 ) -> Result<Xid, failure::Error> {
     let send_id = match send_log {
