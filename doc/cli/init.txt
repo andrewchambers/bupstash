@@ -1,10 +1,6 @@
-bupstash init: Initialize an bupstash repository.
+bupstash init [OPTIONS] PATH
 
-Description:
-  Create an bupstash repository at the specified path.
-
-Usage:
-  bupstash init [FLAGS] PATH
+Initialize an bupstash repository.
 
 Examples:
   $ bupstash init ./backups

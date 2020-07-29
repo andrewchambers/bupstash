@@ -23,7 +23,9 @@ can be queried using bupstash-list(1). Tags are specified in a simple
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots do not take additional space.
 
-## Efficient put operations
+## USAGE NOTES
+
+### Efficient put operations
 
 When sending data, `bupstash` records what was sent in the previous
 'put' operation in a file known as the send log. 
@@ -50,16 +52,16 @@ The path to the send log file, defaults to one of the following, in order, provi
 the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
 `$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
 
-## Default tags
+### Default tags
 
-When putting data, `bupstash` automatically sets a small set of default tags.
+`bupstash` automatically sets default tags.
 
 Currently they are:
 
-- timestamp, set to utc time in the form 'YYYY:MM:DD HH:MM:SS'
-- name, set to the file name, or .tar , or omitted for --exec mode.
+- name, set to the `FILENAME`, or `DIRNAME.tar`, omitted when putting in --exec mode.
 
 Default tags can be overidden manually by simply specifying them.
+
 
 ## OPTIONS
 

@@ -1,0 +1,8 @@
+bupstash new-put-key [OPTIONS]
+
+Create a new put-key capable of writing
+new repository entries, but not decrypting them again.
+
+Examples:
+  $ bupstash new-key -o ./backups.key
+  $ bupstash new-put-key -k ./backups.key -o ./put-only-backup.key

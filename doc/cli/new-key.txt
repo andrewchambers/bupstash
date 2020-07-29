@@ -1,13 +1,9 @@
-bupstash new-master-key
+bupstash new-key [OPTIONS]
 
-Description:
-  Create a new key readable by only the creating user.
+Create a new key, readable by only the creating user.
 
-  Keep this key private and secure as it is needed to read any archived
-  data sent using send keys derived from the master key.
+Keep this key private and secure as it is needed to read any
+data put in a repository using this key.
 
-Quick examples:
+Examples:
   $ bupstash new-key -o ./backups.key
-
-Usage:
-  bupstash new-key [OPTIONS]

@@ -13,6 +13,8 @@ Need to do:
 
 Can do later (medium term):
 
+- Proper text wrapping of command help strings.
+
 - Localization
   - tests for localized tags.
 

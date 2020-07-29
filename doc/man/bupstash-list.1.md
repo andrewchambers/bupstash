@@ -3,7 +3,7 @@ bupstash-list(1)
 
 ## SYNOPSIS
 
-List entries in a bupstash repository
+List items in a bupstash repository
 
 `bupstash list [OPTIONS] QUERY... `
 

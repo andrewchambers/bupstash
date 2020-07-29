@@ -1,0 +1,10 @@
+bupstash serve [OPTIONS] REPOSITORY
+
+Run a bupstash server that speaks the bupstash
+protocol over stdin/stdout. Has access controls
+that can be configured via flags,  and mandated via mechanisms
+such as ssh force commands.
+
+Examples:
+  $ export BUPSTASH_REPOSITORY_COMMAND="ssh $SERVER bupstash serve /data/repository"
+  $ bupstash list

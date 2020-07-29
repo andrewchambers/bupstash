@@ -1,0 +1,11 @@
+bupstash(1)                  https://$SERVER/man/bupstash.1/
+bupstash-init(1)             https://$SERVER/man/bupstash-init.1/
+bupstash-new-key(1)          https://$SERVER/man/bupstash-new-key.1/
+bupstash-new-metadata-key(1) https://$SERVER/man/bupstash-new-metadata-key.1/
+bupstash-new-put-key(1)      https://$SERVER/man/bupstash-new-put-key.1/
+bupstash-get(1)              https://$SERVER/man/bupstash-get.1/
+bupstash-list(1)             https://$SERVER/man/bupstash-list.1/
+bupstash-put(1)              https://$SERVER/man/bupstash-put.1/
+bupstash-rm(1)               https://$SERVER/man/bupstash-rm.1/
+bupstash-gc(1)               https://$SERVER/man/bupstash-rc.1/
+bupstash-query-language(7)   https://$SERVER/man/bupstash-query-language.7/

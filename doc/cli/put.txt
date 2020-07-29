@@ -1,0 +1,13 @@
+bupstash put [OPTIONS] TAGS... [:: WHAT]
+
+Put an entry into a bupstash repository with an associated set of metadata tags.
+WHAT may be a file or directory or a command to run if --exec is provided.
+
+Examples:
+  $ export BUPSTASH_REPOSTORY=$HOME/bupstash-repo
+  $ export BUPSTASH_KEY=./my-secret-bupstash.key
+
+  $ bupstash put host=$(hostname) :: ./files
+  $ bupstash put :: ./file.txt
+  $ bupstash put --exec :: tar -C ./files -cvf - .
+  $ echo data | bupstash put

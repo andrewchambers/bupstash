@@ -51,7 +51,14 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
         "new-key" => include_str!("../doc/cli/new-key.txt"),
-        "new-send-key" => include_str!("../doc/cli/new-send-key.txt"),
+        "new-put-key" => include_str!("../doc/cli/new-put-key.txt"),
+        "new-metadata-key" => include_str!("../doc/cli/new-metadata-key.txt"),
+        "put" => include_str!("../doc/cli/put.txt"),
+        "list" => include_str!("../doc/cli/list.txt"),
+        "get" => include_str!("../doc/cli/get.txt"),
+        "remove" | "rm" => include_str!("../doc/cli/rm.txt"),
+        "gc" => include_str!("../doc/cli/gc.txt"),
+        "serve" => include_str!("../doc/cli/serve.txt"),
         _ => panic!(),
     };
     print!("{}", opts.usage(brief));
@@ -103,7 +110,7 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "s",
         "storage",
-        "The storage engine specification.",
+        "The storage engine specification, consult manual for details.",
         "STORAGE",
     );
     let matches = default_parse_opts(opts, &args[..]);
@@ -326,7 +333,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "format",
-        "Output format, valid values are human | jsonl",
+        "Output format, valid values are human | jsonl.",
         "PATH",
     );
     query_opts(&mut opts);
@@ -478,11 +485,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "no-compression",
         "Disable compression (Use for for already compressed/encrypted data).",
     );
-    opts.optflag(
-        "",
-        "no-default-tags",
-        "Disable the default tags 'name', 'timestamp'",
-    );
+    opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
     opts.optflag(
         "e",
         "exec",
@@ -886,22 +889,22 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag(
         "",
         "allow-put",
-        "allow client to put more entries into the repository.",
+        "Allow client to put more entries into the repository.",
     );
     opts.optflag(
         "",
         "allow-remove",
-        "allow client to remove repository entries.",
+        "Allow client to remove repository entries.",
     );
     opts.optflag(
         "",
         "allow-gc",
-        "allow client to run the repository garbage collector.",
+        "Allow client to run the repository garbage collector.",
     );
     opts.optflag(
         "",
         "allow-get",
-        "allow client to get data from the repository.",
+        "Allow client to get data from the repository.",
     );
     opts.optflag("", "allow-list", "allow client to list repository entries.");
     let matches = default_parse_opts(opts, &args[..]);

@@ -1,11 +1,36 @@
-bupstash: Easy, Secure, Encrypted, Deduplicated Backups
+bupstash: Easy, efficient and encrypted Backups
 
 Subcommands:
 
-'init'             - Initialize a bupstash repository.
-'new-key'          - Create a key used for reading and writing encrypted data.
-'new-send-key'     - Create a send key used for writing encrypted data.
-'new-metadata-key' - Create a metadata key used for searching and listing.
-'help'             - Print this message.
+init
+  Initialize a bupstash repository.
 
-For subcommand specific help, run 'bupstash SUBCMD --help'
+new-key
+  Create a key used for reading and writing encrypted data.
+
+new-send-key
+  Create a send key used for writing encrypted data.
+
+new-metadata-key
+  Create a metadata key used for searching and listing.
+
+put
+  Put a new item into a repository.
+
+list
+  List items in a repository
+
+get
+  Get data from a repository.
+
+rm
+  Remove items from a repository.
+
+gc
+  Delete data and clear space from a repository.
+
+help
+  Print this message.
+
+For subcommand specific help, run 'bupstash CMD --help'
+For comprehensive documentation see the man pages.

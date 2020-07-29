@@ -5,7 +5,7 @@ bupstash-gc(1)
 
 Delete data and clear space from a `bupstash` repository.
 
-`bupstash gc options`
+`bupstash gc [OPTIONS]`
 
 ## DESCRIPTION
 

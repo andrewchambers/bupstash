@@ -20,9 +20,9 @@ tags specified when saving data with `bupstash put`.
 The bupstash query language is shared by commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1).
 For full documentation on the query language, see bupstash-query-language(7). 
 
-### Get query examples:
+### Get query examples
 ```
-$ id=$(bupstash put  :: ./some-data)
+$ id=$(bupstash put :: ./some-data)
 
 # Get an item by id.
 $ bupstash get id=$id
