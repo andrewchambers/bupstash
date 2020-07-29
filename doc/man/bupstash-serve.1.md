@@ -31,7 +31,6 @@ to create
 * --allow-list:
   Allow client to list repository entries.
 
-
 ## EXAMPLES
 
 Using BUPSTASH_REPOSITORY_COMMAND:

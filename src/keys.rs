@@ -52,14 +52,14 @@ pub struct MetadataKey {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     PrimaryKeyV1(PrimaryKey),
-    SendKeyV1(SendKey),
+    PutKeyV1(SendKey),
     MetadataKeyV1(MetadataKey),
 }
 
 fn pem_tag(k: &Key) -> &str {
     match k {
         Key::PrimaryKeyV1(_) => "BUPSTASH PRIMARY KEY",
-        Key::SendKeyV1(_) => "BUPSTASH SEND KEY",
+        Key::PutKeyV1(_) => "BUPSTASH PUT KEY",
         Key::MetadataKeyV1(_) => "BUPSTASH METADATA KEY",
     }
 }
@@ -106,7 +106,7 @@ impl Key {
     pub fn primary_key_id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::SendKeyV1(k) => k.primary_key_id,
+            Key::PutKeyV1(k) => k.primary_key_id,
             Key::MetadataKeyV1(k) => k.primary_key_id,
         }
     }
@@ -114,7 +114,7 @@ impl Key {
     pub fn id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::SendKeyV1(k) => k.id,
+            Key::PutKeyV1(k) => k.id,
             Key::MetadataKeyV1(k) => k.id,
         }
     }

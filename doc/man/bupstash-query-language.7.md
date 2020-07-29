@@ -31,7 +31,7 @@ $ bupstash list type=backup and [hostname=server1 or hostname=server2]
 ...
 ```
 
-Quoting:
+Quote using your shell's builtin quoting:
 
 ```
 $ bupstash rm name="my files.tar"

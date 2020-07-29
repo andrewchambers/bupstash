@@ -76,13 +76,25 @@ fn query_opts(opts: &mut Options) {
     opts.optopt(
         "",
         "query-cache",
-        "Path to the query cache (used for storing synced items before search).",
+        "Path to the query cache (used for storing synced items before search). \
+        See manual for default values and relevant environment variables.",
         "PATH",
     );
     opts.optflag(
         "",
         "utc-timestamps",
-        "Do not convert the 'timestamp' tag to local time (as is done by default).",
+        "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
+    );
+}
+
+fn repo_opts(opts: &mut Options) {
+    opts.optopt(
+        "r",
+        "repository",
+        "Repository to interact with, if prefixed with ssh:// implies ssh access. \
+         Defaults to BUPSTASH_REPOSITORY if not set. \
+         See the manual for additional ways to connect to the repository.",
+        "REPO",
     );
 }
 
@@ -176,7 +188,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let k = matches_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
-            let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&primary_key));
+            let send_key = keys::Key::PutKeyV1(keys::SendKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => failure::bail!("key is not a primary key"),
@@ -318,12 +330,7 @@ enum ListFormat {
 
 fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to list items from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
@@ -467,18 +474,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-
+    repo_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
         "Primary or put key to encrypt data with.",
         "PATH",
-    );
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to save data info.",
-        "REPO",
     );
     opts.optflag(
         "",
@@ -566,7 +567,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
             (hash_key, data_ectx, metadata_ectx)
         }
-        keys::Key::SendKeyV1(k) => {
+        keys::Key::PutKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
@@ -617,8 +618,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             failure::bail!("{} is not a file or a directory", source_args[0]);
         }
     };
-
-    let tag_re = regex::Regex::new(r"^([^=]+)=(.+)$")?;
+    let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$")?;
     for a in &matches.free {
         match tag_re.captures(&a) {
             Some(caps) => {
@@ -666,15 +666,9 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
 fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-
-    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to fetch data from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     query_opts(&mut opts);
+    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -772,12 +766,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to fetch data from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     query_opts(&mut opts);
     opts.optopt(
         "k",
@@ -865,12 +854,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to run the garbage collector upon.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     let matches = default_parse_opts(opts, &args[..]);
 
     let mut serve_proc = matches_to_serve_process(&matches)?;

@@ -62,12 +62,12 @@ the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to, may be of the form `ssh://$SERVER/$PATH` for
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
   remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
-  allows more complex connections to the repository for specialist cases,
+  allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
   Path to a primary key that will be used for decrypting data and metadata.
@@ -82,20 +82,24 @@ the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
 
 ## EXAMPLES
 
-### Get an item by name and date date from the repository
+### List items matching a query
 
 ```
-$ bupstash list name=backup.tar and date=2020/19/* > ./restore.tar
-XXX
+$ bupstash list name=backup.tar and timestamp=2020/07/* 
+id="aa87fdbc72241f363568bbb888c0834e" name="backup.tar" timestamp="2020-07-24 15:25:00"
+id="d271ec0b989cfc20e10d01380115747e" name="backup.tar" timestamp="2020-07-29 15:25:24"
+...
 ```
 
 ### List the repository contents as json, one entry per line
 
 ```
-$ bupstash list --format=jsonl
-XXX
+$ bupstash list -k ./metadata.key --format=jsonl
+{"id":"aa87fdbc72241f363568bbb888c0834e", "name":"backup.tar", "timestamp":"2020-07-24 15:25:00"}
+{"id":"ec782aa9e449a6bae3c915c7ee4dafe6", "name":"backup.tar", "timestamp":"2020-07-29 15:25:24"}
+...
 ```
 
 ## SEE ALSO
 
-bupstash(1),bupstash-query-language(7)
+bupstash(1), bupstash-query-language(7)

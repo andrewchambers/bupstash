@@ -1,6 +1,6 @@
 bupstash init [OPTIONS] PATH
 
-Initialize an bupstash repository.
+Initialize a bupstash repository.
 
 Examples:
   $ bupstash init ./backups

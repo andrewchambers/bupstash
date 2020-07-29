@@ -28,7 +28,7 @@ Some notable features of ```bupstash``` include:
 * Automatic deduplication of stored data.
 * Client side encryption of data.
 * A simple and powerful query language.
-* Optional secure offline storage of decryption keys.
+* Optional role based encryption and decryption key separation.
 * Easy setup, all you need is bupstash and optionally ssh.
 * Optional, per ssh key access repository controls.
 * A multi layered approach to security.
@@ -42,19 +42,19 @@ that can each have their own documentation.
 * bupstash-init(1):
   Initialize a package store.
 * bupstash-new-key(1):
-  Create a new primary key for creating/reading data entries.
+  Create a new primary key for creating/reading repository items.
 * bupstash-new-put-key(1):
-  Derive a put only key from a primary key that cannot read data or metadata. 
+  Derive a put only key from a primary key. 
 * bupstash-new-metadata-key(1):
-  Derive a list/rm only key from a primary key that cannot read data. 
+  Derive a list/rm only key from a primary key. 
 * bupstash-put(1):
-  Add a tagged snapshot to a bupstash repository.
+  Add data to a bupstash repository.
 * bupstash-get(1):
-  Fetch a tagged snapshot from the bupstash repository.
+  Fetch data from the bupstash repository matching a query.
 * bupstash-list(1):
-  List repository entries matching a given query.
+  List repository items matching a given query.
 * bupstash-rm(1):
-  Remove repository entries matching a given query.
+  Remove repository items matching a given query.
 * bupstash-gc(1):
   Reclaim diskspace in a repository.
 * bupstash-serve(1):
@@ -62,7 +62,7 @@ that can each have their own documentation.
 
 ## EXAMPLE
 
-### Simple usage
+### Standard usage
 
 ```
 # Initialize the repository and create keys.
@@ -77,12 +77,12 @@ $ export BUPSTASH_KEY=backups.key
 $ bupstash put hostname=$(hostname) :: ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 
-# Save a file.
-$ bupstash put hostname=$(hostname) :: ./some-file.txt
+# Save a file, with arbitrary key/value tags.
+$ bupstash put mykey=myvalue :: ./some-file.txt
 bcb8684e6bf5cb453e77486decf61685
 
 # Save the output of a command, checking for errors.
-$ bupstash put --exec hostname=$(hostname) name=database.sql :: pgdump ...
+$ bupstash put --exec name=database.sql :: pgdump ...
 14ebd2073b258b1f55c5bbc889c49db4
 
 # List items matching a query.
@@ -107,7 +107,7 @@ $ bupstash gc
 ### Offline decryption key
 ```
 # Create a primary key, and a put only key.
-$ bupstash new-key backups.key -o backups.key
+$ bupstash new-key -o backups.key
 $ bupstash new-put-key -k backups.key -o backups-put.key
 
 ... Copy backups.key to secure offline storage ...

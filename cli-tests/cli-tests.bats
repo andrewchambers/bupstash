@@ -109,7 +109,7 @@ _concurrent_send_test_worker () {
   for i in $(seq 10)
   do
     id="$(bupstash put -e --no-send-log -k "$PRIMARY_KEY" :: echo $i)"
-    test "$i" = "$(bupstash get -k "$PRIMARY_KEY" id=$id)"
+    test "$i" = "$(bupstash get --query-cache ./cache$i -k "$PRIMARY_KEY" id=$id)"
   done
 }
 

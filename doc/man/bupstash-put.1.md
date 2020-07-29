@@ -38,19 +38,15 @@ The send log serves two main purposes:
   to skip processing files when snapshotting the same directory many times repeatedly.
 
 The send log has limited memory, so for efficient 'put' use, give each backup job
-a unique send log file. As an example, if you have a backup script, that runs a whole
-system backup, it is best to give that script its own send log so that all subsequent
-runs can with similar input data will share the same send log.
+a unique send log file. As an example, if you have a backup script that puts a 
+directory as a cron job, it is best to give that script its own send log so that all subsequent
+runs with similar input data will share the same send log.
 
 Example: 
 
 ```
 $ bupstash put --send-log /root/bupstash-backups-send-log :: /home/
 ```
-
-The path to the send log file, defaults to one of the following, in order, provided
-the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
-`$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
 
 ### Default tags
 
@@ -105,8 +101,7 @@ Default tags can be overidden manually by simply specifying them.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
-  allows more complex connections to the repository for specialist cases,
-  see examples below.
+  allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
   Path to a primary key, or a put-key, that will be used to encrypt

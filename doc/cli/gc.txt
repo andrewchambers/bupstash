@@ -8,4 +8,5 @@ is in progress.
 
 Examples:
   $ bupstash gc ./backups
-  $ bupstash -r ssh://$server/repository.
+  $ bupstash -r ssh://$server/repository gc
+  $ bupstash -r ./repository gc

@@ -21,11 +21,12 @@ The bupstash query language is shared by commands such as bupstash-get(1), bupst
 For full documentation on the query language, see bupstash-query-language(7). 
 
 ### Get query examples
+
 ```
 $ id=$(bupstash put :: ./some-data)
 
 # Get an item by id.
-$ bupstash get id=$id
+$ bupstash get id=$id > out.txt
 
 # get using globbing.
 $ bupstash get id=ab834*
@@ -33,7 +34,6 @@ $ bupstash get id=ab834*
 # When a query only returns a single item, we can use that.
 $ bupstash get name=backups.tar and date=2019/*
 ```
-
 
 ## Query caching
 
@@ -58,12 +58,12 @@ more information on the query cache.
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to, may be of the form `ssh://$SERVER/$PATH` for
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
   remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
-  allows more complex connections to the repository for specialist cases,
+  allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
   Path to a primary key that will be used for decrypting data and metadata.
@@ -83,10 +83,10 @@ more information on the query cache.
 $ bupstash get id=14ebd2073b258b1f55c5bbc889c49db4 > ./data.file
 ```
 
-### Get an item by name and date date from the repository
+### Get an item by name and timestamp from the repository
 
 ```
-$ bupstash get name=backup.tar and date=2020/19/* > ./restore.tar
+$ bupstash get name=backup.tar and timestamp=2020/19/* > ./restore.tar
 ```
 
 ### Get a tarball

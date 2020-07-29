@@ -3,11 +3,25 @@ bupstash put [OPTIONS] TAGS... [:: WHAT]
 Put an entry into a bupstash repository with an associated set of metadata tags.
 WHAT may be a file or directory or a command to run if --exec is provided.
 
+When WHAT is a directory, it is automatically converted to a tarball using
+an efficient caching mechansim.
+
+To best utilize the put caching mechanism, give each job you intend to run
+repeatedly it's own send log. This can dramatically reduce the amount of 
+disk reading and network usage required to make a snapshot.
+
 Examples:
   $ export BUPSTASH_REPOSTORY=$HOME/bupstash-repo
   $ export BUPSTASH_KEY=./my-secret-bupstash.key
 
-  $ bupstash put host=$(hostname) :: ./files
-  $ bupstash put :: ./file.txt
-  $ bupstash put --exec :: tar -C ./files -cvf - .
+  # To avoid resending data needlessly during backups, create job specific send log.
+  $ bupstash put --send-log /root/backup-sendlog :: ./to-backup
+
+  # Specify arbitrary metadata as KEY=VALUE before ::.
+  $ bupstash put host=$(hostname) :: ./file.txt
+
+  # Use --exec to save the output of commands.
+  $ bupstash put --exec name=files.tar :: tar -C ./files -cvf - .
+
+  # If WHAT is not specified, it is read from stdin.
   $ echo data | bupstash put
