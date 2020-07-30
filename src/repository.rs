@@ -337,7 +337,7 @@ impl Repo {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
-                    path.to_string(),
+                    &path.to_string(),
                 )?)
             }
         };
