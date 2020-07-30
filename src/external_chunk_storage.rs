@@ -43,7 +43,7 @@ fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStrea
     protocol::write_packet(
         &mut sock,
         &protocol::Packet::StorageConnect(protocol::StorageConnect {
-            protocol: "storage-0".to_string(),
+            protocol: "s-0".to_string(),
             path: path.to_string(),
         }),
     )?;
@@ -107,9 +107,12 @@ impl ExternalStorage {
                             }
                         }
                         match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                            Ok(protocol::Packet::RStorageWriteBarrier) => (),
-                            Ok(_) => {
+                            Ok(protocol::Packet::RStorageWriteBarrier) => {
                                 let _ = rendezvous_tx.send(None);
+                            }
+                            Ok(_) => {
+                                let _ = rendezvous_tx.send(Some(failure::format_err!("bug")));
+                                worker_bail!(failure::format_err!("io error"));
                             }
                             Err(err) => {
                                 let _ = rendezvous_tx.send(Some(err));
@@ -282,8 +285,7 @@ impl Drop for ExternalStorage {
 impl Engine for ExternalStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         self.check_write_worker_io_errors()?;
-        self.scaling_write_worker_dispatch(WriteWorkerMsg::AddChunk((*addr, buf)))
-            .unwrap();
+        self.scaling_write_worker_dispatch(WriteWorkerMsg::AddChunk((*addr, buf)))?;
         Ok(())
     }
 
@@ -292,9 +294,14 @@ impl Engine for ExternalStorage {
         addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
         let (tx, rx) = crossbeam::channel::bounded(1);
-        self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx)))
-            .unwrap();
-        rx
+        match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
+            Ok(()) => rx,
+            Err(err) => {
+                let (tx, rx) = crossbeam::channel::bounded(1);
+                tx.send(Err(err.into())).unwrap();
+                rx
+            }
+        }
     }
 
     fn sync(&mut self) -> Result<(), failure::Error> {

@@ -330,9 +330,14 @@ impl Engine for DirStorage {
         addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
         let (tx, rx) = crossbeam::channel::bounded(1);
-        self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx)))
-            .unwrap();
-        rx
+        match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
+            Ok(()) => rx,
+            Err(err) => {
+                let (tx, rx) = crossbeam::channel::bounded(1);
+                tx.send(Err(err.into())).unwrap();
+                rx
+            }
+        }
     }
 
     fn sync(&mut self) -> Result<(), failure::Error> {
