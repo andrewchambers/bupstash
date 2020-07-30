@@ -502,12 +502,17 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "no-send-log",
         "Disable logging of previously sent data, implies --no-stat-cache.",
     );
-
     opts.optopt(
         "",
         "send-log",
         "Use the file at PATH as a 'send log', used to skip data that was previously to the server.",
         "PATH",
+    );
+    opts.optmulti(
+        "",
+        "exclude",
+        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.",
+        "PATTERN",
     );
 
     let (args, source_args) = {
@@ -602,12 +607,24 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             None => "rootfs".to_string(),
         };
 
+        let mut exclusions = Vec::new();
+
+        for e in matches.opt_strs("exclude") {
+            match glob::Pattern::new(&e) {
+                Ok(pattern) => exclusions.push(pattern),
+                Err(err) => failure::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
+            }
+        }
+
         if md.is_dir() {
             if default_tags {
                 tags.insert("name".to_string(), name + ".tar");
             }
 
-            data_source = client::DataSource::Directory(input_path)
+            data_source = client::DataSource::Directory {
+                path: input_path,
+                exclusions,
+            };
         } else if md.is_file() {
             if default_tags {
                 tags.insert("name".to_string(), name);

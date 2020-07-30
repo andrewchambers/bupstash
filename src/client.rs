@@ -108,7 +108,10 @@ pub struct SendContext {
 pub enum DataSource {
     Subprocess(Vec<String>),
     Readable(Box<dyn std::io::Read>),
-    Directory(std::path::PathBuf),
+    Directory {
+        path: std::path::PathBuf,
+        exclusions: Vec<glob::Pattern>,
+    },
 }
 
 pub fn send(
@@ -176,8 +179,15 @@ pub fn send(
         DataSource::Readable(mut data) => {
             send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
-        DataSource::Directory(path) => {
-            send_dir(ctx, &mut chunker, &mut tw, &send_log_session, &path)?;
+        DataSource::Directory { path, exclusions } => {
+            send_dir(
+                ctx,
+                &mut chunker,
+                &mut tw,
+                &send_log_session,
+                &path,
+                &exclusions,
+            )?;
         }
     }
 
@@ -270,6 +280,7 @@ fn send_dir(
     tw: &mut htree::TreeWriter,
     send_log_session: &Option<std::cell::RefCell<sendlog::SendLogSession>>,
     path: &std::path::PathBuf,
+    exclusions: &[glob::Pattern],
 ) -> Result<(), failure::Error> {
     let path = fsutil::absolute_path(&path)?;
 
@@ -306,8 +317,15 @@ fn send_dir(
             tar_dir_ents.push((path.clone(), metadata, tar_hdr_bytes));
         }
 
-        for entry in dir_ents {
+        'collect_dir_ents: for entry in dir_ents {
             let ent_path = entry.path();
+
+            for excl in exclusions {
+                if excl.matches_path(&ent_path) {
+                    continue 'collect_dir_ents;
+                }
+            }
+
             let metadata = entry.metadata()?;
             let short_path = ent_path.strip_prefix(&path)?.to_path_buf();
             let tar_hdr_bytes = xtar::dirent_to_tarheader(&metadata, &ent_path, &short_path)?;

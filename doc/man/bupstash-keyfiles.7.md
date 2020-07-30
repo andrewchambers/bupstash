@@ -19,35 +19,35 @@ The binary data after decoding the PEM data are [bare](https://baremessages.org/
 // Rust type notation.
 
 struct PrimaryKey {
-    id: [u8; 16],
-    hash_key_part_1: [u8; XXX],
-    hash_key_part_2: [u8; XXX],
-    data_pk: [u8; XXX],
-    data_sk: [u8; XXX],
-    metadata_pk: [u8; XXX],
-    metadata_sk: [u8; XXX],
+  id: [u8; 16],
+  hash_key_part_1: [u8; XXX],
+  hash_key_part_2: [u8; XXX],
+  data_pk: [u8; XXX],
+  data_sk: [u8; XXX],
+  metadata_pk: [u8; XXX],
+  metadata_sk: [u8; XXX],
 }
 
 struct PutKey {
-    id: [u8; 16],
-    primary_key_id: [u8; 16],
-    hash_key_part_1: [u8; 16],
-    hash_key_part_2: [u8; 16],
-    data_pk: [u8; XXX],
-    metadata_pk: [u8; XXX],
+  id: [u8; 16],
+  primary_key_id: [u8; 16],
+  hash_key_part_1: [u8; 16],
+  hash_key_part_2: [u8; 16],
+  data_pk: [u8; XXX],
+  metadata_pk: [u8; XXX],
 }
 
 struct MetadataKey {
-    id: [u8; 16],
-    primary_key_id: [u8; 16],
-    metadata_pk: [u8; XXX],
-    metadata_sk: [u8; XXX],
+  id: [u8; 16],
+  primary_key_id: [u8; 16],
+  metadata_pk: [u8; XXX],
+  metadata_sk: [u8; XXX],
 }
 
 enum Key {
-    PrimaryKeyV1(PrimaryKey),
-    PutKeyV1(PutKey),
-    MetadataKeyV1(MetadataKey),
+  PrimaryKeyV1(PrimaryKey),
+  PutKeyV1(PutKey),
+  MetadataKeyV1(MetadataKey),
 }
 ```
 

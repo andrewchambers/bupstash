@@ -74,6 +74,11 @@ Default tags can be overidden manually by simply specifying them.
   in the bupstash repository. Only create the entry if the command
   exited with a successful status code.
 
+* --exclude PATTERN:
+  Add an exclusion glob pattern to filter entries from the resulting tarball.
+  The glob is matched against the absolute path of the directory entry.
+  This option may be passed multiple times, and is ignored if WHAT is not a directory.
+
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,

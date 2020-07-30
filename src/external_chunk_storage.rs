@@ -102,7 +102,7 @@ impl ExternalStorage {
                         ) {
                             Ok(()) => (),
                             Err(err) => {
-                                let _ = rendezvous_tx.send(Some(err.into()));
+                                let _ = rendezvous_tx.send(Some(err));
                                 worker_bail!(failure::format_err!("io error"));
                             }
                         }
@@ -112,7 +112,7 @@ impl ExternalStorage {
                                 let _ = rendezvous_tx.send(None);
                             }
                             Err(err) => {
-                                let _ = rendezvous_tx.send(Some(err.into()));
+                                let _ = rendezvous_tx.send(Some(err));
                                 worker_bail!(failure::format_err!("io error"));
                             }
                         }

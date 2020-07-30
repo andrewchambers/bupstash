@@ -278,3 +278,20 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }
+
+
+@test "directory exclusions" {
+  mkdir "$SCRATCH/foo"
+  mkdir "$SCRATCH/foo/bar"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bang"
+
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 4 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+
+  id=$(bupstash put --exclude="*/bang" -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+
+  id=$(bupstash put --exclude="*/bar" -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+}
