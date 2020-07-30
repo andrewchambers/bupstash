@@ -57,36 +57,34 @@ of the following format:
 
 
 ```
-// Rust notation.
+// Rust type notation.
 
-pub enum LogOp {
-    AddItem(VersionedItemMetadata),
-    RemoveItems(Vec<Xid>),
+enum LogOp {
+  AddItem(VersionedItemMetadata),
+  RemoveItems(Vec<Xid>),
 }
 
-
-pub enum VersionedItemMetadata {
-    V1(ItemMetadata),
+enum VersionedItemMetadata {
+  V1(ItemMetadata),
 }
 
-pub struct ItemMetadata {
-    pub plain_text_metadata: PlainTextItemMetadata,
-    pub encrypted_metadata: Vec<u8>,
+struct ItemMetadata {
+  plain_text_metadata: PlainTextItemMetadata,
+  encrypted_metadata: Vec<u8>,
 }
 
-pub struct PlainTextItemMetadata {
-    pub primary_key_id: Xid,
-    pub tree_height: usize,
-    pub address: Address,
+struct PlainTextItemMetadata {
+  primary_key_id: Xid,
+  tree_height: usize,
+  address: Address,
 }
 
-// ItemMetadata.encrypted_metadata is stored encrypted, but is decrypted to the following form.
-pub struct EncryptedItemMetadata {
-    pub plain_text_hash: [u8; crypto::HASH_BYTES],
-    pub send_key_id: Xid,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub tags: std::collections::BTreeMap<String, String>,
+struct EncryptedItemMetadata {
+  plain_text_hash: [u8; 32],
+  send_key_id: Xid,
+  hash_key_part_2: [u8; 16],
+  timestamp: String,
+  tags: Map<String, String>,
 }
 
 

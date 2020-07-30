@@ -62,7 +62,7 @@ that can each have their own documentation.
 
 ## EXAMPLE
 
-### Standard usage
+### Typical usage
 
 ```
 # Initialize the repository and create keys.

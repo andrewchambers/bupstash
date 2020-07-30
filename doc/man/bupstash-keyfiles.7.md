@@ -16,35 +16,35 @@ Bupstash key files are PEM encoded with one of the following tags:
 The binary data after decoding the PEM data are [bare](https://baremessages.org/) Key structures, shown below.
 
 ```
-// Rust notation.
+// Rust type notation.
 
-pub struct PrimaryKey {
-    pub id: Xid,
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    pub data_pk: crypto::BoxPublicKey,
-    pub data_sk: crypto::BoxSecretKey,
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_sk: crypto::BoxSecretKey,
+struct PrimaryKey {
+    id: [u8; 16],
+    hash_key_part_1: [u8; XXX],
+    hash_key_part_2: [u8; XXX],
+    data_pk: [u8; XXX],
+    data_sk: [u8; XXX],
+    metadata_pk: [u8; XXX],
+    metadata_sk: [u8; XXX],
 }
 
-pub struct PutKey {
-    pub id: Xid,
-    pub primary_key_id: Xid,
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    pub data_pk: crypto::BoxPublicKey,
-    pub metadata_pk: crypto::BoxPublicKey,
+struct PutKey {
+    id: [u8; 16],
+    primary_key_id: [u8; 16],
+    hash_key_part_1: [u8; 16],
+    hash_key_part_2: [u8; 16],
+    data_pk: [u8; XXX],
+    metadata_pk: [u8; XXX],
 }
 
-pub struct MetadataKey {
-    pub id: Xid,
-    pub primary_key_id: Xid,
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_sk: crypto::BoxSecretKey,
+struct MetadataKey {
+    id: [u8; 16],
+    primary_key_id: [u8; 16],
+    metadata_pk: [u8; XXX],
+    metadata_sk: [u8; XXX],
 }
 
-pub enum Key {
+enum Key {
     PrimaryKeyV1(PrimaryKey),
     PutKeyV1(PutKey),
     MetadataKeyV1(MetadataKey),
