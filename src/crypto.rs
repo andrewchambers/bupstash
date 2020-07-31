@@ -58,8 +58,7 @@ pub struct BoxNonce {
 
 impl BoxNonce {
     pub fn new() -> Self {
-        let mut bytes: [u8; BOX_NONCEBYTES as usize] =
-            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut bytes: [u8; BOX_NONCEBYTES as usize] = [0; BOX_NONCEBYTES];
         randombytes(&mut bytes[..]);
         BoxNonce { bytes }
     }
