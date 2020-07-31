@@ -13,7 +13,7 @@ Bupstash key files are PEM encoded with one of the following tags:
 - BUPSTASH METADATA KEY
 - BUPSTASH PUT KEY
 
-The binary data after decoding the PEM data are [bare](https://baremessages.org/) Key structures, shown below.
+The binary data after decoding the PEM data consists of [bare](https://baremessages.org/) key structures, described below.
 
 ```
 // Rust type notation.

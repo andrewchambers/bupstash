@@ -104,11 +104,12 @@ $ bupstash gc
 
 ```
 
-### Offline decryption key
+### Using an offline decryption key
 ```
 # Create a primary key, and a put only key.
 $ bupstash new-key -o backups.key
 $ bupstash new-put-key -k backups.key -o backups-put.key
+$ bupstash new-metadata-key -k backups.key -o backups-metadata.key
 
 ... Copy backups.key to secure offline storage ...
 
@@ -117,6 +118,13 @@ $ shred backups.key
 
 $ bupstash put -k backups-put.key :: ./data
 14ebd2073b258b1f55c5bbc889c49db4
+
+... When you need to list or remove backups, you may use the metadata key ...
+
+$ bupstash list -k backups-metadata.key
+...
+$ bupstash rm -k backups-metadata.key 
+
 ... After emergency, get decryption key from offline storage ...
 
 $ bupstash get -k backups.key id=14ebd2073b258b1f55c5bbc889c49db4 | tar -C ./restore -xf - 

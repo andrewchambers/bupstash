@@ -57,7 +57,6 @@ Long term:
   - Min size/max size/average size?
   - Alternative chunking algorithms?
 
-
 Unclassified:
 
 - Prefetch system should also work for non leaf tree nodes.
@@ -65,3 +64,16 @@ Unclassified:
 - consider/benchmark PRAGMA synchronous.
 
 - failure error package is deprecated.
+
+- Man page headers too big on site.
+
+- Don't scroll in man examples.
+
+- Synopsis into a single formatted rectangle on bupstash.1
+
+- Consider a single larger man page.
+
+- Way to untar? Perhaps just use system tar? What about
+  windows? Maybe minitar ? Maybe link in a tar implementation.
+
+- Man page quote all glob examples.

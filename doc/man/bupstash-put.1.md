@@ -25,7 +25,7 @@ such that the same or similar snapshots do not take additional space.
 
 ## USAGE NOTES
 
-### Efficient put operations
+### Using a send log
 
 When sending data, `bupstash` records what was sent in the previous
 'put' operation in a file known as the send log. 
@@ -118,7 +118,8 @@ Default tags can be overidden manually by simply specifying them.
   to fetch the key from arbitrary locations such as the network or other secret storage.
 
 * BUPSTASH_SEND_LOG:
-  Path to the send log, overridden by --send-log.
+  Path to the send log, overridden by --send-log. See the section 'Using a send log'
+  for a description of how to use send logging for efficient incremental uploads.
 
 ## EXAMPLES
 
