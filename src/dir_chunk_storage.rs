@@ -351,13 +351,6 @@ impl Engine for DirStorage {
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
 
-        let mut stats = repository::GCStats {
-            chunks_remaining: 0,
-            chunks_freed: 0,
-            bytes_freed: 0,
-            bytes_remaining: 0,
-        };
-
         let mut entries = Vec::new();
         // Collect entries into memory first so we don't have to
         // worry about fs semantics of removing while iterating.
@@ -365,21 +358,26 @@ impl Engine for DirStorage {
             entries.push(e?);
         }
 
+        let mut bytes_freed = 0;
+        let mut chunks_remaining = 0;
+        let mut chunks_freed = 0;
+        let mut bytes_remaining = 0;
+
         for entries in entries.chunks(4096) {
             for e in entries {
                 match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                     Ok(addr) => {
                         if !reachable.contains(&addr) {
                             if let Ok(md) = e.metadata() {
-                                stats.bytes_freed += md.len() as usize
+                                bytes_freed += md.len() as usize
                             }
                             std::fs::remove_file(e.path())?;
-                            stats.chunks_freed += 1;
+                            chunks_freed += 1;
                         } else {
                             if let Ok(md) = e.metadata() {
-                                stats.bytes_remaining += md.len() as usize
+                                bytes_remaining += md.len() as usize
                             }
-                            stats.chunks_remaining += 1;
+                            chunks_remaining += 1;
                         }
                     }
                     Err(_) => {
@@ -390,7 +388,12 @@ impl Engine for DirStorage {
             }
             on_progress()?;
         }
-        Ok(stats)
+        Ok(repository::GCStats {
+            chunks_remaining: Some(chunks_remaining),
+            chunks_freed: Some(chunks_freed),
+            bytes_freed: Some(bytes_freed),
+            bytes_remaining: Some(bytes_remaining),
+        })
     }
 }
 

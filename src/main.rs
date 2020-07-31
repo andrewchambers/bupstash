@@ -880,8 +880,18 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     client::handle_server_info(&mut serve_out)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
-    println!("{:?} bytes freed", stats.bytes_freed);
-    println!("{:?} bytes remaining", stats.bytes_remaining);
+    if let Some(chunks_freed) = stats.chunks_freed {
+        println!("{} chunks freed", chunks_freed);
+    }
+    if let Some(chunks_remaining) = stats.chunks_remaining {
+        println!("{} chunks remaining", chunks_remaining);
+    }
+    if let Some(bytes_freed) = stats.bytes_freed {
+        println!("{} bytes freed", bytes_freed);
+    }
+    if let Some(bytes_remaining) = stats.bytes_remaining {
+        println!("{} bytes remaining", bytes_remaining);
+    }
     Ok(())
 }
 

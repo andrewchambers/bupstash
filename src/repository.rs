@@ -59,10 +59,10 @@ pub struct Repo {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GCStats {
-    pub chunks_freed: usize,
-    pub bytes_freed: usize,
-    pub chunks_remaining: usize,
-    pub bytes_remaining: usize,
+    pub chunks_freed: Option<usize>,
+    pub bytes_freed: Option<usize>,
+    pub chunks_remaining: Option<usize>,
+    pub bytes_remaining: Option<usize>,
 }
 
 struct FileLock {
@@ -174,7 +174,8 @@ impl Repo {
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('schema-version', 0);",
+            /* Schema version is a string to keep all meta rows the same type. */
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '0');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -205,12 +206,12 @@ impl Repo {
 
         let conn = Repo::open_db(repo_path)?;
 
-        let v: i32 = conn.query_row(
+        let v: String = conn.query_row(
             "select value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
-        if v != 0 {
+        if v.parse::<u64>().unwrap() != 0 {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
