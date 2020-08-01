@@ -8,7 +8,6 @@ use super::itemset;
 use super::sqlite3_chunk_storage;
 use super::xid::*;
 use failure::Fail;
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -50,13 +49,6 @@ pub enum GCLockMode {
     Exclusive,
 }
 
-pub struct Repo {
-    repo_path: PathBuf,
-    conn: rusqlite::Connection,
-    _gc_lock_mode: GCLockMode,
-    _gc_lock: Option<FileLock>,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GCStats {
     pub chunks_freed: Option<usize>,
@@ -65,28 +57,11 @@ pub struct GCStats {
     pub bytes_remaining: Option<usize>,
 }
 
-struct FileLock {
-    f: fs::File,
-}
-
-impl FileLock {
-    fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_exclusive()?;
-        Ok(FileLock { f })
-    }
-
-    fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_shared()?;
-        Ok(FileLock { f })
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        self.f.unlock().unwrap();
-    }
+pub struct Repo {
+    repo_path: PathBuf,
+    conn: rusqlite::Connection,
+    _gc_lock_mode: GCLockMode,
+    _gc_lock: Option<fsutil::FileLock>,
 }
 
 impl Repo {
@@ -202,7 +177,7 @@ impl Repo {
     }
 
     pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
-        let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
+        let gc_lock = fsutil::FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
 
@@ -287,10 +262,10 @@ impl Repo {
         self._gc_lock_mode = gc_lock_mode.clone();
         self._gc_lock = match gc_lock_mode {
             GCLockMode::Shared => {
-                Some(FileLock::get_shared(&Repo::gc_lock_path(&self.repo_path)).unwrap())
+                Some(fsutil::FileLock::get_shared(&Repo::gc_lock_path(&self.repo_path)).unwrap())
             }
             GCLockMode::Exclusive => {
-                Some(FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
+                Some(fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
             }
         }
     }

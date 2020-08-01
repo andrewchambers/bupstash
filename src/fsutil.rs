@@ -1,8 +1,33 @@
+use fs2::FileExt;
 use path_clean::PathClean;
 use rand::Rng;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+pub struct FileLock {
+    f: fs::File,
+}
+
+impl FileLock {
+    pub fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
+        let f = fs::File::open(p)?;
+        f.lock_exclusive()?;
+        Ok(FileLock { f })
+    }
+
+    pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
+        let f = fs::File::open(p)?;
+        f.lock_shared()?;
+        Ok(FileLock { f })
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        self.f.unlock().unwrap();
+    }
+}
 
 pub fn create_empty_file(p: &Path) -> Result<(), std::io::Error> {
     let f = fs::OpenOptions::new()
