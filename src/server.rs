@@ -204,9 +204,9 @@ fn send(
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive);
+    repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive)?;
     let stats = repo.gc();
-    repo.alter_gc_lock_mode(repository::GCLockMode::Shared);
+    repo.alter_gc_lock_mode(repository::GCLockMode::Shared)?;
     let stats = stats?;
     write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())

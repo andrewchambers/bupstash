@@ -257,17 +257,18 @@ impl Repo {
         Ok(())
     }
 
-    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) {
+    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) -> Result<(), failure::Error> {
         self._gc_lock = None;
         self._gc_lock_mode = gc_lock_mode.clone();
         self._gc_lock = match gc_lock_mode {
-            GCLockMode::Shared => {
-                Some(fsutil::FileLock::get_shared(&Repo::gc_lock_path(&self.repo_path)).unwrap())
-            }
-            GCLockMode::Exclusive => {
-                Some(fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
-            }
-        }
+            GCLockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::gc_lock_path(
+                &self.repo_path,
+            ))?),
+            GCLockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(
+                &self.repo_path,
+            ))?),
+        };
+        Ok(())
     }
 
     pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
