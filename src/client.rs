@@ -22,16 +22,14 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::ServerInfo(info) => {
-            if info.protocol != "0" {
-                failure::bail!("remote protocol version mismatch");
-            };
-            Ok(info)
-        }
-        _ => failure::bail!("protocol error, expected server info packet"),
-    }
+pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+    write_packet(
+        w,
+        &Packet::ClientInfo(ClientInfo {
+            protocol: "0".to_string(),
+        }),
+    )?;
+    Ok(())
 }
 
 struct ConnectionHtreeSink<'a, 'b> {

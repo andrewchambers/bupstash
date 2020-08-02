@@ -334,14 +334,6 @@ impl Repo {
         )?)
     }
 
-    pub fn id(&self) -> Result<Xid, failure::Error> {
-        Ok(self.conn.query_row(
-            "select value from RepositoryMeta where Key='id';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?)
-    }
-
     pub fn add_item(
         &mut self,
         item: itemset::VersionedItemMetadata,
@@ -388,7 +380,8 @@ impl Repo {
         }
 
         // We must COMMIT the new gc generation before we start
-        // deleting any chunks.
+        // deleting any chunks, the gc generation is how we invalidate
+        // client side put caches.
         self.conn.execute(
             "update RepositoryMeta set value = ? where key = 'gc-generation';",
             rusqlite::params![Xid::new()],

@@ -8,9 +8,8 @@ use std::convert::TryInto;
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct ServerInfo {
+pub struct ClientInfo {
     pub protocol: String,
-    pub repo_id: Xid,
 }
 
 #[derive(Debug, PartialEq)]
@@ -76,7 +75,7 @@ pub struct StorageBeginGC {}
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
-    ServerInfo(ServerInfo),
+    ClientInfo(ClientInfo),
     TBeginSend(TBeginSend),
     RBeginSend(RBeginSend),
     Chunk(Chunk),
@@ -105,7 +104,7 @@ pub enum Packet {
     EndOfTransmission,
 }
 
-const PACKET_KIND_SERVER_INFO: u8 = 0;
+const PACKET_KIND_CLIENT_INFO: u8 = 0;
 const PACKET_KIND_T_BEGIN_SEND: u8 = 1;
 const PACKET_KIND_R_BEGIN_SEND: u8 = 2;
 const PACKET_KIND_T_SEND_SYNC: u8 = 3;
@@ -182,7 +181,7 @@ pub fn read_packet(
 
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_SERVER_INFO => Packet::ServerInfo(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_CLIENT_INFO => Packet::ClientInfo(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_SEND_SYNC => Packet::TSendSync,
@@ -235,9 +234,9 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.address.bytes)?;
             w.write_all(&v.data)?;
         }
-        Packet::ServerInfo(ref v) => {
+        Packet::ClientInfo(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_SERVER_INFO, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_CLIENT_INFO, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TBeginSend(ref v) => {
@@ -365,8 +364,7 @@ mod tests {
     #[test]
     fn send_recv() {
         let packets = vec![
-            Packet::ServerInfo(ServerInfo {
-                repo_id: Xid::new(),
+            Packet::ClientInfo(ClientInfo {
                 protocol: "foobar".to_owned(),
             }),
             Packet::TBeginSend(TBeginSend {

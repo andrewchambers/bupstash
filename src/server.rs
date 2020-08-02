@@ -18,14 +18,16 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::ClientInfo(info) => {
+            if info.protocol != "0" {
+                failure::bail!("Client/Server version mismatch, expected protocol version 0")
+            }
+        }
+        _ => failure::bail!("expected client info"),
+    }
+
     let mut repo = repository::Repo::open(&cfg.repo_path)?;
-    write_packet(
-        w,
-        &Packet::ServerInfo(ServerInfo {
-            repo_id: repo.id()?,
-            protocol: "0".to_string(),
-        }),
-    )?;
 
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {

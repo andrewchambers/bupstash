@@ -464,7 +464,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
@@ -668,7 +668,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         metadata_ectx,
     };
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -709,7 +709,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -804,7 +804,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
 
     let ids: Vec<xid::Xid> = match (id, query) {
         (Some(id), _) => vec![id],
@@ -884,7 +884,7 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     if let Some(chunks_freed) = stats.chunks_freed {
