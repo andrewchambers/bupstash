@@ -46,7 +46,7 @@ pub enum Query {
 fn is_tag_char(c: char) -> bool {
     (c >= 'a' && c <= 'z')
         || (c >= 'A' && c <= 'Z')
-        || (c >= '9' && c <= '9')
+        || (c >= '0' && c <= '9')
         || c == '-'
         || c == '_'
 }

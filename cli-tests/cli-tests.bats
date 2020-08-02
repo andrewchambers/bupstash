@@ -109,7 +109,7 @@ _concurrent_send_test_worker () {
   for i in $(seq 10)
   do
     id="$(bupstash put -e --no-send-log -k "$PRIMARY_KEY" :: echo $i)"
-    test "$i" = "$(bupstash get -k "$PRIMARY_KEY" id=$id)"
+    test "$i" = "$(bupstash get --query-cache ./cache$i -k "$PRIMARY_KEY" id=$id)"
   done
 }
 
@@ -276,5 +276,22 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
     "$SCRATCH/foo/l"
   id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+}
+
+
+@test "directory exclusions" {
+  mkdir "$SCRATCH/foo"
+  mkdir "$SCRATCH/foo/bar"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bang"
+
+  id=$(bupstash put -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 4 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+
+  id=$(bupstash put --exclude="*/bang" -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
+
+  id=$(bupstash put --exclude="*/bar" -k "$PRIMARY_KEY" :: "$SCRATCH/foo")
   test 2 = "$(bupstash get -k "$PRIMARY_KEY" id=$id | tar -tf - | wc -l)"
 }

@@ -1,0 +1,11 @@
+bupstash list [OPTIONS] [QUERY]
+
+List bupstash items that match a given query.
+
+See the bupstash user manual for a description of the query
+language.
+
+Examples:
+  $ bupstash list
+  $ bupstash list id=1b89*
+  $ bupstash list --format=jsonl name=*.tar or name=*.sql

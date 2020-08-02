@@ -8,7 +8,6 @@ use super::itemset;
 use super::sqlite3_chunk_storage;
 use super::xid::*;
 use failure::Fail;
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -50,43 +49,19 @@ pub enum GCLockMode {
     Exclusive,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct GCStats {
+    pub chunks_freed: Option<usize>,
+    pub bytes_freed: Option<usize>,
+    pub chunks_remaining: Option<usize>,
+    pub bytes_remaining: Option<usize>,
+}
+
 pub struct Repo {
     repo_path: PathBuf,
     conn: rusqlite::Connection,
     _gc_lock_mode: GCLockMode,
-    _gc_lock: Option<FileLock>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct GCStats {
-    pub chunks_freed: usize,
-    pub bytes_freed: usize,
-    pub chunks_remaining: usize,
-    pub bytes_remaining: usize,
-}
-
-struct FileLock {
-    f: fs::File,
-}
-
-impl FileLock {
-    fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_exclusive()?;
-        Ok(FileLock { f })
-    }
-
-    fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_shared()?;
-        Ok(FileLock { f })
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        self.f.unlock().unwrap();
-    }
+    _gc_lock: Option<fsutil::FileLock>,
 }
 
 impl Repo {
@@ -174,7 +149,8 @@ impl Repo {
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('schema-version', 0);",
+            /* Schema version is a string to keep all meta rows the same type. */
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '0');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -201,16 +177,16 @@ impl Repo {
     }
 
     pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
-        let gc_lock = FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
+        let gc_lock = fsutil::FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
 
-        let v: i32 = conn.query_row(
+        let v: String = conn.query_row(
             "select value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
-        if v != 0 {
+        if v.parse::<u64>().unwrap() != 0 {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
@@ -281,17 +257,18 @@ impl Repo {
         Ok(())
     }
 
-    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) {
+    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) -> Result<(), failure::Error> {
         self._gc_lock = None;
         self._gc_lock_mode = gc_lock_mode.clone();
         self._gc_lock = match gc_lock_mode {
-            GCLockMode::Shared => {
-                Some(FileLock::get_shared(&Repo::gc_lock_path(&self.repo_path)).unwrap())
-            }
-            GCLockMode::Exclusive => {
-                Some(FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path)).unwrap())
-            }
-        }
+            GCLockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::gc_lock_path(
+                &self.repo_path,
+            ))?),
+            GCLockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(
+                &self.repo_path,
+            ))?),
+        };
+        Ok(())
     }
 
     pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
@@ -337,7 +314,7 @@ impl Repo {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
-                    path.to_string(),
+                    &path.to_string(),
                 )?)
             }
         };

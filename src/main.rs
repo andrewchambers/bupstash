@@ -51,7 +51,14 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
         "new-key" => include_str!("../doc/cli/new-key.txt"),
-        "new-send-key" => include_str!("../doc/cli/new-send-key.txt"),
+        "new-put-key" => include_str!("../doc/cli/new-put-key.txt"),
+        "new-metadata-key" => include_str!("../doc/cli/new-metadata-key.txt"),
+        "put" => include_str!("../doc/cli/put.txt"),
+        "list" => include_str!("../doc/cli/list.txt"),
+        "get" => include_str!("../doc/cli/get.txt"),
+        "remove" | "rm" => include_str!("../doc/cli/rm.txt"),
+        "gc" => include_str!("../doc/cli/gc.txt"),
+        "serve" => include_str!("../doc/cli/serve.txt"),
         _ => panic!(),
     };
     print!("{}", opts.usage(brief));
@@ -69,13 +76,25 @@ fn query_opts(opts: &mut Options) {
     opts.optopt(
         "",
         "query-cache",
-        "Path to the query cache (used for storing synced items before search).",
+        "Path to the query cache (used for storing synced items before search). \
+        See manual for default values and relevant environment variables.",
         "PATH",
     );
     opts.optflag(
         "",
         "utc-timestamps",
-        "Do not convert the 'timestamp' tag to local time (as is done by default).",
+        "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
+    );
+}
+
+fn repo_opts(opts: &mut Options) {
+    opts.optopt(
+        "r",
+        "repository",
+        "Repository to interact with, if prefixed with ssh:// implies ssh access. \
+         Defaults to BUPSTASH_REPOSITORY if not set. \
+         See the manual for additional ways to connect to the repository.",
+        "REPO",
     );
 }
 
@@ -103,7 +122,7 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "s",
         "storage",
-        "The storage engine specification.",
+        "The storage engine specification, consult manual for details.",
         "STORAGE",
     );
     let matches = default_parse_opts(opts, &args[..]);
@@ -169,7 +188,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let k = matches_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
-            let send_key = keys::Key::SendKeyV1(keys::SendKey::gen(&primary_key));
+            let send_key = keys::Key::PutKeyV1(keys::SendKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => failure::bail!("key is not a primary key"),
@@ -311,12 +330,7 @@ enum ListFormat {
 
 fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to list items from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
@@ -326,7 +340,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "format",
-        "Output format, valid values are human | jsonl",
+        "Output format, valid values are human | jsonl.",
         "PATH",
     );
     query_opts(&mut opts);
@@ -345,8 +359,10 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let mut metadata_dctx = match key {
-        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-        keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk),
+        keys::Key::MetadataKeyV1(k) => {
+            crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+        }
         _ => failure::bail!("provided key is not a primary key"),
     };
     let mut query: Option<tquery::Query> = None;
@@ -460,29 +476,19 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-
+    repo_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
         "Primary or put key to encrypt data with.",
         "PATH",
     );
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to save data info.",
-        "REPO",
-    );
     opts.optflag(
         "",
         "no-compression",
         "Disable compression (Use for for already compressed/encrypted data).",
     );
-    opts.optflag(
-        "",
-        "no-default-tags",
-        "Disable the default tags 'name', 'timestamp'",
-    );
+    opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
     opts.optflag(
         "e",
         "exec",
@@ -498,12 +504,17 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "no-send-log",
         "Disable logging of previously sent data, implies --no-stat-cache.",
     );
-
     opts.optopt(
         "",
         "send-log",
         "Use the file at PATH as a 'send log', used to skip data that was previously to the server.",
         "PATH",
+    );
+    opts.optmulti(
+        "",
+        "exclude",
+        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.",
+        "PATTERN",
     );
 
     let (args, source_args) = {
@@ -559,14 +570,14 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let (hash_key, data_ectx, metadata_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
             (hash_key, data_ectx, metadata_ectx)
         }
-        keys::Key::SendKeyV1(k) => {
+        keys::Key::PutKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
             (hash_key, data_ectx, metadata_ectx)
         }
         _ => failure::bail!("can only send data with a primary-key or put-key."),
@@ -598,12 +609,24 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             None => "rootfs".to_string(),
         };
 
+        let mut exclusions = Vec::new();
+
+        for e in matches.opt_strs("exclude") {
+            match glob::Pattern::new(&e) {
+                Ok(pattern) => exclusions.push(pattern),
+                Err(err) => failure::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
+            }
+        }
+
         if md.is_dir() {
             if default_tags {
                 tags.insert("name".to_string(), name + ".tar");
             }
 
-            data_source = client::DataSource::Directory(input_path)
+            data_source = client::DataSource::Directory {
+                path: input_path,
+                exclusions,
+            };
         } else if md.is_file() {
             if default_tags {
                 tags.insert("name".to_string(), name);
@@ -614,8 +637,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
             failure::bail!("{} is not a file or a directory", source_args[0]);
         }
     };
-
-    let tag_re = regex::Regex::new(r"^([^=]+)=(.+)$")?;
+    let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$")?;
     for a in &matches.free {
         match tag_re.captures(&a) {
             Some(caps) => {
@@ -663,15 +685,9 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
 fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-
-    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to fetch data from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     query_opts(&mut opts);
+    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
 
     let matches = default_parse_opts(opts, &args[..]);
 
@@ -680,8 +696,9 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let (hash_key_part_1, data_dctx, mut metadata_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
-            let data_dctx = crypto::DecryptionContext::new(k.data_sk);
-            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk);
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
+            let metadata_dctx =
+                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk.clone());
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
         _ => failure::bail!("provided key is not a decryption key"),
@@ -769,12 +786,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to fetch data from.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     query_opts(&mut opts);
     opts.optopt(
         "k",
@@ -804,8 +816,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let key = matches_to_key(&matches)?;
             let primary_key_id = key.primary_key_id();
             let mut metadata_dctx = match key {
-                keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-                keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+                keys::Key::PrimaryKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
+                keys::Key::MetadataKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
                 _ => failure::bail!("provided key is not a decryption key"),
             };
             let mut ids = Vec::new();
@@ -862,12 +878,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt(
-        "r",
-        "repository",
-        "URI of repository to run the garbage collector upon.",
-        "REPO",
-    );
+    repo_opts(&mut opts);
     let matches = default_parse_opts(opts, &args[..]);
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
@@ -876,8 +887,18 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     client::handle_server_info(&mut serve_out)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
-    println!("{:?} bytes freed", stats.bytes_freed);
-    println!("{:?} bytes remaining", stats.bytes_remaining);
+    if let Some(chunks_freed) = stats.chunks_freed {
+        println!("{} chunks freed", chunks_freed);
+    }
+    if let Some(chunks_remaining) = stats.chunks_remaining {
+        println!("{} chunks remaining", chunks_remaining);
+    }
+    if let Some(bytes_freed) = stats.bytes_freed {
+        println!("{} bytes freed", bytes_freed);
+    }
+    if let Some(bytes_remaining) = stats.bytes_remaining {
+        println!("{} bytes remaining", bytes_remaining);
+    }
     Ok(())
 }
 
@@ -886,22 +907,22 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag(
         "",
         "allow-put",
-        "allow client to put more entries into the repository.",
+        "Allow client to put more entries into the repository.",
     );
     opts.optflag(
         "",
         "allow-remove",
-        "allow client to remove repository entries.",
+        "Allow client to remove repository entries.",
     );
     opts.optflag(
         "",
         "allow-gc",
-        "allow client to run the repository garbage collector.",
+        "Allow client to run the repository garbage collector.",
     );
     opts.optflag(
         "",
         "allow-get",
-        "allow client to get data from the repository.",
+        "Allow client to get data from the repository.",
     );
     opts.optflag("", "allow-list", "allow client to list repository entries.");
     let matches = default_parse_opts(opts, &args[..]);

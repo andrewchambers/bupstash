@@ -23,7 +23,9 @@ can be queried using bupstash-list(1). Tags are specified in a simple
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots do not take additional space.
 
-## Efficient put operations
+## USAGE NOTES
+
+### Using a send log
 
 When sending data, `bupstash` records what was sent in the previous
 'put' operation in a file known as the send log. 
@@ -36,9 +38,9 @@ The send log serves two main purposes:
   to skip processing files when snapshotting the same directory many times repeatedly.
 
 The send log has limited memory, so for efficient 'put' use, give each backup job
-a unique send log file. As an example, if you have a backup script, that runs a whole
-system backup, it is best to give that script its own send log so that all subsequent
-runs can with similar input data will share the same send log.
+a unique send log file. As an example, if you have a backup script that puts a 
+directory as a cron job, it is best to give that script its own send log so that all subsequent
+runs with similar input data will share the same send log.
 
 Example: 
 
@@ -46,20 +48,16 @@ Example:
 $ bupstash put --send-log /root/bupstash-backups-send-log :: /home/
 ```
 
-The path to the send log file, defaults to one of the following, in order, provided
-the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
-`$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
+### Default tags
 
-## Default tags
-
-When putting data, `bupstash` automatically sets a small set of default tags.
+`bupstash` automatically sets default tags.
 
 Currently they are:
 
-- timestamp, set to utc time in the form 'YYYY:MM:DD HH:MM:SS'
-- name, set to the file name, or .tar , or omitted for --exec mode.
+- name, set to the `FILENAME`, or `DIRNAME.tar`, omitted when putting in --exec mode.
 
 Default tags can be overidden manually by simply specifying them.
+
 
 ## OPTIONS
 
@@ -75,6 +73,11 @@ Default tags can be overidden manually by simply specifying them.
   WHAT is a command to execute, where stdout is saved as an entry
   in the bupstash repository. Only create the entry if the command
   exited with a successful status code.
+
+* --exclude PATTERN:
+  Add an exclusion glob pattern to filter entries from the resulting tarball.
+  The glob is matched against the absolute path of the directory entry.
+  This option may be passed multiple times, and is ignored if WHAT is not a directory.
 
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided
@@ -103,8 +106,7 @@ Default tags can be overidden manually by simply specifying them.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
-  allows more complex connections to the repository for specialist cases,
-  see examples below.
+  allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
   Path to a primary key, or a put-key, that will be used to encrypt
@@ -116,7 +118,8 @@ Default tags can be overidden manually by simply specifying them.
   to fetch the key from arbitrary locations such as the network or other secret storage.
 
 * BUPSTASH_SEND_LOG:
-  Path to the send log, overridden by --send-log.
+  Path to the send log, overridden by --send-log. See the section 'Using a send log'
+  for a description of how to use send logging for efficient incremental uploads.
 
 ## EXAMPLES
 

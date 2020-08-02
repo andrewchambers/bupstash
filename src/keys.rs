@@ -26,9 +26,11 @@ pub struct PrimaryKey {
     /* Key set used for encrypting data/ */
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
+    pub data_psk: crypto::BoxPreSharedKey,
     /* Key set used for encrypting metadata. */
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -38,7 +40,9 @@ pub struct SendKey {
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
+    pub data_psk: crypto::BoxPreSharedKey,
     pub metadata_pk: crypto::BoxPublicKey,
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -47,19 +51,20 @@ pub struct MetadataKey {
     pub primary_key_id: Xid,
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     PrimaryKeyV1(PrimaryKey),
-    SendKeyV1(SendKey),
+    PutKeyV1(SendKey),
     MetadataKeyV1(MetadataKey),
 }
 
 fn pem_tag(k: &Key) -> &str {
     match k {
         Key::PrimaryKeyV1(_) => "BUPSTASH PRIMARY KEY",
-        Key::SendKeyV1(_) => "BUPSTASH SEND KEY",
+        Key::PutKeyV1(_) => "BUPSTASH PUT KEY",
         Key::MetadataKeyV1(_) => "BUPSTASH METADATA KEY",
     }
 }
@@ -106,7 +111,7 @@ impl Key {
     pub fn primary_key_id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::SendKeyV1(k) => k.primary_key_id,
+            Key::PutKeyV1(k) => k.primary_key_id,
             Key::MetadataKeyV1(k) => k.primary_key_id,
         }
     }
@@ -114,7 +119,7 @@ impl Key {
     pub fn id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::SendKeyV1(k) => k.id,
+            Key::PutKeyV1(k) => k.id,
             Key::MetadataKeyV1(k) => k.id,
         }
     }
@@ -126,15 +131,19 @@ impl PrimaryKey {
         let hash_key_part_1 = crypto::PartialHashKey::new();
         let hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
+        let data_psk = crypto::BoxPreSharedKey::new();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
+        let metadata_psk = crypto::BoxPreSharedKey::new();
         PrimaryKey {
             id,
             hash_key_part_1,
             hash_key_part_2,
             data_pk,
             data_sk,
+            data_psk,
             metadata_pk,
             metadata_sk,
+            metadata_psk,
         }
     }
 }
@@ -148,7 +157,9 @@ impl SendKey {
             hash_key_part_1: mk.hash_key_part_1.clone(),
             hash_key_part_2,
             data_pk: mk.data_pk.clone(),
+            data_psk: mk.data_psk.clone(),
             metadata_pk: mk.metadata_pk.clone(),
+            metadata_psk: mk.metadata_psk.clone(),
         }
     }
 }
@@ -160,6 +171,7 @@ impl MetadataKey {
             primary_key_id: mk.id,
             metadata_pk: mk.metadata_pk.clone(),
             metadata_sk: mk.metadata_sk.clone(),
+            metadata_psk: mk.metadata_psk.clone(),
         }
     }
 }

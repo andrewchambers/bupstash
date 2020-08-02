@@ -1,0 +1,8 @@
+bupstash new-metadata-key [OPTIONS]
+
+Create a new metadata-key capable of listing 
+repository contents, but not reading data.
+
+Examples:
+  $ bupstash new-key -o ./backups.key
+  $ bupstash new-metadata-key -k ./backups.key -o ./metadata-only-backup.key

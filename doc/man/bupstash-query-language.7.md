@@ -25,13 +25,26 @@ $ bupstash list name==*.tar
 ...
 ```
 
-And conditions matching:
+And condition matching:
 ```
-$ bupstash list type=backup and [hostname=server1 or hostname=server2]
+$ bupstash list type=backup and hostname=server1 hostname=server2
 ...
 ```
 
-Quoting:
+Or condition matching:
+```
+$ bupstash list hostname=server1 or hostname=server2
+...
+```
+
+Precedence grouping:
+```
+$ bupstash list [hostname=server1 or hostname=server2] and date=2020-* 
+...
+```
+
+
+Quote using your shell's builtin quoting:
 
 ```
 $ bupstash rm name="my files.tar"
@@ -80,7 +93,7 @@ Check a tag matches a glob:
 TAGNAME = GLOB
 ```
 
-Check a tag matches an literal value.
+Check a tag matches a literal value.
 
 ```
 TAGNAME == VALUE

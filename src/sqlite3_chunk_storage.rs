@@ -359,8 +359,7 @@ impl Drop for Sqlite3Storage {
 impl Engine for Sqlite3Storage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
         self.check_write_worker_io_errors()?;
-        self.scaling_write_worker_dispatch(WriteWorkerMsg::AddChunk((*addr, buf)))
-            .unwrap();
+        self.scaling_write_worker_dispatch(WriteWorkerMsg::AddChunk((*addr, buf)))?;
         Ok(())
     }
 
@@ -369,9 +368,14 @@ impl Engine for Sqlite3Storage {
         addr: &Address,
     ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
         let (tx, rx) = crossbeam::channel::bounded(1);
-        self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx)))
-            .unwrap();
-        rx
+        match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
+            Ok(()) => rx,
+            Err(err) => {
+                let (tx, rx) = crossbeam::channel::bounded(1);
+                tx.send(Err(err.into())).unwrap();
+                rx
+            }
+        }
     }
 
     fn sync(&mut self) -> Result<(), failure::Error> {
@@ -386,10 +390,10 @@ impl Engine for Sqlite3Storage {
         self.stop_workers();
 
         let mut stats = repository::GCStats {
-            chunks_remaining: reachable.len(),
-            chunks_freed: 0,
-            bytes_freed: 0,
-            bytes_remaining: 0,
+            chunks_remaining: Some(reachable.len()),
+            chunks_freed: None,
+            bytes_freed: None,
+            bytes_remaining: None,
         };
 
         let db_start_size = std::fs::metadata(&self.db_path)?.size();
@@ -411,7 +415,7 @@ impl Engine for Sqlite3Storage {
             }
         }
 
-        stats.chunks_freed = tx.execute("delete from Chunks where not exists (select * from TempReachable where TempReachable.Address = Chunks.Address);", rusqlite::NO_PARAMS)?;
+        stats.chunks_freed = Some(tx.execute("delete from Chunks where not exists (select * from TempReachable where TempReachable.Address = Chunks.Address);", rusqlite::NO_PARAMS)?);
         tx.commit()?;
 
         db.query_row(
@@ -433,8 +437,8 @@ impl Engine for Sqlite3Storage {
 
         let db_end_size = std::fs::metadata(&self.db_path)?.size();
 
-        stats.bytes_remaining = db_end_size.try_into()?;
-        stats.bytes_freed = (db_start_size - db_end_size).try_into().unwrap_or(0);
+        stats.bytes_remaining = Some(db_end_size.try_into()?);
+        stats.bytes_freed = Some((db_start_size - db_end_size).try_into().unwrap_or(0));
 
         Ok(stats)
     }

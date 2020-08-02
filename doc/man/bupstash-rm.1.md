@@ -26,12 +26,11 @@ The bupstash query language is shared by commands such as bupstash-get(1), bupst
 ```
 $ id=$(bupstash put  :: ./some-data)
 
-# Get an item by id.
 $ bupstash rm id=$id
 
-$ bupstash rm --allow-many id=*
-
 $ bupstash rm name=backups.tar and date=2020/06/*
+
+$ bupstash rm --allow-many id=*
 ```
 
 For full documentation on the query language, see bupstash-query-language(7). 
@@ -63,12 +62,12 @@ more information on the query cache.
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to, may be of the form `ssh://$SERVER/$PATH` for
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
   remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
-  allows more complex connections to the repository for specialist cases,
+  allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
   Path to a primary key that will be used for decrypting data and metadata.

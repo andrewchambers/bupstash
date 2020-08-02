@@ -414,10 +414,10 @@ mod tests {
             Packet::TGc(TGc {}),
             Packet::RGc(RGc {
                 stats: repository::GCStats {
-                    chunks_remaining: 1,
-                    chunks_freed: 123,
-                    bytes_freed: 345,
-                    bytes_remaining: 678,
+                    chunks_remaining: Some(1),
+                    chunks_freed: Some(123),
+                    bytes_freed: Some(345),
+                    bytes_remaining: None,
                 },
             }),
             Packet::TRequestItemSync(TRequestItemSync {
@@ -446,10 +446,10 @@ mod tests {
             Packet::StorageBeginGC,
             Packet::StorageGCHeartBeat,
             Packet::StorageGCComplete(repository::GCStats {
-                chunks_remaining: 1,
-                chunks_freed: 123,
-                bytes_freed: 345,
-                bytes_remaining: 678,
+                chunks_remaining: Some(123),
+                chunks_freed: None,
+                bytes_freed: None,
+                bytes_remaining: None,
             }),
             Packet::TStorageWriteBarrier,
             Packet::RStorageWriteBarrier,
