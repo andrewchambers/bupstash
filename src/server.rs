@@ -23,7 +23,7 @@ pub fn serve(
         w,
         &Packet::ServerInfo(ServerInfo {
             repo_id: repo.id()?,
-            protocol: "repo-0".to_string(),
+            protocol: "0".to_string(),
         }),
     )?;
 

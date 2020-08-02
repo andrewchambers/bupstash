@@ -359,8 +359,10 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let mut metadata_dctx = match key {
-        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-        keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk),
+        keys::Key::MetadataKeyV1(k) => {
+            crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+        }
         _ => failure::bail!("provided key is not a primary key"),
     };
     let mut query: Option<tquery::Query> = None;
@@ -568,14 +570,14 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let (hash_key, data_ectx, metadata_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
             (hash_key, data_ectx, metadata_ectx)
         }
         keys::Key::PutKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
-            let data_ectx = crypto::EncryptionContext::new(&k.data_pk);
-            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk);
+            let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
+            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
             (hash_key, data_ectx, metadata_ectx)
         }
         _ => failure::bail!("can only send data with a primary-key or put-key."),
@@ -694,8 +696,9 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let (hash_key_part_1, data_dctx, mut metadata_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
-            let data_dctx = crypto::DecryptionContext::new(k.data_sk);
-            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk);
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
+            let metadata_dctx =
+                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk.clone());
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
         _ => failure::bail!("provided key is not a decryption key"),
@@ -813,8 +816,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             let key = matches_to_key(&matches)?;
             let primary_key_id = key.primary_key_id();
             let mut metadata_dctx = match key {
-                keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
-                keys::Key::MetadataKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk),
+                keys::Key::PrimaryKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
+                keys::Key::MetadataKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
                 _ => failure::bail!("provided key is not a decryption key"),
             };
             let mut ids = Vec::new();

@@ -25,7 +25,7 @@ pub enum ClientError {
 pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ServerInfo(info) => {
-            if info.protocol != "repo-0" {
+            if info.protocol != "0" {
                 failure::bail!("remote protocol version mismatch");
             };
             Ok(info)

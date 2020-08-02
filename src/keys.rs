@@ -29,6 +29,10 @@ pub struct PrimaryKey {
     /* Key set used for encrypting metadata. */
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
+    /* Mixed with the data secret keys. */
+    pub data_psk: crypto::BoxPreSharedKey,
+    /* Mixed with the metadata secret keys. */
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -39,6 +43,8 @@ pub struct SendKey {
     pub hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
     pub metadata_pk: crypto::BoxPublicKey,
+    pub data_psk: crypto::BoxPreSharedKey,
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -47,6 +53,7 @@ pub struct MetadataKey {
     pub primary_key_id: Xid,
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
+    pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -126,15 +133,19 @@ impl PrimaryKey {
         let hash_key_part_1 = crypto::PartialHashKey::new();
         let hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
+        let data_psk = crypto::BoxPreSharedKey::new();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
+        let metadata_psk = crypto::BoxPreSharedKey::new();
         PrimaryKey {
             id,
             hash_key_part_1,
             hash_key_part_2,
             data_pk,
             data_sk,
+            data_psk,
             metadata_pk,
             metadata_sk,
+            metadata_psk,
         }
     }
 }
@@ -148,7 +159,9 @@ impl SendKey {
             hash_key_part_1: mk.hash_key_part_1.clone(),
             hash_key_part_2,
             data_pk: mk.data_pk.clone(),
+            data_psk: mk.data_psk.clone(),
             metadata_pk: mk.metadata_pk.clone(),
+            metadata_psk: mk.metadata_psk.clone(),
         }
     }
 }
@@ -160,6 +173,7 @@ impl MetadataKey {
             primary_key_id: mk.id,
             metadata_pk: mk.metadata_pk.clone(),
             metadata_sk: mk.metadata_sk.clone(),
+            metadata_psk: mk.metadata_psk.clone(),
         }
     }
 }

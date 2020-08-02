@@ -77,3 +77,5 @@ Unclassified:
   windows? Maybe minitar ? Maybe link in a tar implementation.
 
 - Man page quote all glob examples.
+
+- Decouple compression and encryption code. Compression context?

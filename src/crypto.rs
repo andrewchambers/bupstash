@@ -23,6 +23,8 @@ pub const BOX_BEFORENMBYTES: usize =
     sodium::crypto_box_curve25519xchacha20poly1305_BEFORENMBYTES as usize;
 pub const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_MACBYTES as usize;
 
+pub const BOX_PRE_SHARED_KEY_BYTES: usize = sodium::crypto_generichash_KEYBYTES as usize;
+
 pub const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
 pub const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
 
@@ -134,12 +136,12 @@ impl Drop for BoxKey {
 }
 
 #[inline(always)]
-pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey) -> BoxKey {
-    let mut bytes: [u8; BOX_BEFORENMBYTES] =
+pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedKey) -> BoxKey {
+    let mut unmixed_key_bytes: [u8; BOX_BEFORENMBYTES] =
         unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     if unsafe {
         sodium::crypto_box_curve25519xchacha20poly1305_beforenm(
-            bytes.as_mut_ptr(),
+            unmixed_key_bytes.as_mut_ptr(),
             pk.bytes.as_ptr(),
             sk.bytes.as_ptr(),
         )
@@ -149,7 +151,45 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey) -> BoxKey {
             bytes: [0; BOX_BEFORENMBYTES],
         }
     } else {
-        BoxKey { bytes }
+        /*
+          XXX TODO FIXME REVIEWME:
+          Integrate the preshared key bytes with the computed secret so the
+          decrypting party must have had access to one of our keys. Post
+          quantum is a threat to our asymmetric key security, the PSK is
+          intended to help us gracefully degrade to symmetric key security,
+          even if the asymmetric key is broken.
+
+          This key mixing relies on the implementation of the crypto box, the
+          result of crypto_box_curve25519xchacha20poly1305_beforenm is the precomputed
+          crypto_secretbox_xsalsa20poly1305 key, which are simply random keys. Using
+          generic hash to mix the psk with this key should result is another random key.
+
+          We need advice from experts on how to do this appropriately, and if
+          what even we are doing is right at all.
+        */
+
+        let mut mixed_key_bytes: [u8; BOX_BEFORENMBYTES] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+
+        debug_assert!(BOX_PRE_SHARED_KEY_BYTES == sodium::crypto_generichash_KEYBYTES as usize);
+
+        unsafe {
+            if sodium::crypto_generichash(
+                mixed_key_bytes.as_mut_ptr(),
+                mixed_key_bytes.len().try_into().unwrap(),
+                unmixed_key_bytes.as_ptr(),
+                unmixed_key_bytes.len().try_into().unwrap(),
+                psk.bytes.as_ptr(),
+                psk.bytes.len().try_into().unwrap(),
+            ) != 0
+            {
+                panic!();
+            }
+        };
+
+        BoxKey {
+            bytes: mixed_key_bytes,
+        }
     }
 }
 
@@ -259,10 +299,10 @@ pub struct EncryptionContext {
 }
 
 impl EncryptionContext {
-    pub fn new(recipient: &BoxPublicKey) -> EncryptionContext {
+    pub fn new(recipient: &BoxPublicKey, psk: &BoxPreSharedKey) -> EncryptionContext {
         let nonce = BoxNonce::new();
         let (ephemeral_pk, ephemeral_sk) = box_keypair();
-        let ephemeral_bk = box_compute_key(recipient, &ephemeral_sk);
+        let ephemeral_bk = box_compute_key(recipient, &ephemeral_sk, &psk);
         EncryptionContext {
             nonce,
             ephemeral_pk,
@@ -294,14 +334,16 @@ impl EncryptionContext {
 
 pub struct DecryptionContext {
     sk: BoxSecretKey,
+    psk: BoxPreSharedKey,
     ephemeral_pk: BoxPublicKey,
     ephemeral_bk: BoxKey,
 }
 
 impl DecryptionContext {
-    pub fn new(sk: BoxSecretKey) -> DecryptionContext {
+    pub fn new(sk: BoxSecretKey, psk: BoxPreSharedKey) -> DecryptionContext {
         DecryptionContext {
             sk,
+            psk,
             ephemeral_pk: BoxPublicKey {
                 bytes: [0; BOX_PUBLICKEYBYTES],
             },
@@ -321,7 +363,7 @@ impl DecryptionContext {
             for i in 0..BOX_PUBLICKEYBYTES {
                 if pk_slice[i] != self.ephemeral_pk.bytes[i] {
                     self.ephemeral_pk.bytes[..].clone_from_slice(pk_slice);
-                    self.ephemeral_bk = box_compute_key(&self.ephemeral_pk, &self.sk);
+                    self.ephemeral_bk = box_compute_key(&self.ephemeral_pk, &self.sk, &self.psk);
                     break;
                 }
             }
@@ -364,6 +406,31 @@ impl Default for PartialHashKey {
 }
 
 impl Drop for PartialHashKey {
+    fn drop(&mut self) {
+        memzero(&mut self.bytes[..]);
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+pub struct BoxPreSharedKey {
+    pub bytes: [u8; 32],
+}
+
+impl BoxPreSharedKey {
+    pub fn new() -> Self {
+        let mut bytes: [u8; 32] = [0; 32];
+        randombytes(&mut bytes[..]);
+        BoxPreSharedKey { bytes }
+    }
+}
+
+impl Default for BoxPreSharedKey {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for BoxPreSharedKey {
     fn drop(&mut self) {
         memzero(&mut self.bytes[..]);
     }
@@ -472,7 +539,8 @@ mod tests {
         init();
         let mut nonce = BoxNonce::new();
         let (pk, sk) = box_keypair();
-        let bk = box_compute_key(&pk, &sk);
+        let psk = BoxPreSharedKey::new();
+        let bk = box_compute_key(&pk, &sk, &psk);
         let pt1 = vec![1, 2, 3];
         let mut bt = Vec::new();
         bt.resize_with(pt1.len() + BOX_NONCEBYTES + BOX_MACBYTES, Default::default);
@@ -487,12 +555,13 @@ mod tests {
     fn data_round_trip() {
         init();
         let (pk, sk) = box_keypair();
+        let psk = BoxPreSharedKey::new();
         let pt1 = vec![1, 2, 3];
-        let mut ectx1 = EncryptionContext::new(&pk);
-        let mut ectx2 = EncryptionContext::new(&pk);
+        let mut ectx1 = EncryptionContext::new(&pk, &psk);
+        let mut ectx2 = EncryptionContext::new(&pk, &psk);
         let ct1 = ectx1.encrypt_data(pt1.clone(), DataCompression::None);
         let ct2 = ectx2.encrypt_data(pt1.clone(), DataCompression::Zstd);
-        let mut dctx = DecryptionContext::new(sk);
+        let mut dctx = DecryptionContext::new(sk, psk);
         let pt2 = dctx.decrypt_data(ct1).unwrap();
         let pt3 = dctx.decrypt_data(ct2).unwrap();
         assert_eq!(pt1, pt2);
