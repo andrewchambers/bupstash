@@ -14,9 +14,7 @@ pub trait Engine {
         self.get_chunk_async(addr).recv()?
     }
 
-    // Call should_keep on each item in chunk storage.
-    // if it returns false, delete the data associated with the address.
-    // Returns the number of chunks removed.
+    // Remove all chunks not in the reachable set.
     fn gc(
         &mut self,
         on_progress: &dyn Fn() -> Result<(), failure::Error>,
