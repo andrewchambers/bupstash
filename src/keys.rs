@@ -26,12 +26,10 @@ pub struct PrimaryKey {
     /* Key set used for encrypting data/ */
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
+    pub data_psk: crypto::BoxPreSharedKey,
     /* Key set used for encrypting metadata. */
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
-    /* Mixed with the data secret keys. */
-    pub data_psk: crypto::BoxPreSharedKey,
-    /* Mixed with the metadata secret keys. */
     pub metadata_psk: crypto::BoxPreSharedKey,
 }
 
@@ -42,8 +40,8 @@ pub struct SendKey {
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
-    pub metadata_pk: crypto::BoxPublicKey,
     pub data_psk: crypto::BoxPreSharedKey,
+    pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_psk: crypto::BoxPreSharedKey,
 }
 

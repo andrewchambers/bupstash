@@ -24,8 +24,10 @@ struct PrimaryKey {
   hash_key_part_2: [u8; XXX],
   data_pk: [u8; XXX],
   data_sk: [u8; XXX],
+  data_psk: [u8; XXX],
   metadata_pk: [u8; XXX],
   metadata_sk: [u8; XXX],
+  metadata_psk: [u8; XXX],
 }
 
 struct PutKey {
@@ -34,7 +36,9 @@ struct PutKey {
   hash_key_part_1: [u8; 16],
   hash_key_part_2: [u8; 16],
   data_pk: [u8; XXX],
+  data_psk: [u8; XXX],
   metadata_pk: [u8; XXX],
+  metadata_psk: [u8; XXX],
 }
 
 struct MetadataKey {
@@ -42,6 +46,7 @@ struct MetadataKey {
   primary_key_id: [u8; 16],
   metadata_pk: [u8; XXX],
   metadata_sk: [u8; XXX],
+  metadata_psk: [u8; XXX],
 }
 
 enum Key {
