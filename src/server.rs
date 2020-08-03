@@ -132,7 +132,7 @@ fn recv(
                     // This helps protect against inaccurate item timestamps, which protects users from unintentionally
                     // deleting important backups when deleting based on timestamp queries. Instead they will be notified
                     // of the clock mismatch as soon as we know about it.
-                    failure::bail!("server and client have clock skew larger than 15 minutes, refusing to add backup item.");
+                    failure::bail!("server and client have clock skew larger than {} minutes, refusing to add backup item.", MAX_SKEW);
                 }
 
                 store_engine.sync()?;
