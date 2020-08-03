@@ -32,6 +32,18 @@ pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::E
     Ok(())
 }
 
+pub fn init_repository(
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+    storage_spec: Option<repository::StorageEngineSpec>,
+) -> Result<(), failure::Error> {
+    write_packet(w, &Packet::TInitRepository(storage_spec))?;
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RInitRepository => Ok(()),
+        _ => failure::bail!("protocol error, expected begin ack packet"),
+    }
+}
+
 struct ConnectionHtreeSink<'a, 'b> {
     last_checkpoint_time: std::time::Instant,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,

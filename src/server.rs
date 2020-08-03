@@ -6,6 +6,7 @@ use super::xid::*;
 
 pub struct ServerConfig {
     pub repo_path: std::path::PathBuf,
+    pub allow_init: bool,
     pub allow_gc: bool,
     pub allow_get: bool,
     pub allow_put: bool,
@@ -27,38 +28,49 @@ pub fn serve(
         _ => failure::bail!("expected client info"),
     }
 
-    let mut repo = repository::Repo::open(&cfg.repo_path)?;
-
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::TInitRepository(engine) => {
+                if !cfg.allow_init {
+                    failure::bail!("server has disabled init for this client")
+                }
+                repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
+                write_packet(w, &Packet::RInitRepository)?;
+            }
             Packet::TBeginSend(begin) => {
                 if !cfg.allow_put {
                     failure::bail!("server has disabled put for this client")
                 }
+
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
                 recv(&mut repo, begin, r, w)?;
             }
             Packet::TRequestData(req) => {
                 if !cfg.allow_get {
                     failure::bail!("server has disabled get for this client")
                 }
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
                 send(&mut repo, req.id, w)?;
             }
             Packet::TGc(_) => {
                 if !cfg.allow_gc {
                     failure::bail!("server has disabled garbage collection for this client")
                 }
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
                 gc(&mut repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
                 if !cfg.allow_list {
                     failure::bail!("server has disabled query and search for this client")
                 }
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
                 item_sync(&mut repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
                 if !cfg.allow_remove {
                     failure::bail!("server has disabled remove for this client")
                 }
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
                 repo.remove_items(items)?;
                 write_packet(w, &Packet::RRmItems)?;
             }
