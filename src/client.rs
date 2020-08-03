@@ -234,6 +234,7 @@ pub fn send(
                     crypto::DataCompression::Zstd,
                 ),
             }),
+            now: chrono::Utc::now(),
         }),
     )?;
 

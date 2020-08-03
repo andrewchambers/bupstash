@@ -124,6 +124,17 @@ fn recv(
                     failure::bail!("gc generation changed during send, aborting");
                 }
 
+                let clock_skew = chrono::Utc::now().signed_duration_since(add_item.now);
+                const MAX_SKEW: i64 = 15;
+                if clock_skew > chrono::Duration::minutes(MAX_SKEW)
+                    || clock_skew < chrono::Duration::minutes(-MAX_SKEW)
+                {
+                    // This helps protect against inaccurate item timestamps, which protects users from unintentionally
+                    // deleting important backups when deleting based on timestamp queries. Instead they will be notified
+                    // of the clock mismatch as soon as we know about it.
+                    failure::bail!("server and client have clock skew larger than 15 minutes, refusing to add backup item.");
+                }
+
                 store_engine.sync()?;
 
                 let item_id = repo.add_item(add_item.item)?;

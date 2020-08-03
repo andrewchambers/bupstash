@@ -24,6 +24,12 @@ pub enum Unop {
 }
 
 #[derive(Eq, PartialEq, Debug)]
+pub enum AgeAssertion {
+    OlderThan,
+    NewerThan,
+}
+
+#[derive(Eq, PartialEq, Debug)]
 pub enum Query {
     Glob {
         tag: String,
@@ -40,6 +46,11 @@ pub enum Query {
         span: (usize, usize),
         left: Box<Query>,
         right: Box<Query>,
+    },
+    AgeAssertion {
+        op: AgeAssertion,
+        span: (usize, usize),
+        duration: std::time::Duration,
     },
 }
 
@@ -192,8 +203,50 @@ impl Parser {
             Ok(v)
         } else if c == '~' {
             self.parse_unop()
+        } else if self.lookahead("older-than•") || self.lookahead("newer-than•") {
+            self.parse_age_assertion()
         } else {
-            self.parse_glob()
+            self.parse_eq()
+        }
+    }
+
+    fn parse_age_assertion(&mut self) -> Result<Query, ParseError> {
+        let (_, start_pos) = self.peek();
+
+        let op = if self.consume_if_matches("older-than•") {
+            AgeAssertion::OlderThan
+        } else if self.consume_if_matches("newer-than•") {
+            AgeAssertion::NewerThan
+        } else {
+            unreachable!()
+        };
+
+        let (_, duration_start_pos) = self.peek();
+
+        let mut d = String::new();
+        loop {
+            match self.peek() {
+                (c, _) if c != '•' => {
+                    self.advance(1);
+                    d.push(c);
+                }
+                _ => break,
+            }
+        }
+        let (_, end_pos) = self.peek();
+        self.consume_if_matches("•");
+
+        match parse_duration::parse(&d) {
+            Ok(duration) => Ok(Query::AgeAssertion {
+                op,
+                duration,
+                span: (start_pos, end_pos),
+            }),
+            Err(err) => Err(ParseError::SyntaxError {
+                query: self.query_chars.iter().collect(),
+                msg: format!("error parsing duration: {}", err),
+                span: (duration_start_pos, end_pos),
+            }),
         }
     }
 
@@ -249,7 +302,7 @@ impl Parser {
         Ok(v)
     }
 
-    fn parse_glob(&mut self) -> Result<Query, ParseError> {
+    fn parse_eq(&mut self) -> Result<Query, ParseError> {
         let (_, tag_pos) = self.peek();
         let tag = self.parse_tag()?;
         let (_, tag_end_pos) = self.peek();
@@ -342,7 +395,10 @@ pub fn report_parse_error(e: ParseError) {
             let mut codemap = codemap::CodeMap::new();
             let indices: Vec<(usize, char)> = query.char_indices().collect();
             let query_span = codemap.add_file("<query>".to_owned(), query).span;
-            let err_span = query_span.subspan(indices[span.0].0 as u64, indices[span.1].0 as u64);
+            let err_span = query_span.subspan(
+                indices.get(span.0).unwrap_or(&indices[indices.len() - 1]).0 as u64,
+                indices.get(span.1).unwrap_or(&indices[indices.len() - 1]).0 as u64,
+            );
             let label = codemap_diagnostic::SpanLabel {
                 span: err_span,
                 style: codemap_diagnostic::SpanStyle::Primary,
@@ -364,20 +420,29 @@ pub fn report_parse_error(e: ParseError) {
     }
 }
 
-pub fn query_matches(q: &Query, tagset: &BTreeMap<String, String>) -> bool {
+pub struct QueryContext<'a> {
+    pub age: std::time::Duration,
+    pub tagset: &'a BTreeMap<String, String>,
+}
+
+pub fn query_matches(q: &Query, ctx: &QueryContext) -> bool {
     match q {
-        Query::Glob { tag, pattern, .. } => match tagset.get(tag) {
+        Query::Glob { tag, pattern, .. } => match ctx.tagset.get(tag) {
             Some(v) => pattern.matches(v),
             None => false,
         },
         Query::Binop {
             op, left, right, ..
         } => match op {
-            Binop::And => query_matches(&left, tagset) && query_matches(&right, tagset),
-            Binop::Or => query_matches(&left, tagset) || query_matches(&right, tagset),
+            Binop::And => query_matches(&left, ctx) && query_matches(&right, ctx),
+            Binop::Or => query_matches(&left, ctx) || query_matches(&right, ctx),
         },
         Query::Unop { op, query, .. } => match op {
-            Unop::Not => !query_matches(&query, tagset),
+            Unop::Not => !query_matches(&query, ctx),
+        },
+        Query::AgeAssertion { op, duration, .. } => match op {
+            AgeAssertion::OlderThan => ctx.age > *duration,
+            AgeAssertion::NewerThan => ctx.age < *duration,
         },
     }
 }
@@ -415,10 +480,18 @@ mod tests {
         let mut tagset = BTreeMap::<String, String>::new();
         tagset.insert("foo".to_string(), "123".to_string());
         tagset.insert("bar".to_string(), "".to_string());
-        assert!(query_matches(&parse("foo=123•and•bar=").unwrap(), &tagset));
-        assert!(query_matches(&parse("foo=12*").unwrap(), &tagset));
-        assert!(query_matches(&parse("foo=12?").unwrap(), &tagset));
-        assert!(query_matches(&parse("~foo=xxx").unwrap(), &tagset));
-        assert!(!query_matches(&parse("~•[•foo==123•]").unwrap(), &tagset));
+        let ctx = QueryContext {
+            age: std::time::Duration::new(5, 0),
+            tagset: &tagset,
+        };
+        assert!(query_matches(&parse("foo=123•and•bar=").unwrap(), &ctx));
+        assert!(query_matches(&parse("foo=12*").unwrap(), &ctx));
+        assert!(query_matches(&parse("foo=12?").unwrap(), &ctx));
+        assert!(query_matches(&parse("~foo=xxx").unwrap(), &ctx));
+        assert!(query_matches(&parse("older-than•2s]").unwrap(), &ctx));
+        assert!(query_matches(&parse("newer-than•6s]").unwrap(), &ctx));
+        assert!(!query_matches(&parse("older-than•6s]").unwrap(), &ctx));
+        assert!(!query_matches(&parse("newer-than•2s]").unwrap(), &ctx));
+        assert!(!query_matches(&parse("~•[•foo==123•]").unwrap(), &ctx));
     }
 }

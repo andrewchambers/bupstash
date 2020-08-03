@@ -67,6 +67,7 @@ pub struct StorageConnect {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
     pub gc_generation: Xid,
+    pub now: chrono::DateTime<chrono::Utc>,
     pub item: itemset::VersionedItemMetadata,
 }
 
