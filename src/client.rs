@@ -22,15 +22,26 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-pub fn handle_server_info(r: &mut dyn std::io::Read) -> Result<ServerInfo, failure::Error> {
+pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+    write_packet(
+        w,
+        &Packet::ClientInfo(ClientInfo {
+            protocol: "0".to_string(),
+            now: chrono::Utc::now(),
+        }),
+    )?;
+    Ok(())
+}
+
+pub fn init_repository(
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+    storage_spec: Option<repository::StorageEngineSpec>,
+) -> Result<(), failure::Error> {
+    write_packet(w, &Packet::TInitRepository(storage_spec))?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::ServerInfo(info) => {
-            if info.protocol != "0" {
-                failure::bail!("remote protocol version mismatch");
-            };
-            Ok(info)
-        }
-        _ => failure::bail!("protocol error, expected server info packet"),
+        Packet::RInitRepository => Ok(()),
+        _ => failure::bail!("protocol error, expected begin ack packet"),
     }
 }
 

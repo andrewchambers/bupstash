@@ -14,14 +14,24 @@ the examples section for practical uses, or read the language section for a more
 
 Glob matching:
 ```
-$ bupstash list name=*.tar
+$ bupstash list name="*.tar"
 ... name=foo.tar
 ... name=bar.tar
 ```
 
 Literal matching:
 ```
-$ bupstash list name==*.tar
+$ bupstash list name=="*.tar"
+...
+```
+
+Age based matching:
+
+```
+
+$ bupstash list newer-than "1 month"
+$ bupstash list older-than 2d
+$ bupstash list older-than 1y
 ...
 ```
 
@@ -52,6 +62,11 @@ $ bupstash rm name="my files.tar"
 
 ## LANGUAGE
 
+### Delimiters
+
+As queries may span multiple command line arguments, the gap between arguments is treated as a special
+delimiting character for the sake of query parsing.
+
 ### Tags and values
 
 A tag name is a string containg a set of characters matching the regular
@@ -59,10 +74,22 @@ expression ```[A-Za-z0-9-_]+```.
 
 A values is a set of any characters except a delimiter.
 
-### Delimiters
+### Durations
 
-As queries may span multiple command line arguments, the gap between arguments is treated as a special
-delimiting character for the sake of query parsing.
+A duration is a set of characters, not including a delimiter forming a duration string.
+The accepted syntax of a duration string is a sequence of value unit pairs, such as "15 days 20 minutes". Spaces are optional and order does not affect the duration value.
+
+The following units are accepted:
+
+- seconds
+- minutes
+- hours
+- days
+- weeks
+- months
+- years
+
+Abbreviations for each of these units are accepted where capital "M" disambiguates between months and minutes.
 
 ### Globbing
 
@@ -84,7 +111,6 @@ Some operators accept a glob to match against, the following describes the valid
 
 (Documentation taken from the underlying [glob software library](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html)).
 
-
 ### Binary operators
 
 Check a tag matches a glob:
@@ -99,14 +125,6 @@ Check a tag matches a literal value.
 TAGNAME == VALUE
 ```
 
-### Unary operators
-
-Invert an expression.
-
-```
-~ EXPR
-```
-
 Match if either expression matches.
 ```
 EXPR or EXPR
@@ -117,6 +135,25 @@ Match if both expressions match.
 ```
 EXPR and EXPR
 ```
+
+### Age matching
+
+```
+older-than DURATION
+newer-than DURATION
+```
+
+Take care that system clocks are configured correctly on both the querying machine, and devices sending backups, as incorrect
+system clocks could cause accidental removal of items.
+
+### Unary operators
+
+Invert an expression.
+
+```
+~ EXPR
+```
+
 
 ### grouping
 

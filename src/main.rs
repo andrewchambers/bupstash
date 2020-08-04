@@ -11,13 +11,13 @@ pub mod htree;
 pub mod itemset;
 pub mod keys;
 pub mod protocol;
+pub mod query;
 pub mod querycache;
 pub mod repository;
 pub mod rollsum;
 pub mod sendlog;
 pub mod server;
 pub mod sqlite3_chunk_storage;
-pub mod tquery;
 pub mod xid;
 pub mod xtar;
 
@@ -119,6 +119,7 @@ fn help_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
+    repo_opts(&mut opts);
     opts.optopt(
         "s",
         "storage",
@@ -127,21 +128,23 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     );
     let matches = default_parse_opts(opts, &args[..]);
 
-    if matches.free.len() != 1 {
-        failure::bail!("Expected a single path to initialize.");
-    }
-
-    let backend: repository::StorageEngineSpec = match matches.opt_str("storage") {
+    let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
         Some(s) => match serde_json::from_str(&s) {
-            Ok(s) => s,
+            Ok(s) => Some(s),
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
         },
-        None => repository::StorageEngineSpec::Dir {
-            dir_path: "./data".to_string(),
-        },
+        None => None,
     };
 
-    repository::Repo::init(std::path::Path::new(&matches.free[0]), backend)
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::negotiate_connection(&mut serve_in)?;
+    client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
+    client::hangup(&mut serve_in)?;
+
+    Ok(())
 }
 
 fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
@@ -234,19 +237,19 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
 
 fn matches_to_id_and_query(
     matches: &Matches,
-) -> Result<(Option<xid::Xid>, tquery::Query), failure::Error> {
-    let query: tquery::Query = if !matches.free.is_empty() {
-        match tquery::parse(&matches.free.join("•")) {
+) -> Result<(Option<xid::Xid>, query::Query), failure::Error> {
+    let query: query::Query = if !matches.free.is_empty() {
+        match query::parse(&matches.free.join("•")) {
             Ok(query) => query,
             Err(e) => {
-                tquery::report_parse_error(e);
+                query::report_parse_error(e);
                 failure::bail!("query parse error");
             }
         }
     } else {
         failure::bail!("you must specify a query");
     };
-    let id = tquery::get_id_query(&query);
+    let id = query::get_id_query(&query);
     Ok((id, query))
 }
 
@@ -365,12 +368,12 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
         _ => failure::bail!("provided key is not a primary key"),
     };
-    let mut query: Option<tquery::Query> = None;
+    let mut query: Option<query::Query> = None;
 
     if !matches.free.is_empty() {
-        query = match tquery::parse(&matches.free.join("•")) {
+        query = match query::parse(&matches.free.join("•")) {
             Err(e) => {
-                tquery::report_parse_error(e);
+                query::report_parse_error(e);
                 std::process::exit(1);
             }
             Ok(query) => Some(query),
@@ -380,6 +383,8 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut query_cache = matches_to_query_cache(&matches)?;
 
     let warned_wrong_key = &mut false;
+    let now = chrono::Utc::now();
+
     let mut f =
         |_op_id: i64, item_id: xid::Xid, metadata: itemset::VersionedItemMetadata| match metadata {
             itemset::VersionedItemMetadata::V1(metadata) => {
@@ -400,16 +405,27 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 tags.insert("id".to_string(), item_id.to_string());
 
                 let ts = if matches.opt_present("utc-timestamps") {
-                    encrypted_metadata.timestamp.format("%F %T").to_string()
+                    encrypted_metadata
+                        .timestamp
+                        .format("%Y/%m/%d %T")
+                        .to_string()
                 } else {
                     let local_ts: chrono::DateTime<chrono::Local> =
                         chrono::DateTime::from(encrypted_metadata.timestamp);
-                    local_ts.format("%F %T").to_string()
+                    local_ts.format("%Y/%m/%d %T").to_string()
                 };
                 tags.insert("timestamp".to_string(), ts);
 
                 let doprint = match query {
-                    Some(ref query) => tquery::query_matches(query, &tags),
+                    Some(ref query) => query::query_matches(
+                        query,
+                        &query::QueryContext {
+                            age: now
+                                .signed_duration_since(encrypted_metadata.timestamp)
+                                .to_std()?,
+                            tagset: &tags,
+                        },
+                    ),
                     None => true,
                 };
 
@@ -464,7 +480,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
@@ -668,7 +684,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         metadata_ectx,
     };
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -709,7 +725,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -720,6 +736,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let mut n_matches: u64 = 0;
             let mut id = xid::Xid::default();
+            let now = chrono::Utc::now();
 
             let mut f = |_op_id: i64,
                          item_id: xid::Xid,
@@ -737,15 +754,26 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                         tags.insert("id".to_string(), item_id.to_string());
 
                         let ts = if matches.opt_present("utc-timestamps") {
-                            encrypted_metadata.timestamp.format("%F %T").to_string()
+                            encrypted_metadata
+                                .timestamp
+                                .format("%Y/%m/%d %T")
+                                .to_string()
                         } else {
                             let local_ts: chrono::DateTime<chrono::Local> =
                                 chrono::DateTime::from(encrypted_metadata.timestamp);
-                            local_ts.format("%F %T").to_string()
+                            local_ts.format("%Y/%m/%d %T").to_string()
                         };
                         tags.insert("timestamp".to_string(), ts);
 
-                        if tquery::query_matches(&query, &tags) {
+                        if query::query_matches(
+                            &query,
+                            &query::QueryContext {
+                                age: now
+                                    .signed_duration_since(encrypted_metadata.timestamp)
+                                    .to_std()?,
+                                tagset: &tags,
+                            },
+                        ) {
                             n_matches += 1;
                             id = item_id;
                         }
@@ -804,7 +832,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
 
     let ids: Vec<xid::Xid> = match (id, query) {
         (Some(id), _) => vec![id],
@@ -825,6 +853,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 _ => failure::bail!("provided key is not a decryption key"),
             };
             let mut ids = Vec::new();
+            let now = chrono::Utc::now();
 
             let mut f = |_op_id: i64,
                          item_id: xid::Xid,
@@ -841,15 +870,26 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                         tags.insert("id".to_string(), item_id.to_string());
 
                         let ts = if matches.opt_present("utc-timestamps") {
-                            encrypted_metadata.timestamp.format("%F %T").to_string()
+                            encrypted_metadata
+                                .timestamp
+                                .format("%Y/%m/%d %T")
+                                .to_string()
                         } else {
                             let local_ts: chrono::DateTime<chrono::Local> =
                                 chrono::DateTime::from(encrypted_metadata.timestamp);
-                            local_ts.format("%F %T").to_string()
+                            local_ts.format("%Y/%m/%d %T").to_string()
                         };
                         tags.insert("timestamp".to_string(), ts);
 
-                        if tquery::query_matches(&query, &tags) {
+                        if query::query_matches(
+                            &query,
+                            &query::QueryContext {
+                                age: now
+                                    .signed_duration_since(encrypted_metadata.timestamp)
+                                    .to_std()?,
+                                tagset: &tags,
+                            },
+                        ) {
                             ids.push(item_id);
                         }
                         Ok(())
@@ -884,7 +924,7 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-    client::handle_server_info(&mut serve_out)?;
+    client::negotiate_connection(&mut serve_in)?;
     let stats = client::gc(&mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     if let Some(chunks_freed) = stats.chunks_freed {
@@ -904,6 +944,11 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
+    opts.optflag(
+        "",
+        "allow-init",
+        "Allow client to initialize the remote repository if it doesn't exist.",
+    );
     opts.optflag(
         "",
         "allow-put",
@@ -931,18 +976,21 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         die("Expected a single path to initialize.".to_string());
     }
 
+    let mut allow_init = true;
     let mut allow_put = true;
     let mut allow_remove = true;
     let mut allow_gc = true;
     let mut allow_get = true;
     let mut allow_list = true;
 
-    if matches.opt_present("allow-put")
+    if matches.opt_present("allow-init")
+        || matches.opt_present("allow-put")
         || matches.opt_present("allow-remove")
         || matches.opt_present("allow-gc")
         || matches.opt_present("allow-get")
         || matches.opt_present("allow-list")
     {
+        allow_init = matches.opt_present("allow-init");
         allow_put = matches.opt_present("allow-put");
         allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
@@ -952,6 +1000,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     server::serve(
         server::ServerConfig {
+            allow_init,
             allow_put,
             allow_remove,
             allow_gc,

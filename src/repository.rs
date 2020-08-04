@@ -28,15 +28,15 @@ pub enum RepoError {
     UnsupportedSchemaVersion,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
-    Sqlite3 {
-        db_path: String,
-    },
-    Dir {
+    DirStore {
         dir_path: String,
     },
-    External {
+    Sqlite3Store {
+        db_path: String,
+    },
+    ExternalStore {
         socket_path: String,
         path: String,
         quiescent_period_ms: Option<u64>,
@@ -92,7 +92,17 @@ impl Repo {
         Repo::open_db_with_flags(repo_path, default_flags)
     }
 
-    pub fn init(repo_path: &Path, engine: StorageEngineSpec) -> Result<(), failure::Error> {
+    pub fn init(
+        repo_path: &Path,
+        storage_engine: Option<StorageEngineSpec>,
+    ) -> Result<(), failure::Error> {
+        let storage_engine = match storage_engine {
+            Some(storage_engine) => storage_engine,
+            None => StorageEngineSpec::DirStore {
+                dir_path: "./data".to_string(),
+            },
+        };
+
         let parent = if repo_path.is_absolute() {
             repo_path.parent().unwrap().to_owned()
         } else {
@@ -129,8 +139,8 @@ impl Repo {
         path_buf.pop();
 
         path_buf.push("storage-engine.json");
-        let engine_buf = serde_json::to_vec_pretty(&engine)?;
-        fsutil::atomic_add_file(path_buf.as_path(), &engine_buf)?;
+        let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
+        fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
         path_buf.pop();
 
         let mut conn = Repo::open_db_with_flags(
@@ -235,7 +245,7 @@ impl Repo {
 
         if gc_dirty {
             match self.storage_engine_spec()? {
-                StorageEngineSpec::External {
+                StorageEngineSpec::ExternalStore {
                     quiescent_period_ms,
                     ..
                 } => {
@@ -245,8 +255,8 @@ impl Repo {
                         quiescent_period_ms.unwrap_or(10000),
                     ))
                 }
-                StorageEngineSpec::Dir { .. } => (),
-                StorageEngineSpec::Sqlite3 { .. } => (),
+                StorageEngineSpec::DirStore { .. } => (),
+                StorageEngineSpec::Sqlite3Store { .. } => (),
             }
             self.conn.execute(
                 "update RepositoryMeta set value = ? where key = 'gc-dirty';",
@@ -286,18 +296,7 @@ impl Repo {
         spec: &StorageEngineSpec,
     ) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
-            StorageEngineSpec::Sqlite3 { db_path } => {
-                let db_path: std::path::PathBuf = db_path.into();
-                let db_path = if db_path.is_relative() {
-                    let mut path_buf = self.repo_path.to_path_buf();
-                    path_buf.push(db_path);
-                    path_buf
-                } else {
-                    db_path
-                };
-                Box::new(sqlite3_chunk_storage::Sqlite3Storage::new(&db_path)?)
-            }
-            StorageEngineSpec::Dir { dir_path } => {
+            StorageEngineSpec::DirStore { dir_path } => {
                 let dir_path: std::path::PathBuf = dir_path.into();
                 let dir_path = if dir_path.is_relative() {
                     let mut path_buf = self.repo_path.to_path_buf();
@@ -308,7 +307,18 @@ impl Repo {
                 };
                 Box::new(dir_chunk_storage::DirStorage::new(&dir_path)?)
             }
-            StorageEngineSpec::External {
+            StorageEngineSpec::Sqlite3Store { db_path } => {
+                let db_path: std::path::PathBuf = db_path.into();
+                let db_path = if db_path.is_relative() {
+                    let mut path_buf = self.repo_path.to_path_buf();
+                    path_buf.push(db_path);
+                    path_buf
+                } else {
+                    db_path
+                };
+                Box::new(sqlite3_chunk_storage::Sqlite3Storage::new(&db_path)?)
+            }
+            StorageEngineSpec::ExternalStore {
                 socket_path, path, ..
             } => {
                 let socket_path = PathBuf::from(socket_path);
@@ -329,14 +339,6 @@ impl Repo {
     pub fn gc_generation(&self) -> Result<Xid, failure::Error> {
         Ok(self.conn.query_row(
             "select value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?)
-    }
-
-    pub fn id(&self) -> Result<Xid, failure::Error> {
-        Ok(self.conn.query_row(
-            "select value from RepositoryMeta where Key='id';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?)
@@ -388,7 +390,8 @@ impl Repo {
         }
 
         // We must COMMIT the new gc generation before we start
-        // deleting any chunks.
+        // deleting any chunks, the gc generation is how we invalidate
+        // client side put caches.
         self.conn.execute(
             "update RepositoryMeta set value = ? where key = 'gc-generation';",
             rusqlite::params![Xid::new()],
@@ -456,9 +459,9 @@ mod tests {
         path_buf.push("repo");
         Repo::init(
             path_buf.as_path(),
-            StorageEngineSpec::Sqlite3 {
+            Some(StorageEngineSpec::Sqlite3Store {
                 db_path: "./data.sqlite3".to_string(),
-            },
+            }),
         )
         .unwrap();
         let repo = Repo::open(path_buf.as_path()).unwrap();

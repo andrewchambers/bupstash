@@ -5,17 +5,20 @@ bupstash-init(1)
 
 Initialize a bupstash repository.
 
-`bupstash init [OPTIONS] REPOSITORY`
+`bupstash init [OPTIONS]`
 
 ## DESCRIPTION
 
-`bupstash init` initializes a repository at the path `REPOSITORY`.
+`bupstash init` initializes a repository.
 If `REPOSITORY` already exists, the command fails.
 
 For details about the contents of the package store after initialization, see bupstash-repository(7).
 
-
 ## OPTIONS
+
+* -r, --repository REPO:
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * --storage SPEC:
   Bupstash supports plugin and alternative storage plugins via a
@@ -24,10 +27,24 @@ For details about the contents of the package store after initialization, see bu
 
   See the storage specs section for supported specifications and examples.
 
+## ENVIRONMENT
+
+* BUPSTASH_REPOSITORY:
+  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
+
+* BUPSTASH_REPOSITORY_COMMAND:
+  A command to run to connect to an instance of bupstash-serve(1). This 
+  allows more complex connections to the repository for less common use cases.
+
 ## EXAMPLES
 
 ```
-$ bupstash init ./my-repository
+$ export BUPSTASH_REPOSITORY=./my-repository
+$ bupstash init
+
+$ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/backups/bupstash-backups
+$ bupstash init
 ```
 
 ## STORAGE SPECS

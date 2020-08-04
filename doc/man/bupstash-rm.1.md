@@ -28,9 +28,9 @@ $ id=$(bupstash put  :: ./some-data)
 
 $ bupstash rm id=$id
 
-$ bupstash rm name=backups.tar and date=2020/06/*
+$ bupstash rm name=backups.tar and date="2020/06/*"
 
-$ bupstash rm --allow-many id=*
+$ bupstash rm --allow-many id="*"
 ```
 
 For full documentation on the query language, see bupstash-query-language(7). 
@@ -90,7 +90,13 @@ $ bupstash rm id=14ebd2073b258b1f55c5bbc889c49db4
 ### remove all items from the respository
 
 ```
-$ bupstash rm id=* 
+$ bupstash rm id="*" 
+```
+
+### remove items with name backup.tar that are older than 30 days
+
+```
+$ bupstash rm name=backup.tar and older-than 30d
 ```
 
 ## SEE ALSO
