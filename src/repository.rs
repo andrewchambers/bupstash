@@ -459,7 +459,7 @@ mod tests {
         path_buf.push("repo");
         Repo::init(
             path_buf.as_path(),
-            Some(StorageEngineSpec::Sqlite3 {
+            Some(StorageEngineSpec::Sqlite3Store {
                 db_path: "./data.sqlite3".to_string(),
             }),
         )

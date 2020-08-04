@@ -27,6 +27,7 @@ pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::E
         w,
         &Packet::ClientInfo(ClientInfo {
             protocol: "0".to_string(),
+            now: chrono::Utc::now(),
         }),
     )?;
     Ok(())
@@ -234,7 +235,6 @@ pub fn send(
                     crypto::DataCompression::Zstd,
                 ),
             }),
-            now: chrono::Utc::now(),
         }),
     )?;
 

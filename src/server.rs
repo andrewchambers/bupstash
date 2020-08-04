@@ -24,6 +24,17 @@ pub fn serve(
             if info.protocol != "0" {
                 failure::bail!("Client/Server version mismatch, expected protocol version 0")
             }
+
+            let clock_skew = chrono::Utc::now().signed_duration_since(info.now);
+            const MAX_SKEW: i64 = 30;
+            if clock_skew > chrono::Duration::minutes(MAX_SKEW)
+                || clock_skew < chrono::Duration::minutes(-MAX_SKEW)
+            {
+                // This helps protect against inaccurate item timestamps, which protects users from unintentionally
+                // deleting important backups when deleting based on timestamp queries. Instead they will be notified
+                // of the clock mismatch as soon as we know about it.
+                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW);
+            }
         }
         _ => failure::bail!("expected client info"),
     }
@@ -122,17 +133,6 @@ fn recv(
                 */
                 if add_item.gc_generation != repo.gc_generation()? {
                     failure::bail!("gc generation changed during send, aborting");
-                }
-
-                let clock_skew = chrono::Utc::now().signed_duration_since(add_item.now);
-                const MAX_SKEW: i64 = 15;
-                if clock_skew > chrono::Duration::minutes(MAX_SKEW)
-                    || clock_skew < chrono::Duration::minutes(-MAX_SKEW)
-                {
-                    // This helps protect against inaccurate item timestamps, which protects users from unintentionally
-                    // deleting important backups when deleting based on timestamp queries. Instead they will be notified
-                    // of the clock mismatch as soon as we know about it.
-                    failure::bail!("server and client have clock skew larger than {} minutes, refusing to add backup item.", MAX_SKEW);
                 }
 
                 store_engine.sync()?;

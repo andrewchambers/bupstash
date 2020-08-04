@@ -10,6 +10,7 @@ pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ClientInfo {
     pub protocol: String,
+    pub now: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -67,7 +68,6 @@ pub struct StorageConnect {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
     pub gc_generation: Xid,
-    pub now: chrono::DateTime<chrono::Utc>,
     pub item: itemset::VersionedItemMetadata,
 }
 
@@ -381,6 +381,7 @@ mod tests {
         let packets = vec![
             Packet::ClientInfo(ClientInfo {
                 protocol: "foobar".to_owned(),
+                now: chrono::Utc::now(),
             }),
             Packet::TBeginSend(TBeginSend {
                 delta_id: Some(Xid::new()),
