@@ -22,8 +22,6 @@ pub enum RepoError {
     NotInitializedProperly,
     #[fail(display = "repository does not exist")]
     RepoDoesNotExist,
-    #[fail(display = "sqlite error while manipulating the database: {}", err)]
-    SqliteError { err: rusqlite::Error },
     #[fail(display = "repository database at unsupported version")]
     UnsupportedSchemaVersion,
 }
@@ -192,7 +190,7 @@ impl Repo {
         let conn = Repo::open_db(repo_path)?;
 
         let v: String = conn.query_row(
-            "select value from RepositoryMeta where Key='schema-version';",
+            "select Value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
@@ -238,7 +236,7 @@ impl Repo {
         // means in practice we can make what is already an unlikely event, extremely unlikely by increasing this period.
 
         let gc_dirty: bool = self.conn.query_row(
-            "select value from RepositoryMeta where Key='gc-dirty';",
+            "select Value from RepositoryMeta where Key='gc-dirty';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
@@ -259,7 +257,7 @@ impl Repo {
                 StorageEngineSpec::Sqlite3Store { .. } => (),
             }
             self.conn.execute(
-                "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+                "update RepositoryMeta set Value = ? where key = 'gc-dirty';",
                 rusqlite::params![false],
             )?;
         }
@@ -338,7 +336,7 @@ impl Repo {
 
     pub fn gc_generation(&self) -> Result<Xid, failure::Error> {
         Ok(self.conn.query_row(
-            "select value from RepositoryMeta where Key='gc-generation';",
+            "select Value from RepositoryMeta where Key='gc-generation';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?)
@@ -393,7 +391,7 @@ impl Repo {
         // deleting any chunks, the gc generation is how we invalidate
         // client side put caches.
         self.conn.execute(
-            "update RepositoryMeta set value = ? where key = 'gc-generation';",
+            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
             rusqlite::params![Xid::new()],
         )?;
 
@@ -433,14 +431,14 @@ impl Repo {
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
 
         self.conn.execute(
-            "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
             rusqlite::params![true],
         )?;
 
         let stats = storage_engine.gc(&on_progress, reachable)?;
 
         self.conn.execute(
-            "update RepositoryMeta set value = ? where key = 'gc-dirty';",
+            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
             rusqlite::params![false],
         )?;
 
