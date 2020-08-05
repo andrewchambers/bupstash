@@ -9,7 +9,7 @@ use super::xid::*;
 use std::convert::TryInto;
 
 pub struct ServerConfig {
-    pub repo_path: std::path::PathBuf,
+    pub repo_connect: String,
     pub allow_init: bool,
     pub allow_gc: bool,
     pub allow_get: bool,
@@ -32,7 +32,7 @@ pub fn serve(
                     )
                 }
 
-                let mut repo = repository::Repo::open(&cfg.repo_path)?;
+                let mut repo = repository::Repo::open(&cfg.repo_connect)?;
 
                 match req.lock_hint {
                     LockHint::Read => repo.alter_lock_mode(repository::LockMode::None)?,
@@ -50,12 +50,8 @@ pub fn serve(
                 return serve_repository(cfg, &mut repo, r, w);
             }
 
-            Packet::TInitRepository(engine) => {
-                if !cfg.allow_init {
-                    anyhow::bail!("server has disabled init for this client")
-                }
-                repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
-                write_packet(w, &Packet::RInitRepository)?;
+            Packet::TInitRepository(_) => {
+                anyhow::bail!("server has disabled init for this client");
             }
 
             Packet::EndOfTransmission => return Ok(()),

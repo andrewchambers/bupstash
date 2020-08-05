@@ -1,27 +1,22 @@
 use super::chunk_storage;
 use super::compression;
 use super::crypto;
-use super::dir_chunk_storage;
 use super::external_chunk_storage;
-use super::fsutil;
 use super::hex;
 use super::htree;
 use super::itemset;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
-use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
-    DirStore,
     ExternalStore { socket_path: String, path: String },
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum LockMode {
     None,
     Write,
@@ -37,10 +32,10 @@ pub struct GCStats {
 }
 
 pub struct Repo {
-    repo_path: PathBuf,
-    conn: rusqlite::Connection,
+    repo_id: String,
+    lock_id: i64,
+    conn: postgres::Client,
     _repo_lock_mode: LockMode,
-    _repo_lock: Option<fsutil::FileLock>,
 }
 
 pub enum ItemSyncEvent {
@@ -50,195 +45,103 @@ pub enum ItemSyncEvent {
 }
 
 impl Repo {
-    fn repo_lock_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("repo.lock");
-        lock_path
-    }
-
-    fn tmp_dir_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("tmp");
-        lock_path
-    }
-
-    fn random_tmp_reachability_db_path(repo_path: &Path) -> PathBuf {
-        let random_suffix = {
-            let mut buf = [0; 16];
-            crypto::randombytes(&mut buf[..]);
-            hex::easy_encode_to_string(&buf[..])
-        };
-        let file_name = "reachability."
-            .chars()
-            .chain(random_suffix.chars())
-            .chain(".sqlite3".chars())
-            .collect::<String>();
-
-        let mut db_path = Repo::tmp_dir_path(repo_path);
-        db_path.push(file_name);
-        db_path
-    }
-
-    fn repo_db_path(repo_path: &Path) -> PathBuf {
-        let mut db_path = repo_path.to_path_buf();
-        db_path.push("bupstash.sqlite3");
-        db_path
-    }
-
-    fn open_db_with_flags(
-        db_path: &Path,
-        flags: rusqlite::OpenFlags,
-    ) -> Result<rusqlite::Connection, anyhow::Error> {
-        let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
-
-        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
-
-        Ok(conn)
-    }
-
-    fn open_db(db_path: &Path) -> Result<rusqlite::Connection, anyhow::Error> {
-        let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
-        Repo::open_db_with_flags(db_path, default_flags)
-    }
-
     pub fn init(
-        repo_path: &Path,
-        storage_engine: Option<StorageEngineSpec>,
+        _repo_connect: &str,
+        _storage_engine: Option<StorageEngineSpec>,
     ) -> Result<(), anyhow::Error> {
-        let storage_engine = match storage_engine {
-            Some(storage_engine) => storage_engine,
-            None => StorageEngineSpec::DirStore,
-        };
-
-        let parent = if repo_path.is_absolute() {
-            repo_path.parent().unwrap().to_owned()
-        } else {
-            let abs = std::env::current_dir()?.join(repo_path);
-            let parent = abs.parent().unwrap();
-            parent.to_owned()
-        };
-
-        let mut path_buf = PathBuf::from(&parent);
-        if repo_path.exists() {
-            anyhow::bail!(
-                "repository already exists at {}",
-                repo_path.to_string_lossy().to_string()
-            );
-        }
-
-        let mut tmpname = repo_path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new(""))
-            .to_os_string();
-        tmpname.push(".bupstash-repo-init-tmp");
-        path_buf.push(&tmpname);
-        if path_buf.exists() {
-            anyhow::bail!(
-                "temp dir already exists at {}",
-                path_buf.to_string_lossy().to_string()
-            );
-        }
-
-        fs::DirBuilder::new().create(path_buf.as_path())?;
-
-        path_buf.push("repo.lock");
-        fsutil::create_empty_file(path_buf.as_path())?;
-        path_buf.pop();
-
-        path_buf.push("tmp");
-        fs::DirBuilder::new().create(path_buf.as_path())?;
-        path_buf.pop();
-
-        path_buf.push("storage-engine.json");
-        let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
-        fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
-        path_buf.pop();
-
-        let mut conn = Repo::open_db_with_flags(
-            &Repo::repo_db_path(&path_buf),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
-        )?;
-
-        conn.query_row(
-            "PRAGMA journal_mode = WAL;",
-            rusqlite::NO_PARAMS,
-            |_| Ok(()),
-        )?;
-
-        let tx = conn.transaction()?;
-
-        tx.execute(
-            "create table RepositoryMeta(Key primary key, Value) without rowid;",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.execute(
-            /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '2');",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('id', ?);",
-            rusqlite::params![Xid::new()],
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('gc-generation', ?);",
-            rusqlite::params![Xid::new()],
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('gc-dirty', Null);",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        itemset::init_tables(&tx)?;
-
-        tx.commit()?;
-        drop(conn);
-
-        fsutil::sync_dir(&path_buf)?;
-        std::fs::rename(&path_buf, repo_path)?;
-        Ok(())
+        anyhow::bail!("init is not supported");
     }
 
-    pub fn open(repo_path: &Path) -> Result<Repo, anyhow::Error> {
-        if !repo_path.exists() {
-            anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
-        }
+    fn retryable_txn<T, F>(self: &mut Repo, mut op: F) -> Result<T, anyhow::Error>
+    where
+        F: FnMut(&str, &mut postgres::Transaction) -> Result<T, anyhow::Error>,
+    {
+        'retry: loop {
+            let mut txn = self
+                .conn
+                .build_transaction()
+                .isolation_level(postgres::IsolationLevel::Serializable)
+                .start()?;
 
-        let conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
+            match op(&self.repo_id, &mut txn) {
+                Err(err) => {
+                    for cause in err.chain() {
+                        if let Some(err) = cause.downcast_ref::<postgres::Error>() {
+                            if let Some(code) = err.code() {
+                                if *code == postgres::error::SqlState::T_R_SERIALIZATION_FAILURE {
+                                    continue 'retry;
+                                }
+                            }
+                        }
+                    }
 
-        let v: String = conn.query_row(
-            "select Value from RepositoryMeta where Key='schema-version';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-        if v.parse::<u64>().unwrap() != 2 {
-            anyhow::bail!("repository has an unsupported schema version");
+                    txn.rollback()?;
+                    return Err(err);
+                }
+                Ok(r) => {
+                    txn.commit()?;
+                    return Ok(r);
+                }
+            }
         }
+    }
+
+    pub fn open(repo: &str) -> Result<Repo, anyhow::Error> {
+        let mut conn =
+            postgres::Client::connect(&std::env::var("BUPSTASH_PG_CONNECT")?, postgres::NoTls)?;
+
+        let lock_id: i64 = conn
+            .query_one(
+                "select Value from RepositoryMeta where RepoId=$1 and Key='lock-id';",
+                &[&repo],
+            )?
+            .get::<_, String>("Value")
+            .parse::<i64>()
+            .unwrap();
 
         Ok(Repo {
             conn,
-            repo_path: fs::canonicalize(&repo_path)?,
+            lock_id,
+            repo_id: repo.to_string(),
             _repo_lock_mode: LockMode::None,
-            _repo_lock: None,
         })
     }
 
-    pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), anyhow::Error> {
-        // On error we should perhaps put a poison value.
-        if self._repo_lock_mode != lock_mode {
-            self._repo_lock_mode = lock_mode.clone();
-            self._repo_lock = None;
-            self._repo_lock = match lock_mode {
-                LockMode::None => None,
-                LockMode::Write => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
-                    &self.repo_path,
-                ))?),
-                LockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(
-                    &Repo::repo_lock_path(&self.repo_path),
-                )?),
+    pub fn alter_lock_mode(&mut self, repo_lock_mode: LockMode) -> Result<(), anyhow::Error> {
+        if repo_lock_mode != self._repo_lock_mode {
+            match self._repo_lock_mode {
+                LockMode::None => (),
+                LockMode::Write => {
+                    self.conn
+                        .execute("select pg_advisory_unlock_shared($1);", &[&self.lock_id])?;
+                }
+                LockMode::Exclusive => {
+                    self.conn
+                        .execute("select pg_advisory_unlock($1);", &[&self.lock_id])?;
+                }
             };
+
+            self._repo_lock_mode = LockMode::None;
+            match repo_lock_mode {
+                LockMode::None => (),
+                LockMode::Write => {
+                    self.conn
+                        .execute("select pg_advisory_lock_shared($1);", &[&self.lock_id])?;
+                }
+                LockMode::Exclusive => {
+                    self.conn
+                        .execute("select pg_advisory_lock($1);", &[&self.lock_id])?;
+                }
+            };
+
+            self._repo_lock_mode = repo_lock_mode;
+
+            // There is a brief period where we unlocked the database,
+            // ensure our repository still exists by querying it.
+            self.conn.query_one(
+                "select Value from RepositoryMeta where RepoId=$1 and Key='schema-version';",
+                &[&self.repo_id],
+            )?;
 
             if matches!(self._repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
                 // The gc_dirty id is set when a garbage collection exits without
@@ -271,78 +174,90 @@ impl Repo {
                 //  - we must explicitly wait for the storage engine backend to tell us our gc operation is complete.
                 //  - We can finally remove the gc-dirty marker.
 
-                if let Some(gc_dirty) = self.conn.query_row(
-                    "select Value from RepositoryMeta where Key='gc-dirty';",
-                    rusqlite::NO_PARAMS,
-                    |row| row.get(0),
-                )? {
+                if let Some(gc_dirty) = self
+                    .conn
+                    .query_one(
+                        "select Value from RepositoryMeta where RepoId=$1 and Key='gc-dirty';",
+                        &[&self.repo_id],
+                    )?
+                    .get(0)
+                {
                     let mut storage_engine = self.storage_engine()?;
 
                     storage_engine.await_gc_completion(gc_dirty)?;
 
-                    // Because we hold either a write lock, or the exclusive lock, we know gc-dirty
-                    // cannot change from anything but false to true at this point.
                     self.conn.execute(
-                        "update RepositoryMeta set Value = Null where key = 'gc-dirty' and Value = $1;",
-                        rusqlite::params![&gc_dirty],
+                        "update RepositoryMeta set Value = null where RepoId=$1 and Key = 'gc-dirty';",
+                        &[&self.repo_id],
                     )?;
                 }
             }
         }
-
         Ok(())
     }
 
-    pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, anyhow::Error> {
-        let mut p = self.repo_path.clone();
-        p.push("storage-engine.json");
-        let mut f = std::fs::OpenOptions::new().read(true).open(p)?;
-        let mut buf = Vec::new();
-        f.read_to_end(&mut buf)?;
-        let spec = serde_json::from_slice(&buf)?;
-        Ok(spec)
+    pub fn storage_engine_spec(&mut self) -> Result<StorageEngineSpec, anyhow::Error> {
+        let storage_path: String = self
+            .conn
+            .query_one(
+                "select Value from RepositoryMeta where RepoId=$1 and Key='storage-path'",
+                &[&self.repo_id],
+            )?
+            .get(0);
+        let socket_path = std::env::var("BUPSTASH_STORAGE_SOCKET")?;
+        Ok(StorageEngineSpec::ExternalStore {
+            socket_path,
+            path: storage_path,
+        })
     }
 
     pub fn storage_engine_from_spec(
-        &self,
+        &mut self,
         spec: &StorageEngineSpec,
     ) -> Result<Box<dyn chunk_storage::Engine>, anyhow::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
-            StorageEngineSpec::DirStore => {
-                let mut data_dir = self.repo_path.to_path_buf();
-                data_dir.push("data");
-                Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
-            }
             StorageEngineSpec::ExternalStore {
                 socket_path, path, ..
             } => {
                 let socket_path = PathBuf::from(socket_path);
                 Box::new(external_chunk_storage::ExternalStorage::new(
                     &socket_path,
-                    &path.to_string(),
+                    &path,
                 )?)
             }
         };
         Ok(storage_engine)
     }
 
-    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, anyhow::Error> {
+    pub fn storage_engine(&mut self) -> Result<Box<dyn chunk_storage::Engine>, anyhow::Error> {
         let spec = self.storage_engine_spec()?;
         self.storage_engine_from_spec(&spec)
     }
 
-    pub fn gc_generation(&self) -> Result<Xid, anyhow::Error> {
-        Ok(self.conn.query_row(
-            "select Value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?)
+    pub fn gc_generation(&mut self) -> Result<Xid, anyhow::Error> {
+        Ok(self
+            .conn
+            .query_one(
+                "select Value from RepositoryMeta where RepoId=$1 and Key='gc-generation';",
+                &[&self.repo_id],
+            )?
+            .get(0))
+    }
+
+    fn checked_serialize_metadata(
+        md: &itemset::VersionedItemMetadata,
+    ) -> Result<Vec<u8>, anyhow::Error> {
+        let serialized_op = serde_bare::to_vec(&md)?;
+        if serialized_op.len() > itemset::MAX_METADATA_SIZE {
+            anyhow::bail!("itemset log item too big!");
+        }
+        Ok(serialized_op)
     }
 
     pub fn add_item(
         &mut self,
         gc_generation: Xid,
-        item: itemset::VersionedItemMetadata,
+        item_metadata: itemset::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
         match self._repo_lock_mode {
             LockMode::None => panic!("BUG: write lock not held when adding item"),
@@ -351,12 +266,12 @@ impl Repo {
 
         const MAX_HTREE_HEIGHT: u64 = 10;
 
-        match item {
-            itemset::VersionedItemMetadata::V1(ref item) => {
-                if item.plain_text_metadata.data_tree.height.0 > MAX_HTREE_HEIGHT {
+        match item_metadata {
+            itemset::VersionedItemMetadata::V1(ref item_metadata) => {
+                if item_metadata.plain_text_metadata.data_tree.height.0 > MAX_HTREE_HEIGHT {
                     anyhow::bail!("refusing to add data hash tree taller than application limit");
                 }
-                if let Some(index_tree) = &item.plain_text_metadata.index_tree {
+                if let Some(index_tree) = &item_metadata.plain_text_metadata.index_tree {
                     if index_tree.height.0 > MAX_HTREE_HEIGHT {
                         anyhow::bail!(
                             "refusing to add index hash tree taller than application limit"
@@ -366,47 +281,91 @@ impl Repo {
             }
         }
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        self.retryable_txn(|repo_id, tx| {
+            let current_gc_generation: Xid = tx
+                .query_one(
+                    "select Value from RepositoryMeta where RepoId=$1 and Key='gc-generation';",
+                    &[&repo_id],
+                )?
+                .get(0);
 
-        let current_gc_generation = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
+            if current_gc_generation != gc_generation {
+                anyhow::bail!("gc generation changed during send, aborting");
+            }
 
-        if gc_generation != current_gc_generation {
-            anyhow::bail!("gc generation changed during send, aborting");
-        }
+            let item_id = Xid::new();
+            let serialized_md = Repo::checked_serialize_metadata(&item_metadata)?;
+            let op = itemset::LogOp::AddItem(item_metadata.clone());
+            let serialized_op = serde_bare::to_vec(&op)?;
+            let op_id: i64 = tx
+                .query_one(
+                    "insert into ItemOpLog(RepoId, OpData, ItemId) values($1, $2, $3) returning OpId;",
+                    &[&repo_id, &serialized_op, &item_id],
+                )?
+                .get(0);
 
-        let id = itemset::add_item(&tx, item)?;
-        tx.commit()?;
-        Ok(id)
+            tx.execute(
+                "insert into Items(RepoId, OpId, ItemId, Metadata) values($1, $2, $3, $4);",
+                &[&repo_id, &op_id, &item_id, &serialized_md],
+            )?;
+            Ok(item_id)
+        })
     }
 
     pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), anyhow::Error> {
         self.alter_lock_mode(LockMode::Write)?;
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        itemset::remove_items(&tx, items)?;
-        tx.commit()?;
-        Ok(())
+        self.retryable_txn(|repo_id, tx| {
+            let mut existed = Vec::new();
+            for item_id in items.iter() {
+                let n_deleted = tx.execute(
+                    "delete from Items where RepoId=$1 and ItemId = $2;",
+                    &[&repo_id, &item_id],
+                )?;
+                if n_deleted != 0 {
+                    existed.push(*item_id);
+                }
+            }
+            let op = itemset::LogOp::RemoveItems(existed);
+            let serialized_op = serde_bare::to_vec(&op)?;
+            tx.execute(
+                "insert into ItemOpLog(RepoId, OpData) values($1, $2);",
+                &[&repo_id, &serialized_op],
+            )?;
+
+            Ok(())
+        })
     }
 
     pub fn lookup_item_by_id(
         &mut self,
         id: &Xid,
     ) -> Result<Option<itemset::VersionedItemMetadata>, anyhow::Error> {
-        let tx = self.conn.transaction()?;
-        itemset::lookup_item_by_id(&tx, id)
+        match self
+            .conn
+            .query(
+                "select Metadata from Items where RepoId=$1 and ItemId = $2;",
+                &[&self.repo_id, id],
+            )?
+            .get(0)
+        {
+            Some(row) => {
+                let serialized_md: Vec<u8> = row.get("Metadata");
+                Ok(Some(serde_bare::from_slice(&serialized_md)?))
+            }
+            None => Ok(None),
+        }
     }
 
     pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
-        let tx = self.conn.transaction()?;
-        itemset::has_item_with_id(&tx, id)
+        let has_item = !self
+            .conn
+            .query(
+                "select 1 from Items where RepoId=$1 and ItemId = $2;",
+                &[&self.repo_id, id],
+            )?
+            .is_empty();
+        Ok(has_item)
     }
 
     pub fn item_sync(
@@ -415,13 +374,14 @@ impl Repo {
         start_gc_generation: Option<Xid>,
         on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let tx = self.conn.transaction()?;
+        let mut tx = self.conn.transaction()?;
 
-        let current_gc_generation = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
+        let current_gc_generation = tx
+            .query_one(
+                "select Value from RepositoryMeta where RepoId=$1 and Key='gc-generation';",
+                &[&self.repo_id],
+            )?
+            .get("Value");
 
         let after = match start_gc_generation {
             Some(start_gc_generation) if start_gc_generation == current_gc_generation => after,
@@ -432,7 +392,7 @@ impl Repo {
 
         let mut logops = Vec::new();
 
-        itemset::walk_log(&tx, after, &mut |op_id, item_id, op| {
+        Repo::walk_log(&self.repo_id, &mut tx, after, &mut |op_id, item_id, op| {
             logops.push((op_id, item_id, op));
             if logops.len() >= 64 {
                 let mut v = Vec::new();
@@ -453,41 +413,130 @@ impl Repo {
         Ok(())
     }
 
+    pub fn walk_log(
+        repo_id: &str,
+        tx: &mut postgres::Transaction,
+        after_op: i64,
+        f: &mut dyn FnMut(i64, Option<Xid>, itemset::LogOp) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
+        tx.execute(
+            "declare OpCursor cursor for select OpId, ItemId, OpData from ItemOpLog where RepoId=$1 and OpId > $2 order by OpId asc;",
+            &[&repo_id, &after_op],
+        )?;
+
+        loop {
+            let rows = tx.query("fetch 512 from OpCursor;", &[])?;
+
+            if rows.is_empty() {
+                break;
+            }
+
+            for row in rows {
+                let op_id: i64 = row.get(0);
+                let item_id: Option<Xid> = row.get(1);
+                let op: Vec<u8> = row.get(2);
+                let op: itemset::LogOp = serde_bare::from_slice(&op)?;
+                f(op_id, item_id, op)?;
+            }
+        }
+
+        tx.execute("close OpCursor;", &[])?;
+        Ok(())
+    }
+
+    fn walk_items(
+        repo_id: &str,
+        tx: &mut postgres::Transaction,
+        f: &mut dyn FnMut(i64, Xid, itemset::VersionedItemMetadata) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
+        tx.execute(
+            "declare ItemCursor cursor for select OpId, ItemId, Metadata from Items where RepoId=$1;",
+            &[&repo_id],
+        )?;
+
+        loop {
+            let rows = tx.query("fetch 512 from ItemCursor;", &[])?;
+
+            if rows.is_empty() {
+                break;
+            }
+
+            for row in rows {
+                let op_id: i64 = row.get(0);
+                let item_id: Xid = row.get(1);
+                let metadata: Vec<u8> = row.get(2);
+                let metadata: itemset::VersionedItemMetadata = serde_bare::from_slice(&metadata)?;
+                f(op_id, item_id, metadata)?;
+            }
+        }
+
+        tx.execute("close ItemCursor;", &[])?;
+        Ok(())
+    }
+
+    fn random_tmp_reachability_db_path() -> PathBuf {
+        let random_suffix = {
+            let mut buf = [0; 16];
+            crypto::randombytes(&mut buf[..]);
+            hex::easy_encode_to_string(&buf[..])
+        };
+        let file_name = "reachability."
+            .chars()
+            .chain(random_suffix.chars())
+            .chain(".sqlite3".chars())
+            .collect::<String>();
+
+        let mut db_path: PathBuf = "/tmp/".into();
+        db_path.push(file_name);
+        db_path
+    }
+
     pub fn restore_removed(&mut self) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(LockMode::Write)?;
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let n_restored = itemset::restore_removed(&tx)?;
-        if n_restored > 0 {
-            tx.commit()?;
-        }
-        Ok(n_restored)
+        self.retryable_txn(|repo_id, tx| {
+
+            let mut n_restored = 0;
+
+            let rows = tx.query(
+                "select OpId, ItemId, OpData from ItemOpLog where RepoId=$1 and (ItemId is not null) and (ItemId not in (select ItemId from Items where RepoId=$1));", 
+                &[&repo_id]
+            )?;
+            for row in rows {
+                let op_id: i64 = row.get(0);
+                let item_id: Xid = row.get(1);
+                let op: Vec<u8> = row.get(2);
+                let op: itemset::LogOp = serde_bare::from_slice(&op)?;
+                match &op {
+                    itemset::LogOp::AddItem(md) => {
+                        n_restored += 1;
+                        tx.execute(
+                            "insert into Items(ItemId, OpId, Metadata, RepoId) values($1, $2, $3, $4);",
+                            &[&item_id, &op_id, &serde_bare::to_vec(&md)?, &repo_id],
+                        )?;
+                    }
+                    _ => (),
+                }
+            }
+            if n_restored > 0 {
+                let op = itemset::LogOp::RestoreRemoved;
+                let serialized_op = serde_bare::to_vec(&op)?;
+                tx.execute(
+                    "insert into ItemOpLog(OpData, RepoId) values($1, $2);",
+                    &[&serialized_op, &repo_id],
+                )?;
+            }
+            Ok(n_restored)
+        })
     }
 
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
     ) -> Result<GCStats, anyhow::Error> {
-        self.alter_lock_mode(LockMode::Exclusive)?;
-        // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
-        // For example, this could make out of space problems even worse.
-        update_progress_msg("removing temporary files...".to_string())?;
-        {
-            let mut to_remove = Vec::new();
-            for e in std::fs::read_dir(Repo::tmp_dir_path(&self.repo_path))? {
-                let e = e?;
-                to_remove.push(e.path());
-            }
-            for p in to_remove.iter() {
-                std::fs::remove_file(p)?;
-            }
-        }
-        // Once we have removed temporary files, we can go back to a shared lock.
         self.alter_lock_mode(LockMode::Write)?;
 
-        let reachability_db_path = Repo::random_tmp_reachability_db_path(&self.repo_path);
+        let reachability_db_path = Repo::random_tmp_reachability_db_path();
         let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
 
         // Because this is a fresh database (we already removed all tmp files), we
@@ -556,30 +605,18 @@ impl Repo {
             // we should be able to walk most of the data except data
             // that arrives between the end of this walk and us getting the
             // exclusive lock on the repository.
-            let tx = self.conn.transaction()?;
-            itemset::walk_items(&tx, &mut walk_item)?;
+            let mut tx = self.conn.transaction()?;
+            Repo::walk_items(&self.repo_id, &mut tx, &mut walk_item)?;
             tx.commit()?;
         }
 
         update_progress_msg("acquiring exclusive repository lock...".to_string())?;
         self.alter_lock_mode(LockMode::Exclusive)?;
 
-        // We must commit the new gc generation before we start
-        // deleting any chunks, the gc generation is how we invalidate
-        // client side put caches.
-        self.conn.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
-            rusqlite::params![Xid::new()],
-        )?;
-
         update_progress_msg("finalizing reachable data...".to_string())?;
         {
-            let tx = self
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            // Will skip items that we already processed when we did not hold
-            // an exclusive repository lock.
-            itemset::walk_items(&tx, &mut walk_item)?;
+            let mut tx = self.conn.transaction()?;
+            Repo::walk_items(&self.repo_id, &mut tx, &mut walk_item)?;
             tx.commit()?;
         }
 
@@ -587,25 +624,35 @@ impl Repo {
         // ready for use by the storage engine.
         reachability_tx.commit()?;
 
-        update_progress_msg("compacting item log...".to_string())?;
-        {
-            let tx = self
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            itemset::compact(&tx)?;
-            tx.commit()?;
-        }
-
-        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
-
         let gc_id = Xid::new();
-
         storage_engine.prepare_for_gc(gc_id)?;
 
-        self.conn.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
-            rusqlite::params![&gc_id],
-        )?;
+        update_progress_msg("compacting item log...".to_string())?;
+        {
+            self.retryable_txn(|repo_id, tx| {
+                // We must commit the new gc generation before we start
+                // deleting any chunks, the gc generation is how we invalidate
+                // client side put caches.
+                tx.execute(
+                    "update RepositoryMeta set Value = $1 where RepoId=$2 and Key = 'gc-generation';",
+                    &[&Xid::new(), &repo_id],
+                )?;
+
+                // Remove everything not in the aggregated set.
+                tx.execute(
+                    "delete from ItemOpLog where RepoId=$1 and OpId not in (select OpId from Items where RepoId=$1);",
+                    &[&repo_id],
+                )?;
+
+                tx.execute(
+                    "update RepositoryMeta set Value = $1 where RepoId=$2 and Key = 'gc-dirty';",
+                    &[&gc_id, &repo_id],
+                )?;
+
+                Ok(())
+
+             })?;
+        }
 
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = storage_engine.gc(&reachability_db_path, &mut reachability_db)?;
@@ -614,33 +661,10 @@ impl Repo {
         std::fs::remove_file(&reachability_db_path)?;
 
         self.conn.execute(
-            "update RepositoryMeta set Value = null where Key = 'gc-dirty';",
-            rusqlite::NO_PARAMS,
+            "update RepositoryMeta set Value = null where RepoId=$1 and Key = 'gc-dirty';",
+            &[&self.repo_id],
         )?;
 
         Ok(stats)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::address::*;
-    use super::*;
-
-    #[test]
-    fn dir_store_sanity_test() {
-        let tmp_dir = tempfile::tempdir().unwrap();
-        let mut path_buf = PathBuf::from(tmp_dir.path());
-        path_buf.push("repo");
-        Repo::init(path_buf.as_path(), Some(StorageEngineSpec::DirStore)).unwrap();
-        let repo = Repo::open(path_buf.as_path()).unwrap();
-        let mut storage_engine = repo.storage_engine().unwrap();
-        let addr = Address::default();
-        storage_engine.add_chunk(&addr, vec![1]).unwrap();
-        storage_engine.sync().unwrap();
-        storage_engine.add_chunk(&addr, vec![2]).unwrap();
-        storage_engine.sync().unwrap();
-        let v = storage_engine.get_chunk(&addr).unwrap();
-        assert_eq!(v, vec![1]);
     }
 }

@@ -44,6 +44,8 @@ indicatif = "0.15"
 rangemap = "0.1.7"
 blake3 = "0.3"
 xattr = "0.2"
+postgres = "0.18"
+bytes = "*"
 
 [dev-dependencies]
 

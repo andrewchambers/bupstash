@@ -5,7 +5,6 @@ pub mod chunker;
 pub mod client;
 pub mod compression;
 pub mod crypto;
-pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
@@ -435,41 +434,8 @@ fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let mut opts = default_cli_opts();
-    repo_cli_opts(&mut opts);
-    opts.optopt(
-        "s",
-        "storage",
-        "The storage engine specification. 'dir', or a json specification. Consult the manual for details.",
-        "STORAGE",
-    );
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
-    let matches = parse_cli_opts(opts, &args[..]);
-
-    let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
-        Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
-        Some(s) => match serde_json::from_str(&s) {
-            Ok(s) => Some(s),
-            Err(err) => anyhow::bail!("unable to parse storage engine spec: {}", err),
-        },
-        None => None,
-    };
-
-    let progress = cli_to_progress_bar(
-        &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    );
-
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
-    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-
-    client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
-    client::hangup(&mut serve_in)?;
-    serve_proc.wait()?;
-
-    Ok(())
+fn init_main(_args: Vec<String>) -> Result<(), anyhow::Error> {
+    anyhow::bail!("init not supported");
 }
 
 enum ListFormat {
@@ -1686,24 +1652,11 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         die("Expected a single repository path to serve.".to_string());
     }
 
-    let mut allow_init = true;
-    let mut allow_put = true;
-    let mut allow_remove = true;
-    let mut allow_gc = true;
-    let mut allow_get = true;
-
-    if matches.opt_present("allow-init")
-        || matches.opt_present("allow-put")
-        || matches.opt_present("allow-remove")
-        || matches.opt_present("allow-gc")
-        || matches.opt_present("allow-get")
-    {
-        allow_init = matches.opt_present("allow-init");
-        allow_put = matches.opt_present("allow-put");
-        allow_remove = matches.opt_present("allow-remove");
-        allow_gc = matches.opt_present("allow-gc");
-        allow_get = matches.opt_present("allow-get");
-    }
+    let allow_init = matches.opt_present("allow-init");
+    let allow_put = matches.opt_present("allow-put");
+    let allow_remove = matches.opt_present("allow-remove");
+    let allow_gc = matches.opt_present("allow-gc");
+    let allow_get = matches.opt_present("allow-get");
 
     if atty::is(atty::Stream::Stdout) {
         eprintln!("'bupstash serve' running on stdin/stdout...");
@@ -1716,7 +1669,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             allow_remove,
             allow_gc,
             allow_get,
-            repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
+            repo_connect: matches.free[0].to_owned(),
         },
         &mut std::io::stdin().lock(),
         &mut std::io::stdout().lock(),
