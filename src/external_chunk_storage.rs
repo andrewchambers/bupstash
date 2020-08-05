@@ -312,6 +312,7 @@ impl Engine for ExternalStorage {
         &mut self,
         reachability_db_path: &std::path::Path,
         _reachability_db: &mut rusqlite::Connection,
+        on_heartbeat: &mut dyn FnMut() -> Result<(), failure::Error>,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
 
@@ -326,7 +327,7 @@ impl Engine for ExternalStorage {
 
         loop {
             match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                Ok(protocol::Packet::StorageGCHeartBeat) => (),
+                Ok(protocol::Packet::StorageGCHeartBeat) => on_heartbeat()?,
                 Ok(protocol::Packet::StorageGCComplete(stats)) => {
                     let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
                     return Ok(stats);

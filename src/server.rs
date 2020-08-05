@@ -5,7 +5,7 @@ use super::repository;
 use super::xid::*;
 
 pub struct ServerConfig {
-    pub repo_path: std::path::PathBuf,
+    pub repo_connect: String,
     pub allow_init: bool,
     pub allow_gc: bool,
     pub allow_get: bool,
@@ -55,15 +55,11 @@ fn serve2(
     }
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::TInitRepository(engine) => {
-            if !cfg.allow_init {
-                failure::bail!("server has disabled init for this client")
-            }
-            repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
-            write_packet(w, &Packet::RInitRepository)?;
+        Packet::TInitRepository(_engine) => {
+            failure::bail!("server has disabled init for this client")
         }
         mut current_packet => {
-            let mut repo = repository::Repo::open(&cfg.repo_path)?;
+            let mut repo = repository::Repo::open(&cfg.repo_connect)?;
             loop {
                 match current_packet {
                     Packet::TInitRepository(_) => {
@@ -111,8 +107,6 @@ fn serve2(
             }
         }
     };
-
-    Ok(())
 }
 
 fn recv(

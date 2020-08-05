@@ -19,6 +19,7 @@ pub trait Engine {
         &mut self,
         reachability_db_path: &std::path::Path,
         reachability_db: &mut rusqlite::Connection,
+        on_heartbeat: &mut dyn FnMut() -> Result<(), failure::Error>,
     ) -> Result<repository::GCStats, failure::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing

@@ -70,6 +70,77 @@ impl rusqlite::types::ToSql for Xid {
     }
 }
 
+impl<'a> postgres::types::FromSql<'a> for Xid {
+    fn from_sql(
+        t: &postgres::types::Type,
+        b: &'a [u8],
+    ) -> Result<Self, Box<(dyn std::error::Error + Send + Sync + 'static)>> {
+        match *t {
+            postgres::types::Type::VARCHAR => {
+                // XXX: A more efficient way than making this pointless string?
+                let v: String = postgres::types::FromSql::from_sql(t, b)?;
+                let xid = Xid::parse(&v)?;
+                Ok(xid)
+            }
+            _ => {
+                // XXX: A more efficient way than making this pointless vec?
+                let v: Vec<u8> = postgres::types::FromSql::from_sql(t, b)?;
+                let mut bytes = [0; 16];
+                bytes[..].clone_from_slice(&v);
+                Ok(Xid { bytes })
+            }
+        }
+    }
+
+    fn accepts(t: &postgres::types::Type) -> bool {
+        match *t {
+            postgres::types::Type::VARCHAR => true,
+            postgres::types::Type::BYTEA => true,
+            _ => false,
+        }
+    }
+}
+
+impl postgres::types::ToSql for Xid {
+    fn to_sql(
+        &self,
+        t: &postgres::types::Type,
+        b: &mut bytes::BytesMut,
+    ) -> Result<postgres::types::IsNull, Box<(dyn std::error::Error + Send + Sync + 'static)>> {
+        match *t {
+            postgres::types::Type::VARCHAR => {
+                postgres::types::ToSql::to_sql(&self.to_string(), t, b)
+            }
+            _ => {
+                let buf = &self.bytes[..];
+                postgres::types::ToSql::to_sql(&buf, t, b)
+            }
+        }
+    }
+    fn accepts(t: &postgres::types::Type) -> bool {
+        match *t {
+            postgres::types::Type::VARCHAR => true,
+            postgres::types::Type::BYTEA => true,
+            _ => false,
+        }
+    }
+    fn to_sql_checked(
+        &self,
+        t: &postgres::types::Type,
+        b: &mut bytes::BytesMut,
+    ) -> Result<postgres::types::IsNull, Box<(dyn std::error::Error + Send + Sync + 'static)>> {
+        match *t {
+            postgres::types::Type::VARCHAR => {
+                postgres::types::ToSql::to_sql_checked(&self.to_string(), t, b)
+            }
+            _ => {
+                let buf = &self.bytes[..];
+                postgres::types::ToSql::to_sql_checked(&buf, t, b)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

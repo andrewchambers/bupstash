@@ -40,6 +40,8 @@ cfg-if = "0.1"
 shlex = "0.1"
 nix = "0.17"
 indicatif = "0.15"
+postgres = "0.17"
+bytes = "*"
 
 [dev-dependencies]
 

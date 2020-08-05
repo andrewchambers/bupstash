@@ -49,6 +49,8 @@ Long term:
 
 Unclassified:
 
+- no stored items with the requested id, send end of transmittion.
+
 - Prefetch system should also work for non leaf tree nodes.
 
 - failure error package is deprecated.

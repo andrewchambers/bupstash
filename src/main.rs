@@ -4,7 +4,6 @@ pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
 pub mod crypto;
-pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
@@ -148,7 +147,6 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     let matches = parse_cli_opts(opts, &args[..]);
 
     let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
-        Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
         Some(s) => match serde_json::from_str(&s) {
             Ok(s) => Some(s),
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
@@ -1073,24 +1071,11 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         die("Expected a single repository path to serve.".to_string());
     }
 
-    let mut allow_init = true;
-    let mut allow_put = true;
-    let mut allow_remove = true;
-    let mut allow_gc = true;
-    let mut allow_get = true;
-
-    if matches.opt_present("allow-init")
-        || matches.opt_present("allow-put")
-        || matches.opt_present("allow-remove")
-        || matches.opt_present("allow-gc")
-        || matches.opt_present("allow-get")
-    {
-        allow_init = matches.opt_present("allow-init");
-        allow_put = matches.opt_present("allow-put");
-        allow_remove = matches.opt_present("allow-remove");
-        allow_gc = matches.opt_present("allow-gc");
-        allow_get = matches.opt_present("allow-get");
-    }
+    let allow_init = matches.opt_present("allow-init");
+    let allow_put = matches.opt_present("allow-put");
+    let allow_remove = matches.opt_present("allow-remove");
+    let allow_gc = matches.opt_present("allow-gc");
+    let allow_get = matches.opt_present("allow-get");
 
     if atty::is(atty::Stream::Stdout) {
         eprintln!("'bupstash serve' running on stdin/stdout...");
@@ -1103,7 +1088,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
             allow_remove,
             allow_gc,
             allow_get,
-            repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
+            repo_connect: matches.free[0].to_owned(),
         },
         &mut std::io::stdin(),
         &mut std::io::stdout(),
