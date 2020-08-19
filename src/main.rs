@@ -185,7 +185,7 @@ fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt("k", "key", "primary key to derive put-key from.", "PATH");
+    opts.optopt("k", "key", "primary key to derive put-key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = default_parse_opts(opts, &args[..]);
     let k = matches_to_key(&matches)?;
@@ -200,7 +200,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.reqopt(
+    opts.optopt(
         "k",
         "key",
         "primary key to derive metadata key from.",
@@ -564,9 +564,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {
             Ok(v) => v,
-            Err(err) => {
-                failure::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err)
-            }
+            Err(err) => failure::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err),
         },
         Err(_) => 1073741824,
     };
