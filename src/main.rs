@@ -722,8 +722,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
             let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
-            let metadata_dctx =
-                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
         _ => failure::bail!("provided key is not a decryption key"),

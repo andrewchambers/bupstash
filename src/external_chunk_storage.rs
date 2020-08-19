@@ -298,7 +298,7 @@ impl Engine for ExternalStorage {
             Ok(()) => rx,
             Err(err) => {
                 let (tx, rx) = crossbeam::channel::bounded(1);
-                tx.send(Err(err.into())).unwrap();
+                tx.send(Err(err)).unwrap();
                 rx
             }
         }
