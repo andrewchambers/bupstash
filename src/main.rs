@@ -977,7 +977,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         "allow-get",
         "Allow client to get data from the repository.",
     );
-    opts.optflag("", "allow-list", "allow client to list repository entries.");
+
     let matches = default_parse_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {
@@ -989,21 +989,18 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut allow_remove = true;
     let mut allow_gc = true;
     let mut allow_get = true;
-    let mut allow_list = true;
 
     if matches.opt_present("allow-init")
         || matches.opt_present("allow-put")
         || matches.opt_present("allow-remove")
         || matches.opt_present("allow-gc")
         || matches.opt_present("allow-get")
-        || matches.opt_present("allow-list")
     {
         allow_init = matches.opt_present("allow-init");
         allow_put = matches.opt_present("allow-put");
         allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
         allow_get = matches.opt_present("allow-get");
-        allow_list = matches.opt_present("allow-list");
     }
 
     server::serve(
@@ -1013,7 +1010,6 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
             allow_remove,
             allow_gc,
             allow_get,
-            allow_list,
             repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut std::io::stdin(),

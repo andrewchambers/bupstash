@@ -11,7 +11,6 @@ pub struct ServerConfig {
     pub allow_get: bool,
     pub allow_put: bool,
     pub allow_remove: bool,
-    pub allow_list: bool,
 }
 
 pub fn serve(
@@ -71,7 +70,7 @@ pub fn serve(
                 gc(&mut repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
-                if !cfg.allow_list {
+                if !cfg.allow_get && !cfg.allow_remove {
                     failure::bail!("server has disabled query and search for this client")
                 }
                 let mut repo = repository::Repo::open(&cfg.repo_path)?;

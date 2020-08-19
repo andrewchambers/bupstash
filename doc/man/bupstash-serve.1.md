@@ -13,23 +13,23 @@ Serve the bupstash protocol over stdin/stdout.
 interaction with a repository. Most bupstash commands operate via an instance of bupstash serve.
 
 The serve command has flags that can be set to restrict access permissions, by default
-all access is permitted.
+all access is permitted until the first --allow-* option is provided.
 
 Typically users won't need to interact with `bupstash serve` unless they want
 to create
 
 ## OPTIONS
 
+* --allow-init:
+  Allow the client to initialize new repositories.
 * --allow-put:
   Allow client to put more entries into the repository.
+* --allow-get:
+  Allow client to list and retrieve data from the repository.
 * --allow-remove:
-  Allow client to remove repository entries.
+  Allow client to list and remove repository entries.
 * --allow-gc:
   Allow client to run the repository garbage collector.
-* --allow-get:
-  Allow client to get data from the repository.
-* --allow-list:
-  Allow client to list repository entries.
 
 ## EXAMPLES
 
