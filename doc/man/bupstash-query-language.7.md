@@ -76,20 +76,20 @@ A values is a set of any characters except a delimiter.
 
 ### Durations
 
-A duration is a set of characters, not including a delimiter forming a duration string.
-The accepted syntax of a duration string is a sequence of value unit pairs, such as "15 days 20 minutes". Spaces are optional and order does not affect the duration value.
+A duration is a concatenation of time spans, where each time span is an integer number and a suffix.
 
-The following units are accepted:
+Supported suffixes:
 
-- seconds
-- minutes
-- hours
-- days
-- weeks
-- months
-- years
-
-Abbreviations for each of these units are accepted where capital "M" disambiguates between months and minutes.
+- nsec, ns -- nanoseconds
+- usec, us -- microseconds
+- msec, ms -- milliseconds
+- seconds, second, sec, s
+- minutes, minute, min, m
+- hours, hour, hr, h
+- days, day, d
+- weeks, week, w
+- months, month, M -- defined as 30.44 days
+- years, year, y -- defined as 365.25 days
 
 ### Globbing
 

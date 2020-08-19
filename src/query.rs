@@ -236,7 +236,7 @@ impl Parser {
         let (_, end_pos) = self.peek();
         self.consume_if_matches("•");
 
-        match parse_duration::parse(&d) {
+        match humantime::parse_duration(&d) {
             Ok(duration) => Ok(Query::AgeAssertion {
                 op,
                 duration,
@@ -488,10 +488,10 @@ mod tests {
         assert!(query_matches(&parse("foo=12*").unwrap(), &ctx));
         assert!(query_matches(&parse("foo=12?").unwrap(), &ctx));
         assert!(query_matches(&parse("~foo=xxx").unwrap(), &ctx));
-        assert!(query_matches(&parse("older-than•2s]").unwrap(), &ctx));
-        assert!(query_matches(&parse("newer-than•6s]").unwrap(), &ctx));
-        assert!(!query_matches(&parse("older-than•6s]").unwrap(), &ctx));
-        assert!(!query_matches(&parse("newer-than•2s]").unwrap(), &ctx));
+        assert!(query_matches(&parse("older-than•2s").unwrap(), &ctx));
+        assert!(query_matches(&parse("newer-than•6s").unwrap(), &ctx));
+        assert!(!query_matches(&parse("older-than•6s").unwrap(), &ctx));
+        assert!(!query_matches(&parse("newer-than•2s").unwrap(), &ctx));
         assert!(!query_matches(&parse("~•[•foo==123•]").unwrap(), &ctx));
     }
 }
