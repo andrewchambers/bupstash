@@ -575,7 +575,7 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    for chunked_ids in ids.chunks(1000000) {
+    for chunked_ids in ids.chunks(100000) {
         let ids = chunked_ids.to_vec();
         write_packet(w, &Packet::TRmItems(ids))?;
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
