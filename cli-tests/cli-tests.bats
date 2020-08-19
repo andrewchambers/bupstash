@@ -295,3 +295,29 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   test 2 = "$(bupstash get id=$id | tar -tf - | wc -l)"
 }
 
+@test "checkpoint plain data" {
+  # Excercise the checkpointing code, does not check
+  # cache invalidation, that is covered via unit tests.
+  n=32000000
+  export BUPSTASH_CHECKPOINT_BYTES=1
+  head -c $n /dev/urandom > "$SCRATCH/rand.dat"
+  id="$(bupstash put :: "$SCRATCH/rand.dat")"
+  bupstash get id=$id > "$SCRATCH/got.dat"
+  bupstash gc
+  cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
+}
+
+@test "checkpoint directories" {
+  # Excercise the checkpointing code, does not check
+  # cache invalidation, that is covered via unit tests.
+
+  mkdir "$SCRATCH/foo"
+  mkdir "$SCRATCH/foo/bar"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bang"
+
+  export BUPSTASH_CHECKPOINT_BYTES=1
+
+  id=$(bupstash put :: "$SCRATCH/foo")
+  test 4 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+}
