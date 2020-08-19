@@ -86,7 +86,6 @@ dependencies = [
  "path-clean",
  "pem",
  "pkg-config",
- "rand",
  "regex",
  "rusqlite",
  "serde",

@@ -1,6 +1,7 @@
+use super::crypto;
+use super::hex;
 use fs2::FileExt;
 use path_clean::PathClean;
-use rand::Rng;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,14 +48,16 @@ pub fn sync_dir(p: &Path) -> Result<(), std::io::Error> {
 // Does NOT sync the directory. A sync of the directory still needs to be
 // done to ensure the atomic rename is persisted.
 pub fn atomic_add_file(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
+    let random_suffix = {
+        let mut buf = [0; 8];
+        crypto::randombytes(&mut buf[..]);
+        hex::easy_encode_to_string(&buf[..])
+    };
+
     let temp_path = p
         .to_string_lossy()
         .chars()
-        .chain(
-            std::iter::repeat(())
-                .map(|()| rand::thread_rng().sample(rand::distributions::Alphanumeric))
-                .take(8),
-        )
+        .chain(random_suffix.chars())
         .chain(".tmp".chars())
         .collect::<String>();
 

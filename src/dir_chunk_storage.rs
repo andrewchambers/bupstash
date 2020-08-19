@@ -1,7 +1,9 @@
 use super::address::Address;
 use super::chunk_storage::Engine;
+use super::crypto;
+use super::hex;
 use super::repository;
-use rand::Rng;
+
 use std::convert::TryInto;
 use std::io::Write;
 use std::path::PathBuf;
@@ -116,17 +118,16 @@ impl DirStorage {
                                 continue;
                             }
 
+                            let random_suffix = {
+                                let mut buf = [0; 8];
+                                crypto::randombytes(&mut buf[..]);
+                                hex::easy_encode_to_string(&buf[..])
+                            };
+
                             let tmp = dest
                                 .to_string_lossy()
                                 .chars()
-                                .chain(
-                                    std::iter::repeat(())
-                                        .map(|()| {
-                                            rand::thread_rng()
-                                                .sample(rand::distributions::Alphanumeric)
-                                        })
-                                        .take(8),
-                                )
+                                .chain(random_suffix.chars())
                                 .chain(".tmp".chars())
                                 .collect::<String>();
 
