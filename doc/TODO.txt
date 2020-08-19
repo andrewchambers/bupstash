@@ -4,11 +4,9 @@ Need to do:
 - Detailed and nice man pages.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
 - Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
-- Init should respect BUPSTASH_REPOSITORY.
-- init should work for remote repositories.
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support
-- Torture test in cli suite for send checkpointing.=-[[[[t duration.
+- Torture test in cli suite for send checkpointing duration.
 - Send permission denied: Permission denied (os error 13), add path to error message.
 
 Can do later (medium term):
@@ -18,17 +16,9 @@ Can do later (medium term):
 - Localization
   - tests for localized tags.
 
-- Remote init.
-
 - Upload progress indicator.
 
 - GC progress indicator.
-
-- Post quantum crypto. Preshared keys? Preshared keys mixed with key derivation?
-
-- Upload checkpointing/resume? A checkpoint should be invalidated by the gc generation, but
-  lets us remember things we already sent. Protocol, add specific sync message for use with checkpointing code. If we add this,
-  we can add checkpointing later perhaps.
 
 - Tests shouldn't depend on bash.
 
@@ -36,32 +26,27 @@ Can do later (medium term):
 
 - busy timeout or other mechanism for send log and query cache.
 
-- Handle ctrl+c gracefully in bupstash serve during gc. It would be nice if
-  we can avoid the gc quiescent period on proper shutdown.
-
 - Concurrent garbage collector, walk htrees in parallel and/or walk multiple entries
   in parallel.
+
+- Incremental garbage collector.
 
 - Sparse file support in snapshots.
 
 - Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
-- External backends.
-
 - Document precedence.
-
-Long term:
 
 - Ways to tune chunking algorithm.
   - Fixed size chunking?
   - Min size/max size/average size?
   - Alternative chunking algorithms?
 
+Long term:
+
 Unclassified:
 
 - Prefetch system should also work for non leaf tree nodes.
-
-- consider/benchmark PRAGMA synchronous.
 
 - failure error package is deprecated.
 
