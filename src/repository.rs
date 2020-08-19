@@ -247,11 +247,12 @@ impl Repo {
                     quiescent_period_ms,
                     ..
                 } => {
-                    eprintln!("repository garbage collection was cancelled, recovering...");
-                    std::thread::sleep(std::time::Duration::from_millis(
-                        // Default is 10 seconds.
-                        quiescent_period_ms.unwrap_or(10000),
-                    ))
+                    if let Some(quiescent_period_ms) = quiescent_period_ms {
+                        eprintln!("repository garbage collection was cancelled, recovering...");
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            quiescent_period_ms,
+                        ));
+                    }
                 }
                 StorageEngineSpec::DirStore { .. } => (),
                 StorageEngineSpec::Sqlite3Store { .. } => (),
