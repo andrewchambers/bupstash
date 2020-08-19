@@ -249,9 +249,7 @@ impl Repo {
                 } => {
                     if let Some(quiescent_period_ms) = quiescent_period_ms {
                         eprintln!("repository garbage collection was cancelled, recovering...");
-                        std::thread::sleep(std::time::Duration::from_millis(
-                            quiescent_period_ms,
-                        ));
+                        std::thread::sleep(std::time::Duration::from_millis(quiescent_period_ms));
                     }
                 }
                 StorageEngineSpec::DirStore { .. } => (),
