@@ -46,7 +46,8 @@ pub fn init_repository(
 }
 
 struct ConnectionHtreeSink<'a, 'b> {
-    last_checkpoint_time: std::time::Instant,
+    checkpoint_bytes: u64,
+    dirty_bytes: u64,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
     r: &'a mut dyn std::io::Read,
     w: &'a mut dyn std::io::Write,
@@ -64,6 +65,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                 if send_log_session.cached_address(addr)? {
                     send_log_session.add_address(addr)?;
                 } else {
+                    self.dirty_bytes += data.len() as u64;
                     write_packet(
                         self.w,
                         &Packet::Chunk(Chunk {
@@ -74,13 +76,8 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                     send_log_session.add_address(addr)?;
                 }
 
-                // Perform a data sync and checkpoint periodically to save our progress.
-                let now = std::time::Instant::now();
-                let duration_since_last_checkpoint =
-                    now.saturating_duration_since(self.last_checkpoint_time);
-
-                if std::time::Duration::from_secs(1800) < duration_since_last_checkpoint {
-                    self.last_checkpoint_time = now;
+                if self.dirty_bytes >= self.checkpoint_bytes {
+                    self.dirty_bytes = 0;
                     write_packet(self.w, &Packet::TSendSync)?;
                     match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
                         Packet::RSendSync => {
@@ -114,6 +111,7 @@ pub struct SendContext {
     pub hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
+    pub checkpoint_bytes: u64,
 }
 
 pub enum DataSource {
@@ -159,7 +157,8 @@ pub fn send(
     }
 
     let mut sink = ConnectionHtreeSink {
-        last_checkpoint_time: std::time::Instant::now(),
+        checkpoint_bytes: ctx.checkpoint_bytes,
+        dirty_bytes: 0,
         send_log_session: &send_log_session,
         w,
         r,

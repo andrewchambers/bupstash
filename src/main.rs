@@ -561,6 +561,16 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
 
     let use_stat_cache = !matches.opt_present("no-stat-cache");
 
+    let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
+        Ok(v) => match v.parse() {
+            Ok(v) => v,
+            Err(err) => {
+                failure::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err)
+            }
+        },
+        Err(_) => 1073741824,
+    };
+
     let send_log = if matches.opt_present("no-send-log") {
         None
     } else {
@@ -676,6 +686,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
         compression,
+        checkpoint_bytes,
         use_stat_cache,
         primary_key_id,
         send_key_id,

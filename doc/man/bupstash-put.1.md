@@ -121,6 +121,11 @@ Default tags can be overidden manually by simply specifying them.
   Path to the send log, overridden by --send-log. See the section 'Using a send log'
   for a description of how to use send logging for efficient incremental uploads.
 
+* BUPSTASH_CHECKPOINT_BYTES:
+  When send logging is enabled bupstash will checkpoint the log every BUPSTASH_CHECKPOINT_BYTES
+  of data that is sent. If an upload is interrupted after a successful checkpoint, data will not need
+  to be resent over the network. The default value of this option is 1073741824, which is 1 GiB.
+
 ## EXAMPLES
 
 ### Save a file to a repository over ssh
