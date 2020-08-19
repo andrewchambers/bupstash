@@ -7,7 +7,7 @@ pub trait Engine {
     fn get_chunk_async(
         &mut self,
         addr: &Address,
-    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>>;
+    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, failure::Error>>;
 
     // Get a chunk from the storage engine.
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {

@@ -11,7 +11,7 @@ enum ReadWorkerMsg {
     GetChunk(
         (
             Address,
-            crossbeam::channel::Sender<Result<Vec<u8>, failure::Error>>,
+            crossbeam_channel::Sender<Result<Vec<u8>, failure::Error>>,
         ),
     ),
     Exit,
@@ -19,7 +19,7 @@ enum ReadWorkerMsg {
 
 enum WriteWorkerMsg {
     AddChunk((Address, Vec<u8>)),
-    Barrier(crossbeam::channel::Sender<Option<failure::Error>>),
+    Barrier(crossbeam_channel::Sender<Option<failure::Error>>),
     Exit,
 }
 
@@ -28,14 +28,14 @@ pub struct Sqlite3Storage {
 
     // Reading
     read_worker_handles: Vec<std::thread::JoinHandle<()>>,
-    read_worker_tx: crossbeam::channel::Sender<ReadWorkerMsg>,
-    read_worker_rx: crossbeam::channel::Receiver<ReadWorkerMsg>,
+    read_worker_tx: crossbeam_channel::Sender<ReadWorkerMsg>,
+    read_worker_rx: crossbeam_channel::Receiver<ReadWorkerMsg>,
 
     // Writing
     had_io_error: Arc<AtomicBool>,
     write_worker_handles: Vec<std::thread::JoinHandle<()>>,
-    write_worker_tx: crossbeam::channel::Sender<WriteWorkerMsg>,
-    write_worker_rx: crossbeam::channel::Receiver<WriteWorkerMsg>,
+    write_worker_tx: crossbeam_channel::Sender<WriteWorkerMsg>,
+    write_worker_rx: crossbeam_channel::Receiver<WriteWorkerMsg>,
 }
 
 impl Sqlite3Storage {
@@ -266,7 +266,7 @@ impl Sqlite3Storage {
         if self.read_worker_handles.len() < MAX_READ_WORKERS {
             match self.read_worker_tx.try_send(msg) {
                 Ok(_) => Ok(()),
-                Err(crossbeam::channel::TrySendError::Full(msg)) => {
+                Err(crossbeam_channel::TrySendError::Full(msg)) => {
                     self.add_read_worker_thread()?;
                     Ok(self.read_worker_tx.send(msg)?)
                 }
@@ -285,7 +285,7 @@ impl Sqlite3Storage {
         if self.write_worker_handles.len() < MAX_WRITE_WORKERS {
             match self.write_worker_tx.try_send(msg) {
                 Ok(_) => Ok(()),
-                Err(crossbeam::channel::TrySendError::Full(msg)) => {
+                Err(crossbeam_channel::TrySendError::Full(msg)) => {
                     self.add_write_worker_thread()?;
                     Ok(self.write_worker_tx.send(msg)?)
                 }
@@ -300,7 +300,7 @@ impl Sqlite3Storage {
         let mut rendezvous = Vec::with_capacity(self.write_worker_handles.len());
 
         for _i in 0..self.write_worker_handles.len() {
-            let (rendezvous_tx, rendezvous_rx) = crossbeam::channel::bounded(0);
+            let (rendezvous_tx, rendezvous_rx) = crossbeam_channel::bounded(0);
             rendezvous.push(rendezvous_rx);
             self.write_worker_tx
                 .send(WriteWorkerMsg::Barrier(rendezvous_tx))
@@ -334,8 +334,8 @@ impl Sqlite3Storage {
         let write_worker_handles = Vec::new();
         let had_io_error = Arc::new(AtomicBool::new(false));
         // We do not want any buffering.
-        let (read_worker_tx, read_worker_rx) = crossbeam::channel::bounded(0);
-        let (write_worker_tx, write_worker_rx) = crossbeam::channel::bounded(0);
+        let (read_worker_tx, read_worker_rx) = crossbeam_channel::bounded(0);
+        let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
 
         Ok(Sqlite3Storage {
             db_path: db_path.to_owned(),
@@ -366,12 +366,12 @@ impl Engine for Sqlite3Storage {
     fn get_chunk_async(
         &mut self,
         addr: &Address,
-    ) -> crossbeam::channel::Receiver<Result<Vec<u8>, failure::Error>> {
-        let (tx, rx) = crossbeam::channel::bounded(1);
+    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, failure::Error>> {
+        let (tx, rx) = crossbeam_channel::bounded(1);
         match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
             Ok(()) => rx,
             Err(err) => {
-                let (tx, rx) = crossbeam::channel::bounded(1);
+                let (tx, rx) = crossbeam_channel::bounded(1);
                 tx.send(Err(err)).unwrap();
                 rx
             }
