@@ -119,7 +119,7 @@ impl DirStorage {
                             }
 
                             let random_suffix = {
-                                let mut buf = [0; 8];
+                                let mut buf = [0; 12];
                                 crypto::randombytes(&mut buf[..]);
                                 hex::easy_encode_to_string(&buf[..])
                             };
@@ -127,6 +127,7 @@ impl DirStorage {
                             let tmp = dest
                                 .to_string_lossy()
                                 .chars()
+                                .chain(".".chars())
                                 .chain(random_suffix.chars())
                                 .chain(".tmp".chars())
                                 .collect::<String>();

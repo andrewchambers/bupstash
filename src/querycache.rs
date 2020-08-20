@@ -1,4 +1,6 @@
+use super::crypto;
 use super::itemset;
+use super::query;
 use super::xid::*;
 use std::path::PathBuf;
 
@@ -8,6 +10,14 @@ pub struct QueryCache {
 
 pub struct QueryCacheTx<'a> {
     tx: rusqlite::Transaction<'a>,
+}
+
+pub struct ListOptions {
+    pub now: chrono::DateTime<chrono::Utc>,
+    pub utc_timestamps: bool,
+    pub primary_key_id: Xid,
+    pub metadata_dctx: crypto::DecryptionContext,
+    pub query: Option<query::Query>,
 }
 
 impl QueryCache {
@@ -170,10 +180,60 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn walk_items(
+    pub fn list(
         self: &mut Self,
-        f: &mut dyn FnMut(i64, Xid, itemset::VersionedItemMetadata) -> Result<(), failure::Error>,
+        mut opts: ListOptions,
+        on_match: &mut dyn FnMut(
+            Xid,
+            std::collections::BTreeMap<String, String>,
+        ) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
-        itemset::walk_items(&self.tx, f)
+        let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
+            match metadata {
+                itemset::VersionedItemMetadata::V1(metadata) => {
+                    if metadata.plain_text_metadata.primary_key_id != opts.primary_key_id {
+                        /* XXX, we should allow some sort of notification or query on
+                          keys that do not match.
+                        */
+                        return Ok(());
+                    } else {
+                        let mut metadata = metadata.decrypt_metadata(&mut opts.metadata_dctx)?;
+
+                        let ts = if opts.utc_timestamps {
+                            metadata.timestamp.format("%Y/%m/%d %T").to_string()
+                        } else {
+                            let local_ts: chrono::DateTime<chrono::Local> =
+                                chrono::DateTime::from(metadata.timestamp);
+                            local_ts.format("%Y/%m/%d %T").to_string()
+                        };
+
+                        // Add special builtin tags.
+                        metadata.tags.insert("id".to_string(), item_id.to_string());
+                        metadata.tags.insert("timestamp".to_string(), ts);
+
+                        let query_matches = match opts.query {
+                            Some(ref query) => query::query_matches(
+                                query,
+                                &query::QueryContext {
+                                    age: opts
+                                        .now
+                                        .signed_duration_since(metadata.timestamp)
+                                        .to_std()?,
+                                    tagset: &metadata.tags,
+                                },
+                            ),
+                            None => true,
+                        };
+
+                        if query_matches {
+                            on_match(item_id, metadata.tags)?;
+                        }
+
+                        Ok(())
+                    }
+                }
+            }
+        };
+        itemset::walk_items(&self.tx, &mut f)
     }
 }

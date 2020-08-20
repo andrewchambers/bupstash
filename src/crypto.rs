@@ -54,6 +54,7 @@ pub fn memzero(buf: &mut [u8]) {
     }
 }
 
+#[derive(Clone)]
 pub struct BoxNonce {
     pub bytes: [u8; BOX_NONCEBYTES as usize],
 }
@@ -121,6 +122,7 @@ pub fn box_keypair() -> (BoxPublicKey, BoxSecretKey) {
     (pk, sk)
 }
 
+#[derive(Clone)]
 pub struct BoxKey {
     pub bytes: [u8; BOX_BEFORENMBYTES],
 }
@@ -292,6 +294,7 @@ pub enum DataCompression {
     Zstd,
 }
 
+#[derive(Clone)]
 pub struct EncryptionContext {
     nonce: BoxNonce,
     ephemeral_pk: BoxPublicKey,
@@ -332,6 +335,7 @@ impl EncryptionContext {
     }
 }
 
+#[derive(Clone)]
 pub struct DecryptionContext {
     sk: BoxSecretKey,
     psk: BoxPreSharedKey,

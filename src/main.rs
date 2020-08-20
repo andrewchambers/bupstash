@@ -361,120 +361,27 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
-    let mut metadata_dctx = match key {
+    let metadata_dctx = match key {
         keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk),
         keys::Key::MetadataKeyV1(k) => {
             crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
         }
         _ => failure::bail!("provided key is not a primary key"),
     };
-    let mut query: Option<query::Query> = None;
 
-    if !matches.free.is_empty() {
-        query = match query::parse(&matches.free.join("•")) {
+    let query = if !matches.free.is_empty() {
+        match query::parse(&matches.free.join("•")) {
+            Ok(query) => Some(query),
             Err(e) => {
                 query::report_parse_error(e);
-                std::process::exit(1);
+                failure::bail!("query parse error");
             }
-            Ok(query) => Some(query),
-        };
-    }
+        }
+    } else {
+        None
+    };
 
     let mut query_cache = matches_to_query_cache(&matches)?;
-
-    let warned_wrong_key = &mut false;
-    let now = chrono::Utc::now();
-
-    let mut f =
-        |_op_id: i64, item_id: xid::Xid, metadata: itemset::VersionedItemMetadata| match metadata {
-            itemset::VersionedItemMetadata::V1(metadata) => {
-                if metadata.plain_text_metadata.primary_key_id != primary_key_id {
-                    if !*warned_wrong_key {
-                        *warned_wrong_key = true;
-                        eprintln!(
-                            "NOTE: Search skipping items encrypted with different primary key."
-                        )
-                    }
-                    return Ok(());
-                }
-
-                let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-                let mut tags = encrypted_metadata.tags;
-
-                // Add special builtin tags.
-                tags.insert("id".to_string(), item_id.to_string());
-
-                let ts = if matches.opt_present("utc-timestamps") {
-                    encrypted_metadata
-                        .timestamp
-                        .format("%Y/%m/%d %T")
-                        .to_string()
-                } else {
-                    let local_ts: chrono::DateTime<chrono::Local> =
-                        chrono::DateTime::from(encrypted_metadata.timestamp);
-                    local_ts.format("%Y/%m/%d %T").to_string()
-                };
-                tags.insert("timestamp".to_string(), ts);
-
-                let doprint = match query {
-                    Some(ref query) => query::query_matches(
-                        query,
-                        &query::QueryContext {
-                            age: now
-                                .signed_duration_since(encrypted_metadata.timestamp)
-                                .to_std()?,
-                            tagset: &tags,
-                        },
-                    ),
-                    None => true,
-                };
-
-                let mut tags: Vec<(String, String)> = tags.into_iter().collect();
-
-                // Custom sort to be more human friendly.
-                tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
-                    ("id", _) => std::cmp::Ordering::Less,
-                    (_, "id") => std::cmp::Ordering::Greater,
-                    ("name", _) => std::cmp::Ordering::Less,
-                    (_, "name") => std::cmp::Ordering::Greater,
-                    _ => k1.partial_cmp(k2).unwrap(),
-                });
-
-                if doprint {
-                    match list_format {
-                        ListFormat::Human => {
-                            for (i, (k, v)) in tags.iter().enumerate() {
-                                if i != 0 {
-                                    print!(" ");
-                                }
-                                print!(
-                                    "{}=\"{}\"",
-                                    k,
-                                    v.replace("\\", "\\\\").replace("\"", "\\\"")
-                                );
-                            }
-                            println!();
-                        }
-                        ListFormat::Jsonl => {
-                            print!("{{");
-                            for (i, (k, v)) in tags.iter().enumerate() {
-                                if i != 0 {
-                                    print!(", ");
-                                }
-                                print!(
-                                    "{}:{}",
-                                    serde_json::to_string(&k)?,
-                                    serde_json::to_string(&v)?
-                                )
-                            }
-                            println!("}}");
-                        }
-                    }
-                }
-
-                Ok(())
-            }
-        };
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
@@ -484,8 +391,62 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
+    let mut on_match = |_item_id: xid::Xid, tags: std::collections::BTreeMap<String, String>| {
+        let mut tags: Vec<(String, String)> = tags.into_iter().collect();
+
+        // Custom sort to be more human friendly.
+        tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
+            ("id", _) => std::cmp::Ordering::Less,
+            (_, "id") => std::cmp::Ordering::Greater,
+            ("name", _) => std::cmp::Ordering::Less,
+            (_, "name") => std::cmp::Ordering::Greater,
+            _ => k1.partial_cmp(k2).unwrap(),
+        });
+
+        match list_format {
+            ListFormat::Human => {
+                for (i, (k, v)) in tags.iter().enumerate() {
+                    if i != 0 {
+                        print!(" ");
+                    }
+                    print!(
+                        "{}=\"{}\"",
+                        k,
+                        v.replace("\\", "\\\\").replace("\"", "\\\"")
+                    );
+                }
+                println!();
+            }
+            ListFormat::Jsonl => {
+                print!("{{");
+                for (i, (k, v)) in tags.iter().enumerate() {
+                    if i != 0 {
+                        print!(", ");
+                    }
+                    print!(
+                        "{}:{}",
+                        serde_json::to_string(&k)?,
+                        serde_json::to_string(&v)?
+                    )
+                }
+                println!("}}");
+            }
+        }
+
+        Ok(())
+    };
+
     let mut tx = query_cache.transaction()?;
-    tx.walk_items(&mut f)?;
+    tx.list(
+        querycache::ListOptions {
+            primary_key_id,
+            query,
+            metadata_dctx: metadata_dctx.clone(),
+            utc_timestamps: matches.opt_present("utc-timestamps"),
+            now: chrono::Utc::now(),
+        },
+        &mut on_match,
+    )?;
 
     Ok(())
 }
@@ -718,7 +679,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
-    let (hash_key_part_1, data_dctx, mut metadata_dctx) = match key {
+    let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
             let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
@@ -740,65 +701,39 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
 
+            // Only sync the client if we have a non id query.
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
 
             let mut n_matches: u64 = 0;
             let mut id = xid::Xid::default();
-            let now = chrono::Utc::now();
 
-            let mut f = |_op_id: i64,
-                         item_id: xid::Xid,
-                         metadata: itemset::VersionedItemMetadata| {
-                match metadata {
-                    itemset::VersionedItemMetadata::V1(metadata) => {
-                        if primary_key_id != metadata.plain_text_metadata.primary_key_id {
-                            return Ok(());
-                        }
+            let mut on_match =
+                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                    n_matches += 1;
+                    id = item_id;
 
-                        let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-                        let mut tags = encrypted_metadata.tags;
-
-                        // Add special builtin tags.
-                        tags.insert("id".to_string(), item_id.to_string());
-
-                        let ts = if matches.opt_present("utc-timestamps") {
-                            encrypted_metadata
-                                .timestamp
-                                .format("%Y/%m/%d %T")
-                                .to_string()
-                        } else {
-                            let local_ts: chrono::DateTime<chrono::Local> =
-                                chrono::DateTime::from(encrypted_metadata.timestamp);
-                            local_ts.format("%Y/%m/%d %T").to_string()
-                        };
-                        tags.insert("timestamp".to_string(), ts);
-
-                        if query::query_matches(
-                            &query,
-                            &query::QueryContext {
-                                age: now
-                                    .signed_duration_since(encrypted_metadata.timestamp)
-                                    .to_std()?,
-                                tagset: &tags,
-                            },
-                        ) {
-                            n_matches += 1;
-                            id = item_id;
-                        }
-                        Ok(())
+                    if n_matches > 1 {
+                        failure::bail!(
+                            "the provided query matched {} items, need a single match",
+                            n_matches
+                        );
                     }
-                }
-            };
+
+                    Ok(())
+                };
 
             let mut tx = query_cache.transaction()?;
-            tx.walk_items(&mut f)?;
+            tx.list(
+                querycache::ListOptions {
+                    primary_key_id,
+                    metadata_dctx: metadata_dctx.clone(),
+                    utc_timestamps: matches.opt_present("utc-timestamps"),
+                    query: Some(query),
+                    now: chrono::Utc::now(),
+                },
+                &mut on_match,
+            )?;
 
-            if n_matches != 1 {
-                failure::bail!(
-                    "the provided query matched {} items, need a single match",
-                    n_matches
-                );
-            }
             id
         }
     };
@@ -847,11 +782,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         (_, query) => {
             let mut query_cache = matches_to_query_cache(&matches)?;
 
+            // Only sync the client if we have a non id query.
             client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
 
             let key = matches_to_key(&matches)?;
             let primary_key_id = key.primary_key_id();
-            let mut metadata_dctx = match key {
+            let metadata_dctx = match key {
                 keys::Key::PrimaryKeyV1(k) => {
                     crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
                 }
@@ -860,52 +796,26 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 }
                 _ => failure::bail!("provided key is not a decryption key"),
             };
+
             let mut ids = Vec::new();
-            let now = chrono::Utc::now();
 
-            let mut f = |_op_id: i64,
-                         item_id: xid::Xid,
-                         metadata: itemset::VersionedItemMetadata| {
-                match metadata {
-                    itemset::VersionedItemMetadata::V1(metadata) => {
-                        if metadata.plain_text_metadata.primary_key_id != primary_key_id {
-                            return Ok(());
-                        }
-                        let encrypted_metadata = metadata.decrypt_metadata(&mut metadata_dctx)?;
-                        let mut tags = encrypted_metadata.tags;
+            let mut on_match =
+                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                    ids.push(item_id);
+                    Ok(())
+                };
 
-                        // Add special builtin tags.
-                        tags.insert("id".to_string(), item_id.to_string());
-
-                        let ts = if matches.opt_present("utc-timestamps") {
-                            encrypted_metadata
-                                .timestamp
-                                .format("%Y/%m/%d %T")
-                                .to_string()
-                        } else {
-                            let local_ts: chrono::DateTime<chrono::Local> =
-                                chrono::DateTime::from(encrypted_metadata.timestamp);
-                            local_ts.format("%Y/%m/%d %T").to_string()
-                        };
-                        tags.insert("timestamp".to_string(), ts);
-
-                        if query::query_matches(
-                            &query,
-                            &query::QueryContext {
-                                age: now
-                                    .signed_duration_since(encrypted_metadata.timestamp)
-                                    .to_std()?,
-                                tagset: &tags,
-                            },
-                        ) {
-                            ids.push(item_id);
-                        }
-                        Ok(())
-                    }
-                }
-            };
             let mut tx = query_cache.transaction()?;
-            tx.walk_items(&mut f)?;
+            tx.list(
+                querycache::ListOptions {
+                    primary_key_id,
+                    metadata_dctx: metadata_dctx.clone(),
+                    utc_timestamps: matches.opt_present("utc-timestamps"),
+                    query: Some(query),
+                    now: chrono::Utc::now(),
+                },
+                &mut on_match,
+            )?;
 
             if ids.len() != 1 && !matches.opt_present("allow-many") {
                 failure::bail!(
