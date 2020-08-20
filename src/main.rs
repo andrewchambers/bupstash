@@ -817,7 +817,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 &mut on_match,
             )?;
 
-            if ids.len() != 1 && !matches.opt_present("allow-many") {
+            if ids.len() > 1 && !matches.opt_present("allow-many") {
                 failure::bail!(
                     "the provided query matched {} items, need a single match unless --allow-many is specified",
                     ids.len()
