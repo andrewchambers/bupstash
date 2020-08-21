@@ -1,15 +1,7 @@
 use super::address::*;
+use super::sodium;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
-
-mod sodium {
-    #![allow(non_upper_case_globals)]
-    #![allow(non_camel_case_types)]
-    #![allow(non_snake_case)]
-    #![allow(dead_code)]
-    #![allow(clippy::redundant_static_lifetimes)]
-    include!("./sodium_bindings_gen.rs");
-}
 
 pub const HASH_BYTES: usize = sodium::crypto_generichash_BYTES as usize;
 

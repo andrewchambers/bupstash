@@ -56,12 +56,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "base64"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e223af0dc48c96d4f8342ec01a4974f139df863896b316681efd36742f22cc67"
-
-[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -83,8 +77,8 @@ dependencies = [
  "humantime",
  "libc",
  "nix",
+ "once_cell",
  "path-clean",
- "pem",
  "pkg-config",
  "regex",
  "rusqlite",
@@ -404,17 +398,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ecba01bf2678719532c5e3059e0b5f0811273d94b397088b82e3bd0a78c78fdd"
 
 [[package]]
-name = "pem"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59698ea79df9bf77104aefd39cc3ec990cb9693fb59c3b0a70ddf2646fdffb4b"
-dependencies = [
- "base64",
- "once_cell",
- "regex",
-]
-
-[[package]]
 name = "pkg-config"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -557,8 +540,9 @@ dependencies = [
 
 [[package]]
 name = "serde_bare"
-version = "0.2.0"
-source = "git+https://git.sr.ht/~tdeo/serde_bare?rev=2e330a7e37ca433c515d2a05128308fc98335300#2e330a7e37ca433c515d2a05128308fc98335300"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01db2255aa98fb93ad74272d8b2e6fd4851860e733e944b9439cf148127164b2"
 dependencies = [
  "serde",
 ]

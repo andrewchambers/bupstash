@@ -1,4 +1,5 @@
 use super::crypto;
+use super::pem;
 use super::xid::*;
 use failure::{Error, ResultExt};
 use serde::{Deserialize, Serialize};
