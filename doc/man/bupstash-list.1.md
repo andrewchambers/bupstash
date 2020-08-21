@@ -38,8 +38,8 @@ and then decrypted on the client side to run a query. The file containing the sy
 is called the query cache.
 
 The path to the put-cache file, defaults to one of the following, in order, provided
-the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
-`$XDG_CACHE_HOME/.cache/bupstash/query-cache.sqlite3` or `$HOME/.cache/bupstash/query-cache.sqlite3`.
+the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
+`$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 ## OPTIONS
 
@@ -54,7 +54,7 @@ the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
-  `$XDG_CACHE_HOME/.cache/bupstash/query-cache.sqlite3` or `$HOME/.cache/bupstash/query-cache.sqlite3`.
+  `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 * --format FORMAT:
   Set output format to one of the following 'human', 'jsonl'.

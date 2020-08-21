@@ -53,7 +53,7 @@ more information on the query cache.
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
-  `$XDG_CACHE_HOME/.cache/bupstash/query-cache.sqlite3` or `$HOME/.cache/bupstash/query-cache.sqlite3`.
+  `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 ## ENVIRONMENT
 

@@ -5,47 +5,57 @@ bupstash-put(1)
 
 Put a new entry into a bupstash repository.
 
-`bupstash put [OPTIONS] TAG=VAL... [:: WHAT] `
+`bupstash put [OPTIONS] [TAG=VAL...] FILE`
+`bupstash put [OPTIONS] [TAG=VAL...] DIR`
+`bupstash put --exec [OPTIONS] [TAG=VAL...] CMD`
 
 ## DESCRIPTION
 
-`bupstash put` encrypts `WHAT`, then stores it in a bupstash repository
+`bupstash put` encrypts a file, directory, or command output and stores it in a bupstash repository
 such that only the primary key can decrypt it.
-`WHAT` can be a PATH to a file or directory, or a command to run if the `--exec`
-flag is specified. For files, the data is saved directly, for directories, the data
+
+For files, the data is saved directly, for directories, the data
 is converted to a tar archive, and for commands the command is executed, and
-stdout is saved.
+stdout is sent to the database.
+
+Data stored in a bupstash repository is automatically deduplicated
+such that the same or similar snapshots take minimal additional disk space.
+For efficient incremental backups, use the --send-log option described in the usage notes section.
 
 All puts can associated with a set of arbitrary encrypted metadata tags, which
 can be queried using bupstash-list(1). Tags are specified in a simple
-`KEY=VALUE` format on the command line.
+`KEY=VALUE` format on the command line. Valid tag keys *must* match the
+regular expression `^([a-zA-Z0-9\\-_]+)=(.+)$`, that means tag keys must be alpha numeric 
+with the addition of `-` and `_`. Tag processing ends at the first argument that does not match the pattern.
 
-Data stored in a bupstash repository is automatically deduplicated
-such that the same or similar snapshots do not take additional space.
+The special marker argument `::` may be used to force the end of tag parsing, but is usually not necessary.
+
 
 ## USAGE NOTES
 
 ### Using a send log
 
-When sending data, `bupstash` records what was sent in the previous
+When sending data, `bupstash` records metadata about what was sent in the previous
 'put' operation in a file known as the send log. 
 
 The send log serves two main purposes:
 
-- it remembers a set of data chunks that were sent to the repository in the last 'put'
+- it remembers the ids of data chunks that were sent to the repository in the last 'put',
   allowing `bupstash` to avoid resending those chunks over the network repeatedly.
 - It stores a mapping of file paths, to data that has already been sent, allowing bupstash
   to skip processing files when snapshotting the same directory many times repeatedly.
 
-The send log has limited memory, so for efficient 'put' use, give each backup job
-a unique send log file. As an example, if you have a backup script that puts a 
+The send log only remembers the data previously set, so for efficient 'put' use, give each backup job
+a unique send log file. As an example, if you have a backup script that saves a 
 directory as a cron job, it is best to give that script its own send log so that all subsequent
 runs with similar input data will share the same send log.
 
 Example: 
 
 ```
-$ bupstash put --send-log /root/bupstash-backups-send-log :: /home/
+$ bupstash put --send-log /root/bupstash-backups.sendlog /home/
+# Second backup is incremental and fast because it uses the send log.
+$ bupstash put --send-log /root/bupstash-backups.sendlog /home/
 ```
 
 ### Default tags
@@ -82,7 +92,7 @@ Default tags can be overidden manually by simply specifying them.
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,
-  `$XDG_CACHE_HOME/.cache/bupstash/send-log.sqlite3` or `$HOME/.cache/bupstash/send-log.sqlite3`.
+  `$XDG_CACHE_HOME/.cache/bupstash/bupstash.sendlog` or `$HOME/.cache/bupstash/bupstash.sendlog`.
 
 * --no-send-log:
   Disable use of a send log, all data will be written over the network. Implies --no-stat-caching.
@@ -128,10 +138,15 @@ Default tags can be overidden manually by simply specifying them.
 
 ## EXAMPLES
 
-### Save a file to a repository over ssh
+### Save a file or directory to a repository over ssh
 
 ```
-$ bupstash put -r "ssh://$SERVER/home/me/repo" :: ./data.file
+export BUPSTASH_KEY="/backups/backups-secret.key"
+export BUPSTASH_REPOSITORY="ssh://$SERVER/home/me/bupstash-repository"
+
+$ bupstash put ./data.file
+$ bupstash put ./directory
+
 ```
 
 ### Snapshot a directory
@@ -141,14 +156,12 @@ deduplicating repeated files.
 
 ```
 # Snapshot a directory.
-$ bupstash put host=$(hostname) :: ./data
-
-# Repeated snapshots reuse the put cache so are much faster.
-$ ID=$(bupstash put host=$(hostname) :: ./data)
+$ ID="$(bupstash put ./data)"
 
 # Fetch the contents of a snapshot and list contents with tar -t
-$ bupstash get id=$ID | tar -tf -
+$ bupstash get id="$ID" | tar -tf -
 ```
+
 ### Snapshot the output of a command
 
 ```

@@ -228,7 +228,7 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
             None => {
                 let mut p = cache_dir()?;
                 std::fs::create_dir_all(&p)?;
-                p.push("query-cache.sqlite3");
+                p.push("bupstash.qcache");
                 querycache::QueryCache::open(&p)
             }
         },
@@ -451,7 +451,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
+fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     opts.optopt(
@@ -494,25 +494,38 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         "PATTERN",
     );
 
-    let (args, source_args) = {
-        let mut idx = None;
-        for (i, v) in args.iter().enumerate() {
-            if v == "::" {
-                idx = Some(i);
-                break;
-            }
-        }
-        match idx {
-            Some(i) => {
-                args.remove(i);
-                let source_args = args.split_off(i);
-                (args, source_args)
-            }
-            None => (args, Vec::new()),
-        }
-    };
-
     let matches = default_parse_opts(opts, &args);
+
+    let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$").unwrap();
+
+    let mut tags = BTreeMap::<String, String>::new();
+    let mut source_args = Vec::new();
+
+    {
+        let mut collecting_tags = true;
+
+        for a in &matches.free {
+            if collecting_tags && a == "::" {
+                collecting_tags = false;
+                continue;
+            }
+            if collecting_tags {
+                match tag_re.captures(&a) {
+                    Some(caps) => {
+                        let t = &caps[1];
+                        let v = &caps[2];
+                        tags.insert(t.to_string(), v.to_string());
+                    }
+                    None => {
+                        collecting_tags = false;
+                        source_args.push(a.to_string());
+                    }
+                }
+            } else {
+                source_args.push(a.to_string());
+            }
+        }
+    }
 
     let compression = if matches.opt_present("no-compression") {
         crypto::DataCompression::None
@@ -542,7 +555,7 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
                 None => {
                     let mut p = cache_dir()?;
                     std::fs::create_dir_all(&p)?;
-                    p.push("send-log.sqlite3");
+                    p.push("bupstash.sendlog");
                     Some(sendlog::SendLog::open(&p)?)
                 }
             },
@@ -568,8 +581,6 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("can only send data with a primary-key or put-key."),
     };
 
-    let mut tags = BTreeMap::<String, String>::new();
-
     let default_tags = !matches.opt_present("no-default-tags");
 
     let data_source: client::DataSource;
@@ -577,62 +588,59 @@ fn put_main(mut args: Vec<String>) -> Result<(), failure::Error> {
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
-        data_source = client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
+        failure::bail!("expected a file or directory but got none, use '-' for stdin.");
     } else {
         if !source_args.len() == 1 {
             failure::bail!("expected a single data source, got {:?}", source_args);
         }
-        let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
 
-        let md = match std::fs::metadata(&input_path) {
-            Ok(md) => md,
-            Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
-        };
-
-        let name = match input_path.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => "rootfs".to_string(),
-        };
-
-        let mut exclusions = Vec::new();
-
-        for e in matches.opt_strs("exclude") {
-            match glob::Pattern::new(&e) {
-                Ok(pattern) => exclusions.push(pattern),
-                Err(err) => failure::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
-            }
-        }
-
-        if md.is_dir() {
-            if default_tags {
-                tags.insert("name".to_string(), name + ".tar");
-            }
-
-            data_source = client::DataSource::Directory {
-                path: input_path,
-                exclusions,
-            };
-        } else if md.is_file() {
-            if default_tags {
-                tags.insert("name".to_string(), name);
-            }
-
-            data_source = client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+        if source_args[0] == "-" {
+            data_source = client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
         } else {
-            failure::bail!("{} is not a file or a directory", source_args[0]);
+            let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
+
+            let md = match std::fs::metadata(&input_path) {
+                Ok(md) => md,
+                Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
+            };
+
+            let name = match input_path.file_name() {
+                Some(name) => name.to_string_lossy().to_string(),
+                None => "rootfs".to_string(),
+            };
+
+            let mut exclusions = Vec::new();
+
+            for e in matches.opt_strs("exclude") {
+                match glob::Pattern::new(&e) {
+                    Ok(pattern) => exclusions.push(pattern),
+                    Err(err) => {
+                        failure::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
+                    }
+                }
+            }
+
+            if md.is_dir() {
+                if default_tags {
+                    tags.insert("name".to_string(), name + ".tar");
+                }
+
+                data_source = client::DataSource::Directory {
+                    path: input_path,
+                    exclusions,
+                };
+            } else if md.is_file() {
+                if default_tags {
+                    tags.insert("name".to_string(), name);
+                }
+
+                data_source =
+                    client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+            } else {
+                failure::bail!("{} is not a file or a directory", source_args[0]);
+            }
         }
     };
-    let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$")?;
-    for a in &matches.free {
-        match tag_re.captures(&a) {
-            Some(caps) => {
-                let t = &caps[1];
-                let v = &caps[2];
-                tags.insert(t.to_string(), v.to_string());
-            }
-            None => failure::bail!("argument '{}' is not a valid tag value.", a),
-        }
-    }
 
     // No easy way to compute the tag set length without actually encoding it due
     // to var ints in the bare encoding.

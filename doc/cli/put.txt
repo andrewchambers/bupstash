@@ -1,10 +1,13 @@
-bupstash put [OPTIONS] TAGS... [:: WHAT]
+bupstash put [OPTIONS] TAGS... DIR
+bupstash put [OPTIONS] TAGS... FILE
+bupstash put -e [OPTIONS] TAGS... CMD...
 
-Put an entry into a bupstash repository with an associated set of metadata tags.
-WHAT may be a file or directory or a command to run if --exec is provided.
+`bupstash put` encrypts a file, directory, or command output and stores it
+in a bupstash repository such that only the primary backup key can decrypt it.
 
-When WHAT is a directory, it is automatically converted to a tarball using
-an efficient caching mechansim.
+For files, the data is saved directly, for directories, the data
+is converted to a tar archive, and for commands the command is executed, and
+stdout is sent to the database.
 
 To best utilize the put caching mechanism, give each job you intend to run
 repeatedly it's own send log. This can dramatically reduce the amount of 
@@ -15,13 +18,13 @@ Examples:
   $ export BUPSTASH_KEY=./my-secret-bupstash.key
 
   # To avoid resending data needlessly during backups, create job specific send log.
-  $ bupstash put --send-log /root/backup-sendlog :: ./to-backup
+  $ bupstash put --send-log /root/backup-sendlog ./to-backup
 
-  # Specify arbitrary metadata as KEY=VALUE before ::.
-  $ bupstash put host=$(hostname) :: ./file.txt
+  # Specify arbitrary metadata as KEY=VALUE before.
+  $ bupstash put host=$(hostname) ./file.txt
 
   # Use --exec to save the output of commands.
-  $ bupstash put --exec name=files.tar :: tar -C ./files -cvf - .
+  $ bupstash put --exec name=files.tar tar -C ./files -cvf - .
 
-  # If WHAT is not specified, it is read from stdin.
-  $ echo data | bupstash put
+  # Put from stdin (does not check error codes).
+  $ echo data | bupstash put -
