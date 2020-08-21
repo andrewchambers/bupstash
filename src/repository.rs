@@ -28,12 +28,8 @@ pub enum RepoError {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
-    DirStore {
-        dir_path: String,
-    },
-    Sqlite3Store {
-        db_path: String,
-    },
+    DirStore,
+    Sqlite3Store,
     ExternalStore {
         socket_path: String,
         path: String,
@@ -96,9 +92,7 @@ impl Repo {
     ) -> Result<(), failure::Error> {
         let storage_engine = match storage_engine {
             Some(storage_engine) => storage_engine,
-            None => StorageEngineSpec::DirStore {
-                dir_path: "./data".to_string(),
-            },
+            None => StorageEngineSpec::DirStore,
         };
 
         let parent = if repo_path.is_absolute() {
@@ -200,7 +194,7 @@ impl Repo {
 
         let r = Repo {
             conn,
-            repo_path: repo_path.to_path_buf(),
+            repo_path: fs::canonicalize(&repo_path)?,
             _gc_lock_mode: GCLockMode::Shared,
             _gc_lock: Some(gc_lock),
         };
@@ -293,26 +287,14 @@ impl Repo {
         spec: &StorageEngineSpec,
     ) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
-            StorageEngineSpec::DirStore { dir_path } => {
-                let dir_path: std::path::PathBuf = dir_path.into();
-                let dir_path = if dir_path.is_relative() {
-                    let mut path_buf = self.repo_path.to_path_buf();
-                    path_buf.push(dir_path);
-                    path_buf
-                } else {
-                    dir_path
-                };
-                Box::new(dir_chunk_storage::DirStorage::new(&dir_path)?)
+            StorageEngineSpec::DirStore => {
+                let mut data_dir = self.repo_path.to_path_buf();
+                data_dir.push("data");
+                Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
             }
-            StorageEngineSpec::Sqlite3Store { db_path } => {
-                let db_path: std::path::PathBuf = db_path.into();
-                let db_path = if db_path.is_relative() {
-                    let mut path_buf = self.repo_path.to_path_buf();
-                    path_buf.push(db_path);
-                    path_buf
-                } else {
-                    db_path
-                };
+            StorageEngineSpec::Sqlite3Store => {
+                let mut db_path = self.repo_path.to_path_buf();
+                db_path.push("data.sqlite3");
                 Box::new(sqlite3_chunk_storage::Sqlite3Storage::new(&db_path)?)
             }
             StorageEngineSpec::ExternalStore {

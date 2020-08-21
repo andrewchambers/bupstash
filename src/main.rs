@@ -126,12 +126,14 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "s",
         "storage",
-        "The storage engine specification, consult manual for details.",
+        "The storage engine specification. one of 'dir', 'sqlite3' or a json specification. Consult the manual for details.",
         "STORAGE",
     );
     let matches = default_parse_opts(opts, &args[..]);
 
     let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
+        Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
+        Some(s) if s == "sqlite3" => Some(repository::StorageEngineSpec::Sqlite3Store),
         Some(s) => match serde_json::from_str(&s) {
             Ok(s) => Some(s),
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),

@@ -41,18 +41,23 @@ $ cp ./target/release/bupstash $BINDIR
 
 # Initializing your repository
 
-Local repository:
+First we must initialize a repository to save data into, for that we use the `bupstash init` command.
+
+Initializing a local repository:
 ```
-export BUPSTASH_REPOSITORY=($pwd)/bupstash-repo
+export BUPSTASH_REPOSITORY=$(pwd)/bupstash-repo
 $ bupstash init
 ```
 
-Remote repository:
+Initializing a remote repository:
 
 ```
 export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
 $ bupstash init
 ```
+
+As a side note, because bupstash accepts some commonly typed options from environment variables, you can
+add them your .bashrc or other equivalent file to avoid retyping them.
 
 # Generating an encryption key
 
@@ -211,15 +216,41 @@ Note that we recommend creating a new put key for every server in your network i
 
 # Access controls
 
-It is dangerous to allow a server creating backups to also delete those same
-backups. If ransomware or some other malicious agent compromises your computer, it will be
-able to delete your backups too, render them useless.
+When designing a backup plan, we must remember that if ransomware or some other malicious agent compromises your computer,
+it may be able to delete your backups too. 
 
-To solve this issue bupstash supports fine grained backup capabilities that can be configured on a per ssh key bases.
-This guide will show you to setup strict access controls yourself.
+To solve this issue bupstash supports access controls on remote backups that can be configured on a per ssh key basis.
+We can utilize ssh force commands to restrict a backup client to only run an instance of `bupstash serve` that 
+has a limited permissions.
 
-XXX TODO
+The following guide assumes you have a backup server with a user called `backups` that has openssh sshd running,
+and a client computer with an ssh client installed.
 
+In an your sshd config file in your server add the following lines:
+
+```
+Match User backups
+    ForceCommand "bupstash serve --allow-put /home/backups/bupstash-repository"
+```
+
+This means the backups user is only able to run the bupstash serve command with a hard coded set of permissions and repository
+path.
+
+Next add an ssh key to `$SERVER/home/backups/.ssh/authorized_keys` such that the a user can connect to the remote server
+using ssh based login.
+
+Now the client is only authorized to create new backups, but not list or remote them:
+```
+export BUPSTASH_REPOSITORY="ssh://backups@$SERVER/backups"
+$ bupstash put ./files
+...
+$ bupstash list
+server has disabled query and search for this client
+```
+
+The `bupstash serve` command also supports allowing fetching data, entry removal and garbage collection. With these
+options we can create a backup plan where clients can create new backups, and an administrator is able to cycle old backups
+while keeping the decryption key offline.
 
 ## More resources
 

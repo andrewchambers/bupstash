@@ -21,11 +21,11 @@ For details about the contents of the package store after initialization, see bu
   remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * --storage SPEC:
-  Bupstash supports plugin and alternative storage plugins via a
-  json storage specification. The default storage stores encrypted
-  data blocks in a repository local data directory.
+  Accepts 'dir', 'sqlite3' or a json storage specification.
+  The default storage is 'dir' and stores encrypted data blocks in a 
+  repository local data directory.
 
-  See the storage specs section for supported specifications and examples.
+  See the storage specs section for supported json specifications and examples.
 
 ## ENVIRONMENT
 
@@ -64,12 +64,12 @@ Parameters:
 Example:
 
 ```
-$ bupstash init --storage '{"Dir": {"dir_path":"./data"}'
+$ bupstash init --storage dir
 ```
 
 ### Sqlite3 storage
 
-The "Sqlite3" storage engine stores encrypted data in an sqlite3 database relative
+The sqlite3 storage engine stores encrypted data in an sqlite3 database relative
 to the repository. This storage engine only supports a single writer at a time,
 so generally the directory storage engine is a better choice.
 
@@ -80,7 +80,7 @@ Parameters:
 Example:
 
 ```
-$ bupstash init --storage '{"Sqlite3": {"db_path":"./data.sqlite3"}'
+$ bupstash init --storage sqlite3
 ```
 
 ### External storage

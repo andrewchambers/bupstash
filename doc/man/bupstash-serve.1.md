@@ -45,12 +45,14 @@ Using ssh force commands:
 In an your sshd config file in your server...
 ```
 Match User backups
-    ForceCommand "bupstash server --allow-put /backups"
+    ForceCommand "bupstash serve --allow-put /home/backups/bupstash-backups"
 ```
 
 Now the client is only authorized to create new backups:
 ```
-export BUPSTASH_REPOSITORY="ssh://backups@$SERVER/backups"
+export BUPSTASH_REPOSITORY="ssh://backups@$SERVER"
+$ bupstash put ./data
+d1659c3f56f744c7767fc57da003ee5d
 $ bupstash list
 server has disabled query and search for this client
 ```
