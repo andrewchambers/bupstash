@@ -30,9 +30,7 @@ export PATH=$(pwd):$PATH
 If you have a rust compiler installed, you can install the latest release
 directly from crates.io using cargo, the rust programming language package manager.
 
-```
-cargo install bupstash
-```
+Coming soon...
 
 # Initializing your repository
 
