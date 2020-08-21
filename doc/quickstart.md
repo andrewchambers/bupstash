@@ -25,12 +25,17 @@ tar xvf ./bupstash-*.tar.gz
 export PATH=$(pwd):$PATH
 ```
 
-### Via rust cargo
+### Via rust and cargo
 
 If you have a rust compiler installed, you can install the latest release
 directly from crates.io using cargo, the rust programming language package manager.
 
-Coming soon...
+```
+$ git clone https://git.sr.ht/~ach/bupstash
+$ cd bupstash
+$ cargo build --release
+$ cp ./target/release/bupstash $BINDIR
+```
 
 # Initializing your repository
 
