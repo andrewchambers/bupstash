@@ -5,12 +5,15 @@ Need to do:
 - Improve documentation on key exchange packet and 'box' structure.
 - Detailed and nice man pages.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
-- Tweak cli? ' put ./foo ' is confusing, perhaps this should be an error? alt syntax?
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support
 - Torture test in cli suite for send checkpointing duration.
 - Send permission denied: Permission denied (os error 13), add path to error message.
 - Tarball sort by extension to group similar files.
+- use $(pwd) in docs to avoid relative paths.
+- Change timestamp to date or time ?
+- In examples/quickstart show the id output.
+- Explain the id output.
 
 Can do later (medium term):
 

@@ -43,7 +43,7 @@ $ cp ./target/release/bupstash $BINDIR
 
 Local repository:
 ```
-export BUPSTASH_REPOSITORY=./bupstash-repo
+export BUPSTASH_REPOSITORY=($pwd)/bupstash-repo
 $ bupstash init
 ```
 
@@ -54,7 +54,7 @@ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
 $ bupstash init
 ```
 
-# Generating an ecryption key
+# Generating an encryption key
 
 All data stored in a bupstash repository is encrypted, so first we need to generate an encryption key.
 
@@ -71,19 +71,29 @@ Later sections will explain how to create and use secure offline keys.
 
 First we must tell bupstash which encryption key to use.
 ```
-export BUPSTASH_KEY=./backups.key
+export BUPSTASH_KEY=$(pwd)/backups.key
 ```
 
 Now we can start making snapshots, here we save a file:
 
 ```
 $ bupstash put ./my-data.txt
+811a0f5c61656b5f494a014ce46d3549
+```
+
+The printed text is the id of this put, which can be used 
+to retrieve the data again with a query:
+
+```
+$ bupstash get id="811*"
+your data!
 ```
 
 We can also save a directory:
 
 ```
 $ bupstash put ./my-dir
+...
 ```
 
 Finally, we can save the output of commands:
@@ -93,6 +103,7 @@ $ echo hello | bupstash put -
 
 # This form is able to detect command failures.
 $ bupstash put --exec echo hello
+...
 ```
 
 Note that bupstash automatically applies compression and deduplicates your data, compressing data yourself can actually make deduplication perform worse, taking more space.
@@ -114,7 +125,7 @@ $ bupstash list --format=jsonl
 We can do more sophisticated queries when we list:
 
 ```
-$ bupstash list date="2020/*"
+$ bupstash list timestamp="2020/*"
 ...
 $ bupstash list name=backup.tar and newer-than 7d
 ...
