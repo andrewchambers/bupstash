@@ -8,6 +8,7 @@ Need to do:
 - Hardlink support
 - Torture test in cli suite for send checkpointing duration.
 - Send permission denied: Permission denied (os error 13), add path to error message.
+- Tarball sort by extension to group similar files.
 
 Can do later (medium term):
 

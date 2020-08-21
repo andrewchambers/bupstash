@@ -11,11 +11,11 @@ Some key features:
 
 - Data deduplication allowing efficient storage of large numbers of data snapshots. [see how]
 
-- Zero knowledge storage servers, with cryptographically assured privacy. [see how]
+- Client side encryption of data and metadata - cryptographically assured privacy. [see how]
 
 - Access controls over ssh, allowing different permissions on a per ssh key basis. [see how]
 
-- Key/Value tagging system for data and a query language. [see how]
+- Key/Value backup tagging system and query language. [see how]
 
 - Simple, scriptable command line interface. [see how]
 
@@ -23,8 +23,5 @@ Some key features:
 
 - Low ram usage and high performance. [see how]
 
-- Rigorous test suite, simulating crashes and power failure. [see how]
+- Written in rust to mitigate many classes of security bugs. [see how]
 
-- Implemented to a high security standard with many attack vectors totally mitigated. [see how]
-
-- Turn key hosting available for *HUGE* amounts of data. [see how]
