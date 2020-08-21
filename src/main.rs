@@ -908,7 +908,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     let matches = default_parse_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {
-        die("Expected a single path to initialize.".to_string());
+        die("Expected a single repository path to serve.".to_string());
     }
 
     let mut allow_init = true;
@@ -928,6 +928,10 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
         allow_get = matches.opt_present("allow-get");
+    }
+
+    if atty::is(atty::Stream::Stdout) {
+        eprintln!("'bupstash serve' running on stdin/stdout...");
     }
 
     server::serve(
