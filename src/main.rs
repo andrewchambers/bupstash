@@ -285,7 +285,11 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                     }
                     args
                 } else {
-                    vec!["bupstash".to_owned(), "serve".to_owned(), repo]
+                    vec![
+                        std::env::current_exe()?.to_string_lossy().to_string(),
+                        "serve".to_owned(),
+                        repo,
+                    ]
                 }
             }
             None => {

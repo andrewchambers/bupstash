@@ -8,8 +8,8 @@ init
 new-key
   Create a key used for reading and writing encrypted data.
 
-new-send-key
-  Create a send key used for writing encrypted data.
+new-put-key
+  Create a put key used for writing encrypted data.
 
 new-metadata-key
   Create a metadata key used for searching and listing.
