@@ -1,10 +1,11 @@
 # bupstash 
 
 bupstash is an easy to use tool for making encrypted space efficient backups. Bupstash
-is special because it is open source, and stores all data AND metadata in an ecrypted format.
+is special because it is open source, and stores all data AND metadata in an ecrypted 
+AND deduplicated format.
 
- Typical
-users are people familiar with the command line, such as developers and system administrators.
+Typical users of bupstash are people familiar with the command line, such as software developers,
+system administrators and other technical users.
 
 
 This guide covers installation and basic usage of bupstash.
@@ -37,14 +38,14 @@ cargo install bupstash
 
 Local repository:
 ```
-export BUPSTASH_REPO=./bupstash-repo
+export BUPSTASH_REPOSITORY=./bupstash-repo
 $ bupstash init
 ```
 
 Remote repository:
 
 ```
-export BUPSTASH_REPO=ssh://$SERVER/home/me/bupstash-repo
+export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
 $ bupstash init
 ```
 
@@ -71,19 +72,19 @@ export BUPSTASH_KEY=./backups.key
 Now we can start making snapshots, here we save a file:
 
 ```
-$ bupstash put :: ./my-data.txt
+$ bupstash put ./my-data.txt
 ```
 
 We can also save a directory:
 
 ```
-$ bupstash put :: ./my-dir
+$ bupstash put ./my-dir
 ```
 
 Finally, we can save the output of commands:
 
 ```
-$ echo hello | bupstash put
+$ echo hello | bupstash put -
 
 # This form is able to detect command failures.
 $ bupstash put --exec :: echo hello
@@ -95,28 +96,33 @@ Note that bupstash automatically applies compression and deduplicates your data,
 
 ```
 $ bupstash list 
-... TODO
+id="dbca49b072c0f94b9e72bf81e7716ff9" name="backup.tar" timestamp="2020/08/03 15:47:32"
+...
 ```
 
 ```
 $ bupstash list --format=jsonl 
-... TODO
+{"id":"dbca49b072c0f94b9e72bf81e7716ff9", "name":"backup.tar", "timestamp":"2020/08/03 15:47:32"}
+...
 ```
 
 We can do more sophisticated queries when we list:
 
 ```
-bupstash list date=2020/* and content-type=*/binsy
+$ bupstash list date="2020/*"
+...
+$ bupstash list name=backup.tar and newer-than 7d
+...
 ```
 
-For a full description of the query language see the query language manual here XXX TODO.
+For a full description of the query language see the query language manual pages.
 
 # Snapshot tags
 
 When we make snapshots, we can add our own arbitrary tags in addition to the default tags:
 
 ```
-$ bupstash put mykey=value :: ./my-important-files 
+$ bupstash put mykey=value ./my-important-files 
 $ bupstash list mykey=value
 ```
 
@@ -126,8 +132,8 @@ Once we have snapshots, we must can fetch them again with `bupstash get` using a
 queries.
 
 ```
-$ bupstash get id=TODO | tar -xvf
-$ bupstash get name=my-important-files | tar -xvf -
+$ id=$(bupstash put ./dir)
+$ bupstash get id=$id | tar -xvf -
 ```
 
 # Removing snapshots
@@ -135,7 +141,7 @@ $ bupstash get name=my-important-files | tar -xvf -
 We can remove snapshots via the same query language and the `bupstash rm` command.
 
 ```
-$ bupstash rm id=TODO
+$ bupstash rm older-than 90d and name=backup.tar and host=my-server
 ```
 
 Removing a snapshot does not immediately reclaim disk space, to do that you must run the 
@@ -144,7 +150,6 @@ garbage collector.
 ```
 $ bupstash gc
 ```
-
 
 # Secure offline keys
 
@@ -169,12 +174,14 @@ But these keys cannot decrypt the contents of the snapshots. Only the original p
 is able to these snapshots.
 
 ```
-$ bupstash get --key ./put-backups.key id=TODO 
-XXX show error.
-$ bupstash get --key ./metadata-backups.key id=TODO 
-XXX show error.
-$ bupstash get --key ./backups.key id=TODO 
-XXX show success.
+$ bupstash get --key ./put-backups.key id=$id 
+bupstash get: provided key is not a decryption key
+
+$ bupstash get --key ./metadata-backups.key id=$id
+bupstash get: provided key is not a decryption key
+
+$ bupstash get --key ./backups.key id=$id
+data...
 ```
 
 We can now put the primary key into secure offline storage for use in case of emergency,
@@ -188,14 +195,17 @@ Note that we recommend creating a new put key for every server in your network i
 
 # Access controls
 
-In a high security setting, we must be able to restrict what clients have permission to do.
-It makes little 
-Bupstash supports fine grained backup capabilities that can be configured on a per ssh key bases.
+It is dangerous to allow a server creating backups to also delete those same
+backups. If ransomware or some other malicious agent compromises your computer, it will be
+able to delete your backups too, render them useless.
+
+To solve this issue bupstash supports fine grained backup capabilities that can be configured on a per ssh key bases.
+This guide will show you to setup strict access controls yourself.
 
 XXX TODO
 
 
 ## More resources
 
-All bupstash commands and file formats are fully documented in the user manuals.
+All bupstash commands, protocols and file formats are fully documented in the user manuals here (TODO).
 
