@@ -30,6 +30,8 @@ export PATH=$(pwd):$PATH
 If you have a rust compiler installed, you can install the latest release
 directly from crates.io using cargo, the rust programming language package manager.
 
+Install `libsodium` and `pkg-config` for your platform, and run:
+
 ```
 $ git clone https://git.sr.ht/~ach/bupstash
 $ cd bupstash
@@ -90,7 +92,7 @@ Finally, we can save the output of commands:
 $ echo hello | bupstash put -
 
 # This form is able to detect command failures.
-$ bupstash put --exec :: echo hello
+$ bupstash put --exec echo hello
 ```
 
 Note that bupstash automatically applies compression and deduplicates your data, compressing data yourself can actually make deduplication perform worse, taking more space.
@@ -169,8 +171,8 @@ $ bupstash new-metadata-key -k ./backups.key -o metadata-backups.key
 Using these keys is the same as before:
 
 ```
-$ bupstash put --key ./put-backups.key :: ./data.txt
-$ bupstash list --key ./metadata-backups.key :: ./data.txt
+$ bupstash put --key ./put-backups.key ./data.txt
+$ bupstash list --key ./metadata-backups.key
 ```
 
 But these keys cannot decrypt the contents of the snapshots. Only the original primary key 
