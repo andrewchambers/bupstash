@@ -542,7 +542,7 @@ pub fn gc(
 
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Progress(Progress::Print(msg)) => {
+            Packet::Progress(Progress::Notice(msg)) => {
                 progress.println(&msg);
             }
             Packet::Progress(Progress::SetMessage(msg)) => {

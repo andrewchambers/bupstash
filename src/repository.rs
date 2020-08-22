@@ -179,6 +179,10 @@ impl Repo {
     }
 
     pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
+        if !repo_path.exists() {
+            failure::bail!("no repository at {}", repo_path.to_string_lossy());
+        }
+
         let gc_lock = fsutil::FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
