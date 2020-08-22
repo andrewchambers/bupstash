@@ -87,7 +87,7 @@ impl SendLog {
         )?;
 
         tx.execute(
-            "create table if not exists StatCache(Hash primary key, Addresses, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+            "create table if not exists StatCache(Hash primary key, Addresses, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -202,14 +202,19 @@ impl<'a> SendLogSession<'a> {
         Ok(hit)
     }
 
-    pub fn add_stat_addresses(&self, hash: &[u8], addresses: &[u8]) -> Result<(), failure::Error> {
+    pub fn add_stat_addresses(
+        &self,
+        hash: &[u8],
+        size: u64,
+        addresses: &[u8],
+    ) -> Result<(), failure::Error> {
         if !self.tx_active {
             failure::bail!("no active transaction");
         };
 
         // We update and not replace so we can keep an old item id if it exists.
         let mut stmt = self.log.conn.prepare_cached(
-            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses) Values($1, $2, $3, $4) \
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, Size) Values($1, $2, $3, $4, $5) \
             on conflict(Hash) do update set LatestSessionId = $2;"
         )?;
 
@@ -217,7 +222,8 @@ impl<'a> SendLogSession<'a> {
             self.gc_generation,
             self.session_id,
             hash,
-            addresses
+            addresses,
+            size as i64
         ])?;
 
         // It's unclear to me if something like the following is worth doing:
@@ -234,19 +240,24 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn cached_stat_addresses(&self, hash: &[u8]) -> Result<Option<Vec<u8>>, failure::Error> {
+    pub fn cached_stat_addresses(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<(u64, Vec<u8>)>, failure::Error> {
         let mut stmt = self
             .log
             .conn
-            .prepare_cached("select Addresses from StatCache where Hash = ?;")?;
+            .prepare_cached("select Size,Addresses from StatCache where Hash = ?;")?;
 
-        let addresses = match stmt.query_row(rusqlite::params![hash], |r| Ok(r.get(0)?)) {
-            Ok(addresses) => addresses,
-            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-
-        Ok(Some(addresses))
+        match stmt.query_row(rusqlite::params![hash], |r| {
+            let sz: i64 = r.get(0)?;
+            let addrs: Vec<u8> = r.get(1)?;
+            Ok((sz as u64, addrs))
+        }) {
+            Ok(cached) => Ok(Some(cached)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn checkpoint(&mut self) -> Result<(), failure::Error> {
@@ -335,7 +346,7 @@ mod tests {
             assert!(!session.cached_address(&addr).unwrap());
             assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
             assert!(session.cached_address(&addr).unwrap());
             assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
             session.commit(&id).unwrap();
@@ -393,7 +404,7 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);
@@ -448,7 +459,7 @@ mod tests {
         {
             let session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
             session.commit(&id).unwrap();
         }
         drop(sendlog);
@@ -458,7 +469,7 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], &[]).unwrap();
+            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);

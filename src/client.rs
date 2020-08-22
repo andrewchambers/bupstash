@@ -46,7 +46,6 @@ pub fn init_repository(
 }
 
 struct ConnectionHtreeSink<'a, 'b> {
-    progress: indicatif::ProgressBar,
     checkpoint_bytes: u64,
     dirty_bytes: u64,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
@@ -60,8 +59,6 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> std::result::Result<(), failure::Error> {
-        self.progress.inc(data.len() as u64);
-
         match self.send_log_session {
             Some(ref send_log_session) => {
                 let mut send_log_session = send_log_session.borrow_mut();
@@ -161,7 +158,6 @@ pub fn send(
     }
 
     let mut sink = ConnectionHtreeSink {
-        progress: ctx.progress.clone(),
         checkpoint_bytes: ctx.checkpoint_bytes,
         dirty_bytes: 0,
         send_log_session: &send_log_session,
@@ -282,6 +278,7 @@ fn send_chunks(
                         tw.add(&addr, encrypted_chunk)?;
                     }
                 }
+                ctx.progress.inc(n_read as u64);
                 n_written += n_read;
             }
             Err(err) => return Err(err.into()),
@@ -367,21 +364,25 @@ fn send_dir(
         };
 
         match cache_lookup {
-            Some(cached_addresses) => {
+            Some((size, cached_addresses)) => {
                 debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
+
                 let mut address = Address::default();
                 for cached_address in cached_addresses.chunks(ADDRESS_SZ) {
                     address.bytes[..].clone_from_slice(cached_address);
                     tw.add_addr(0, &address)?;
                 }
 
+                ctx.progress.inc(size);
+
                 send_log_session
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .add_stat_addresses(&hash[..], &addresses)?;
+                    .add_stat_addresses(&hash[..], size, &addresses)?;
             }
             None => {
+                let mut total_size: u64 = 0;
                 let mut on_chunk = |addr: &Address| {
                     addresses.extend_from_slice(&addr.bytes[..]);
                 };
@@ -390,7 +391,8 @@ fn send_dir(
                     ctx.progress.set_message(&ent_path.to_string_lossy());
 
                     let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
-                    send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
+                    total_size +=
+                        send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))? as u64;
 
                     if metadata.is_file() {
                         let mut f = std::fs::File::open(&ent_path)?;
@@ -406,17 +408,24 @@ fn send_dir(
                             nix::fcntl::PosixFadviseAdvice::POSIX_FADV_NOREUSE,
                         )?;
 
-                        let len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
+                        let file_len = send_chunks(ctx, chunker, tw, &mut f, Some(&mut on_chunk))?;
+                        total_size += file_len as u64;
 
                         /* Tar entries are rounded to 512 bytes */
-                        let remaining = 512 - (len % 512);
+                        let remaining = 512 - (file_len % 512);
                         if remaining < 512 {
                             let buf = [0; 512];
                             let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
-                            send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
+                            total_size += send_chunks(
+                                ctx,
+                                chunker,
+                                tw,
+                                &mut hdr_cursor,
+                                Some(&mut on_chunk),
+                            )? as u64;
                         }
 
-                        if len != metadata.len() as usize {
+                        if file_len != metadata.len() as usize {
                             failure::bail!(
                                 "length of {} changed while sending data",
                                 ent_path.display()
@@ -439,7 +448,7 @@ fn send_dir(
                         .as_ref()
                         .unwrap()
                         .borrow_mut()
-                        .add_stat_addresses(&hash[..], &addresses)?;
+                        .add_stat_addresses(&hash[..], total_size, &addresses)?;
                 }
             }
         }

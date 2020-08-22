@@ -432,17 +432,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanity_test() {
+    fn sqlite3_store_sanity_test() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
-        Repo::init(
-            path_buf.as_path(),
-            Some(StorageEngineSpec::Sqlite3Store {
-                db_path: "./data.sqlite3".to_string(),
-            }),
-        )
-        .unwrap();
+        Repo::init(path_buf.as_path(), Some(StorageEngineSpec::Sqlite3Store)).unwrap();
+        let repo = Repo::open(path_buf.as_path()).unwrap();
+        let mut storage_engine = repo.storage_engine().unwrap();
+        let addr = Address::default();
+        storage_engine.add_chunk(&addr, vec![1]).unwrap();
+        storage_engine.sync().unwrap();
+        storage_engine.add_chunk(&addr, vec![2]).unwrap();
+        storage_engine.sync().unwrap();
+        let v = storage_engine.get_chunk(&addr).unwrap();
+        assert_eq!(v, vec![1]);
+    }
+
+    #[test]
+    fn dir_store_sanity_test() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let mut path_buf = PathBuf::from(tmp_dir.path());
+        path_buf.push("repo");
+        Repo::init(path_buf.as_path(), Some(StorageEngineSpec::DirStore)).unwrap();
         let repo = Repo::open(path_buf.as_path()).unwrap();
         let mut storage_engine = repo.storage_engine().unwrap();
         let addr = Address::default();
