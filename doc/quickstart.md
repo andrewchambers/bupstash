@@ -111,7 +111,8 @@ $ bupstash put --exec echo hello
 ...
 ```
 
-Note that bupstash automatically applies compression and deduplicates your data, compressing data yourself can actually make deduplication perform worse, taking more space.
+Note that bupstash automatically applies compression and deduplicates your data so you 
+do not need to do this manually.
 
 # Listing snapshots
 
@@ -191,8 +192,8 @@ $ bupstash put --key ./put-backups.key ./data.txt
 $ bupstash list --key ./metadata-backups.key
 ```
 
-But these keys cannot decrypt the contents of the snapshots. Only the original primary key 
-is able to these snapshots.
+With the importand difference th keys cannot decrypt the contents of the snapshots.
+Only the original primary key is able to these snapshots.
 
 ```
 $ bupstash get --key ./put-backups.key id=$id 
@@ -208,25 +209,24 @@ data...
 We can now put the primary key into secure offline storage for use in case of emergency,
 but continue to make and administer our backups using the put key and metadata key.
 
-The storage server, nor the devices uploading new snapshots 
+Neither the storage server, nor the devices uploading new snapshots 
 have access to your existing snapshots.
 
-Note that we recommend creating a new put key for every server in your network if you have a shared bupstash repository.
+Note that we recommend creating a new put key for every backup client if you have a shared bupstash
+repository.
 
 
 # Access controls
 
 When designing a backup plan, we must remember that if ransomware or some other malicious agent compromises your computer,
-it may be able to delete your backups too. 
+it may be able to delete your backups too. To solve this issue bupstash supports access controls on remote repositories
+that can be configured on a per ssh key basis. To do this, we can utilize ssh force commands to restrict a backup client to
+only run an instance of `bupstash serve` that has a limited permissions.
 
-To solve this issue bupstash supports access controls on remote backups that can be configured on a per ssh key basis.
-We can utilize ssh force commands to restrict a backup client to only run an instance of `bupstash serve` that 
-has a limited permissions.
-
-The following guide assumes you have a backup server with a user called `backups` that has openssh sshd running,
+The following assumes you have a backup server with a user called `backups` that has openssh sshd running,
 and a client computer with an ssh client installed.
 
-In an your sshd config file in your server add the following lines:
+In your sshd config file on your server add the following lines:
 
 ```
 Match User backups
@@ -236,10 +236,10 @@ Match User backups
 This means the backups user is only able to run the bupstash serve command with a hard coded set of permissions and repository
 path.
 
-Next add an ssh key to `$SERVER/home/backups/.ssh/authorized_keys` such that the a user can connect to the remote server
-using ssh based login.
+Next add an ssh key you indend to use for backuos to `$SERVER/home/backups/.ssh/authorized_keys`, such that the user sending
+backups can connect to the remote server using ssh based login.
 
-Now the client is only authorized to create new backups, but not list or remote them:
+Because of our sshd configruation, the client is only authorized to create new backups, but not list or remove them:
 ```
 export BUPSTASH_REPOSITORY="ssh://backups@$SERVER/backups"
 $ bupstash put ./files
