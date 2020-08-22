@@ -493,7 +493,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "send-log",
-        "Use the file at PATH as a 'send log', used to skip data that was previously to the server.",
+        "Use the file at PATH as a 'send log', used to skip data that was previously sent to the server.",
         "PATH",
     );
     opts.optmulti(
@@ -876,12 +876,25 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     repo_opts(&mut opts);
     let matches = default_parse_opts(opts, &args[..]);
 
+    let progress = indicatif::ProgressBar::new(u64::MAX);
+
+    progress.set_style(
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    // This is the first thing that happens, so just start with this message.
+    progress.set_message("acquiring repository lock...");
+
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
     client::negotiate_connection(&mut serve_in)?;
-    let stats = client::gc(&mut serve_out, &mut serve_in)?;
+    let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
+
     if let Some(chunks_freed) = stats.chunks_freed {
         println!("{} chunks freed", chunks_freed);
     }

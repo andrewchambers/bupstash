@@ -228,10 +228,18 @@ fn send(
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive)?;
-    let stats = repo.gc();
-    repo.alter_gc_lock_mode(repository::GCLockMode::Shared)?;
-    let stats = stats?;
+    let mut update_progress_msg = |msg| {
+        write_packet(w, &Packet::Progress(Progress::SetMessage(msg)))?;
+        Ok(())
+    };
+
+    let stats = {
+        repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive)?;
+        let stats = repo.gc(&mut update_progress_msg);
+        repo.alter_gc_lock_mode(repository::GCLockMode::Shared)?;
+        stats?
+    };
+
     write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())
 }

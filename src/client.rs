@@ -534,15 +534,25 @@ pub fn request_data_stream(
 }
 
 pub fn gc(
+    progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<repository::GCStats, failure::Error> {
     write_packet(w, &Packet::TGc(TGc {}))?;
-    let stats = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RGc(rgc) => rgc.stats,
-        _ => failure::bail!("protocol error, expected gc complete packet"),
-    };
-    Ok(stats)
+
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::Progress(Progress::Print(msg)) => {
+                progress.println(&msg);
+            }
+            Packet::Progress(Progress::SetMessage(msg)) => {
+                progress.set_message(&msg);
+            }
+            Packet::Progress(_) => (), /* Reserved unused. */
+            Packet::RGc(rgc) => return Ok(rgc.stats),
+            _ => failure::bail!("protocol error, expected gc pcket or progress packet."),
+        };
+    }
 }
 
 pub fn sync(

@@ -41,8 +41,7 @@ pub struct RRequestData {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TGc {
-}
+pub struct TGc {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RGc {
@@ -73,6 +72,14 @@ pub struct AddItem {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum Progress {
+    Notice(String),
+    SetMessage(String),
+    ProgressRange((u64, u64)),
+    ProgressCounter(u64),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct StorageBeginGC {}
 
 #[derive(Debug, PartialEq)]
@@ -98,6 +105,7 @@ pub enum Packet {
     SyncLogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
     TRequestChunk(Address),
     RRequestChunk(Vec<u8>),
+    Progress(Progress),
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
@@ -129,6 +137,7 @@ const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 17;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 18;
 const PACKET_KIND_T_REQUEST_CHUNK: u8 = 19;
 const PACKET_KIND_R_REQUEST_CHUNK: u8 = 20;
+const PACKET_KIND_PROGRESS: u8 = 21;
 
 // Backend storage protocol messages.
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
@@ -210,6 +219,7 @@ pub fn read_packet(
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
+        PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
         PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
@@ -335,6 +345,11 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
         Packet::RRequestChunk(ref v) => {
             send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK, v.len().try_into()?)?;
             w.write_all(&v)?;
+        }
+        Packet::Progress(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_PROGRESS, b.len().try_into()?)?;
+            w.write_all(&b)?;
         }
         Packet::StorageConnect(ref v) => {
             let b = serde_bare::to_vec(&v)?;

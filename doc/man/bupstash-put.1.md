@@ -45,7 +45,7 @@ The send log serves two main purposes:
 - It stores a mapping of file paths, to data that has already been sent, allowing bupstash
   to skip processing files when snapshotting the same directory many times repeatedly.
 
-The send log only remembers the data previously set, so for efficient 'put' use, give each backup job
+The send log only remembers the data previously sent, so for efficient 'put' use, give each backup job
 a unique send log file. As an example, if you have a backup script that saves a 
 directory as a cron job, it is best to give that script its own send log so that all subsequent
 runs with similar input data will share the same send log.
