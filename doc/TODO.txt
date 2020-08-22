@@ -6,7 +6,7 @@ Need to do:
 - Detailed and nice man pages.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
 - Verify we handle atime correctly when snapshotting.
-- Hardlink support
+- Hardlink support?
 - Torture test in cli suite for send checkpointing duration.
 - Send permission denied: Permission denied (os error 13), add path to error message.
 - Tarball sort by extension to group similar files.

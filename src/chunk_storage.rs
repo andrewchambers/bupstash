@@ -17,7 +17,6 @@ pub trait Engine {
     // Remove all chunks not in the reachable set.
     fn gc(
         &mut self,
-        on_progress: &dyn Fn() -> Result<(), failure::Error>,
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error>;
 

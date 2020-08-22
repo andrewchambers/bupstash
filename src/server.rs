@@ -18,6 +18,22 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
+    match serve2(cfg, r, w) {
+        Ok(()) => Ok(()),
+        Err(err) => write_packet(
+            w,
+            &Packet::Abort(Abort {
+                message: format!("{}", err),
+            }),
+        ),
+    }
+}
+
+fn serve2(
+    cfg: ServerConfig,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ClientInfo(info) => {
             if info.protocol != "0" {
@@ -228,10 +244,18 @@ fn send(
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
-    repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive)?;
-    let stats = repo.gc();
-    repo.alter_gc_lock_mode(repository::GCLockMode::Shared)?;
-    let stats = stats?;
+    let mut update_progress_msg = |msg| {
+        write_packet(w, &Packet::Progress(Progress::SetMessage(msg)))?;
+        Ok(())
+    };
+
+    let stats = {
+        repo.alter_gc_lock_mode(repository::GCLockMode::Exclusive)?;
+        let stats = repo.gc(&mut update_progress_msg);
+        repo.alter_gc_lock_mode(repository::GCLockMode::Shared)?;
+        stats?
+    };
+
     write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())
 }

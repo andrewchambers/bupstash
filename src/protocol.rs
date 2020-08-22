@@ -72,6 +72,19 @@ pub struct AddItem {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum Progress {
+    Notice(String),
+    SetMessage(String),
+    ProgressRange((u64, u64)),
+    ProgressCounter(u64),
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct Abort {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct StorageBeginGC {}
 
 #[derive(Debug, PartialEq)]
@@ -97,6 +110,8 @@ pub enum Packet {
     SyncLogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
     TRequestChunk(Address),
     RRequestChunk(Vec<u8>),
+    Progress(Progress),
+    Abort(Abort),
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
@@ -128,13 +143,18 @@ const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 17;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 18;
 const PACKET_KIND_T_REQUEST_CHUNK: u8 = 19;
 const PACKET_KIND_R_REQUEST_CHUNK: u8 = 20;
-const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 21;
-const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 22;
-const PACKET_KIND_STORAGE_CONNECT: u8 = 23;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 24;
-const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 25;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 26;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 27;
+const PACKET_KIND_PROGRESS: u8 = 21;
+const PACKET_KIND_ABORT: u8 = 22;
+
+// Backend storage protocol messages.
+const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
+const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 103;
+const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 104;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 105;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 106;
+
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -145,6 +165,17 @@ fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), fai
 }
 
 pub fn read_packet(
+    r: &mut dyn std::io::Read,
+    max_packet_size: usize,
+) -> Result<Packet, failure::Error> {
+    let pkt = read_packet_raw(r, max_packet_size)?;
+    if let Packet::Abort(Abort { message }) = pkt {
+        return Err(failure::format_err!("remote error: {}", message));
+    }
+    Ok(pkt)
+}
+
+pub fn read_packet_raw(
     r: &mut dyn std::io::Read,
     max_packet_size: usize,
 ) -> Result<Packet, failure::Error> {
@@ -206,13 +237,15 @@ pub fn read_packet(
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
+        PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
         PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
         PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
-        PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
+        PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
@@ -332,6 +365,16 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK, v.len().try_into()?)?;
             w.write_all(&v)?;
         }
+        Packet::Progress(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_PROGRESS, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::Abort(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_ABORT, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
         Packet::StorageConnect(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
@@ -360,7 +403,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::RStorageWriteBarrier => {
-            send_hdr(w, PACKET_KIND_R_STRORAGE_WRITE_BARRIER, 0)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
@@ -368,116 +411,4 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
     }
     w.flush()?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::super::keys;
-    use super::*;
-
-    #[test]
-    fn send_recv() {
-        let packets = vec![
-            Packet::ClientInfo(ClientInfo {
-                protocol: "foobar".to_owned(),
-                now: chrono::Utc::now(),
-            }),
-            Packet::TBeginSend(TBeginSend {
-                delta_id: Some(Xid::new()),
-            }),
-            Packet::RBeginSend(RBeginSend {
-                gc_generation: Xid::new(),
-                has_delta_id: true,
-            }),
-            {
-                let primary_key = keys::PrimaryKey::gen();
-                Packet::TAddItem(AddItem {
-                    gc_generation: Xid::new(),
-                    item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                        plain_text_metadata: itemset::PlainTextItemMetadata {
-                            address: Address::default(),
-                            tree_height: 3,
-                            primary_key_id: primary_key.id,
-                        },
-                        encrypted_metadata: vec![1, 2, 3],
-                    }),
-                })
-            },
-            Packet::RAddItem(Xid::default()),
-            Packet::TRmItems(vec![Xid::default()]),
-            Packet::RRmItems,
-            Packet::Chunk(Chunk {
-                address: Address::default(),
-                data: vec![1, 2, 3],
-            }),
-            Packet::TRequestData(TRequestData { id: Xid::default() }),
-            {
-                let primary_key = keys::PrimaryKey::gen();
-                Packet::RRequestData(RRequestData {
-                    metadata: Some(itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                        plain_text_metadata: itemset::PlainTextItemMetadata {
-                            address: Address::default(),
-                            tree_height: 3,
-                            primary_key_id: primary_key.id,
-                        },
-                        encrypted_metadata: vec![1, 2, 3],
-                    })),
-                })
-            },
-            Packet::TGc(TGc {}),
-            Packet::RGc(RGc {
-                stats: repository::GCStats {
-                    chunks_remaining: Some(1),
-                    chunks_freed: Some(123),
-                    bytes_freed: Some(345),
-                    bytes_remaining: None,
-                },
-            }),
-            Packet::TRequestItemSync(TRequestItemSync {
-                after: 123,
-                gc_generation: Some(Xid::new()),
-            }),
-            Packet::RRequestItemSync(RRequestItemSync {
-                gc_generation: Xid::new(),
-            }),
-            Packet::SyncLogOps(vec![(
-                765756,
-                Some(Xid::default()),
-                itemset::LogOp::RemoveItems(vec![Xid::new()]),
-            )]),
-            Packet::TRequestChunk(Address::default()),
-            Packet::RRequestChunk(vec![1, 2, 3]),
-            Packet::StorageConnect(StorageConnect {
-                protocol: "foobar".to_owned(),
-                path: "abc".to_owned(),
-            }),
-            {
-                let mut reachable = Vec::new();
-                reachable.extend_from_slice(&Address::default().bytes[..]);
-                Packet::StorageGCReachable(reachable)
-            },
-            Packet::StorageBeginGC,
-            Packet::StorageGCHeartBeat,
-            Packet::StorageGCComplete(repository::GCStats {
-                chunks_remaining: Some(123),
-                chunks_freed: None,
-                bytes_freed: None,
-                bytes_remaining: None,
-            }),
-            Packet::TStorageWriteBarrier,
-            Packet::RStorageWriteBarrier,
-            Packet::EndOfTransmission,
-        ];
-
-        for p1 in packets.iter() {
-            eprintln!("testing packet encoding: {:?}", p1);
-            let mut c1 = std::io::Cursor::new(Vec::new());
-            write_packet(&mut c1, p1).unwrap();
-            let b = c1.into_inner();
-            let mut c2 = std::io::Cursor::new(b);
-            let p2 = read_packet(&mut c2, DEFAULT_MAX_PACKET_SIZE).unwrap();
-            assert!(p1 == &p2);
-        }
-    }
 }

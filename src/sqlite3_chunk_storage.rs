@@ -384,7 +384,6 @@ impl Engine for Sqlite3Storage {
 
     fn gc(
         &mut self,
-        _on_progress: &dyn Fn() -> Result<(), failure::Error>,
         reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();

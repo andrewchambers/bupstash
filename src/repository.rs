@@ -179,6 +179,10 @@ impl Repo {
     }
 
     pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
+        if !repo_path.exists() {
+            failure::bail!("no repository at {}", repo_path.to_string_lossy());
+        }
+
         let gc_lock = fsutil::FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
@@ -362,7 +366,10 @@ impl Repo {
         itemset::walk_log(&tx, after, f)
     }
 
-    pub fn gc(&mut self) -> Result<GCStats, failure::Error> {
+    pub fn gc(
+        &mut self,
+        update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
+    ) -> Result<GCStats, failure::Error> {
         match self._gc_lock_mode {
             GCLockMode::Exclusive => (),
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
@@ -379,13 +386,13 @@ impl Repo {
         let mut reachable: HashSet<Address> = std::collections::HashSet::new();
         let mut storage_engine = self.storage_engine()?;
 
-        let on_progress = || -> Result<(), failure::Error> { Ok(()) };
-
         {
             let tx = self.conn.transaction()?;
 
+            update_progress_msg("compacting item log...".to_string())?;
             itemset::compact(&tx)?;
 
+            update_progress_msg("walking reachable data...".to_string())?;
             itemset::walk_items(&tx, &mut |_op_id, _item_id, metadata| match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
                     let addr = &metadata.plain_text_metadata.address;
@@ -416,7 +423,8 @@ impl Repo {
             rusqlite::params![true],
         )?;
 
-        let stats = storage_engine.gc(&on_progress, reachable)?;
+        update_progress_msg("deleting unused chunks...".to_string())?;
+        let stats = storage_engine.gc(reachable)?;
 
         self.conn.execute(
             "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
