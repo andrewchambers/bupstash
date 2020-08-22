@@ -41,7 +41,8 @@ pub struct RRequestData {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TGc {}
+pub struct TGc {
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RGc {
@@ -128,13 +129,16 @@ const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 17;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 18;
 const PACKET_KIND_T_REQUEST_CHUNK: u8 = 19;
 const PACKET_KIND_R_REQUEST_CHUNK: u8 = 20;
-const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 21;
-const PACKET_KIND_R_STRORAGE_WRITE_BARRIER: u8 = 22;
-const PACKET_KIND_STORAGE_CONNECT: u8 = 23;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 24;
-const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 25;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 26;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 27;
+
+// Backend storage protocol messages.
+const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
+const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 103;
+const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 104;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 105;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 106;
+
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
@@ -212,7 +216,7 @@ pub fn read_packet(
         PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
-        PACKET_KIND_R_STRORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
+        PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
     };
@@ -360,7 +364,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::RStorageWriteBarrier => {
-            send_hdr(w, PACKET_KIND_R_STRORAGE_WRITE_BARRIER, 0)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
