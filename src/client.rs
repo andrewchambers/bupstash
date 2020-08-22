@@ -46,6 +46,7 @@ pub fn init_repository(
 }
 
 struct ConnectionHtreeSink<'a, 'b> {
+    progress: indicatif::ProgressBar,
     checkpoint_bytes: u64,
     dirty_bytes: u64,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
@@ -59,6 +60,8 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> std::result::Result<(), failure::Error> {
+        self.progress.inc(data.len() as u64);
+
         match self.send_log_session {
             Some(ref send_log_session) => {
                 let mut send_log_session = send_log_session.borrow_mut();
@@ -104,6 +107,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
 }
 
 pub struct SendContext {
+    pub progress: indicatif::ProgressBar,
     pub compression: crypto::DataCompression,
     pub use_stat_cache: bool,
     pub primary_key_id: Xid,
@@ -157,6 +161,7 @@ pub fn send(
     }
 
     let mut sink = ConnectionHtreeSink {
+        progress: ctx.progress.clone(),
         checkpoint_bytes: ctx.checkpoint_bytes,
         dirty_bytes: 0,
         send_log_session: &send_log_session,
@@ -299,6 +304,7 @@ fn send_dir(
     work_list.push_back(path.clone());
 
     while let Some(cur_dir) = work_list.pop_front() {
+        ctx.progress.set_message(&cur_dir.to_string_lossy());
         addresses.clear();
         let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
         // Incorporate the absolute dir in our cache key.
@@ -381,6 +387,8 @@ fn send_dir(
                 };
 
                 for (ent_path, metadata, hdr_bytes) in tar_dir_ents.drain(..) {
+                    ctx.progress.set_message(&ent_path.to_string_lossy());
+
                     let mut hdr_cursor = std::io::Cursor::new(hdr_bytes);
                     send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
 
@@ -407,6 +415,7 @@ fn send_dir(
                             let mut hdr_cursor = std::io::Cursor::new(&buf[..remaining as usize]);
                             send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))?;
                         }
+
                         if len != metadata.len() as usize {
                             failure::bail!(
                                 "length of {} changed while sending data",
@@ -436,7 +445,7 @@ fn send_dir(
         }
     }
 
-    // The final entry in a tarball is two empty files.
+    // The final entry in a tarball is two null files.
     let buf = [0; 1024];
     let mut trailer_cursor = std::io::Cursor::new(&buf[..]);
     send_chunks(ctx, chunker, tw, &mut trailer_cursor, None)?;

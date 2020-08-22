@@ -594,7 +594,18 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let data_source: client::DataSource;
 
+    let progress = indicatif::ProgressBar::new(u64::MAX);
+    progress.set_style(
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
+    );
+
     if matches.opt_present("exec") {
+        let quoted_args: Vec<String> = source_args
+            .iter()
+            .map(|x| shlex::quote(x).to_string())
+            .collect();
+        progress.set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
         failure::bail!("expected a file or directory but got none, use '-' for stdin.");
@@ -607,6 +618,9 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
             data_source = client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
         } else {
             let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
+            let input_path = std::fs::canonicalize(&input_path)?;
+
+            progress.set_message(&input_path.to_string_lossy());
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
@@ -661,6 +675,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
+        progress: progress.clone(),
         compression,
         checkpoint_bytes,
         use_stat_cache,
@@ -672,6 +687,9 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     client::negotiate_connection(&mut serve_in)?;
+
+    progress.tick();
+
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -681,6 +699,8 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         data_source,
     )?;
     client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
 
     println!("{}", id);
     Ok(())
