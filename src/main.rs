@@ -618,7 +618,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         progress.set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
-        failure::bail!("expected a file or directory but got none, use '-' for stdin.");
+        failure::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
     } else {
         if !source_args.len() == 1 {
             failure::bail!("expected a single data source, got {:?}", source_args);
