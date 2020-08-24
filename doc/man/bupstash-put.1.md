@@ -109,7 +109,8 @@ Default tags can be overidden manually by simply specifying them.
   if the input data is uncompressible and you wish to increase throughput.
 
 * -q, --quiet:
-  Suppress progress bars (Progress bars are also suppressed when stderr is not a tty).
+  Suppress progress bars (Progress bars are also suppressed when stderr
+  is not an interactive terminal).
 
 ## ENVIRONMENT
 
