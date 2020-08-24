@@ -55,6 +55,9 @@ more information on the query cache.
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
+* --ids-from-stdin:
+  Remove items with IDs read from stdin, one per line, instead of executing a query.
+
 * --allow-many:
   By default bupstash refuses to remove multiple items from a single query, this flag
   disables that safety feature.
@@ -97,6 +100,14 @@ $ bupstash rm id="*"
 
 ```
 $ bupstash rm name=backup.tar and older-than 30d
+```
+
+### remove items with a custom script
+
+```
+ $ bupstash list --format=jsonl \
+    | custom-json-filter \
+    | bupstash rm --ids-from-stdin
 ```
 
 ## SEE ALSO

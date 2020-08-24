@@ -27,6 +27,7 @@ pub mod xtar;
 use failure::Fail;
 use getopts::{Matches, Options};
 use std::collections::BTreeMap;
+use std::io::BufRead;
 
 fn die(s: String) -> ! {
     eprintln!("{}", s);
@@ -806,77 +807,102 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     query_opts(&mut opts);
+
     opts.optopt(
         "k",
         "key",
         "Primary or metadata key to decrypt metadata with.",
         "PATH",
     );
+
+    opts.optflag(
+        "",
+        "ids-from-stdin",
+        "Remove items with IDs read from stdin, one per line, instead of executing a query.",
+    );
+
     opts.optflag("", "allow-many", "Allow multiple removals.");
 
     let matches = default_parse_opts(opts, &args[..]);
 
-    let (id, query) = matches_to_id_and_query(&matches)?;
+    if matches.opt_present("ids-from-stdin") {
+        let mut ids = Vec::new();
 
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-
-    client::negotiate_connection(&mut serve_in)?;
-
-    let ids: Vec<xid::Xid> = match (id, query) {
-        (Some(id), _) => vec![id],
-        (_, query) => {
-            let mut query_cache = matches_to_query_cache(&matches)?;
-
-            // Only sync the client if we have a non id query.
-            client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
-
-            let key = matches_to_key(&matches)?;
-            let primary_key_id = key.primary_key_id();
-            let metadata_dctx = match key {
-                keys::Key::PrimaryKeyV1(k) => {
-                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
-                }
-                keys::Key::MetadataKeyV1(k) => {
-                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
-                }
-                _ => failure::bail!("provided key is not a decryption key"),
+        for l in std::io::stdin().lock().lines() {
+            let l = l?;
+            match xid::Xid::parse(&l) {
+                Ok(id) => ids.push(id),
+                Err(err) => failure::bail!("error id parsing {:?}: {}", l, err),
             };
+        }
 
-            let mut ids = Vec::new();
+        let mut serve_proc = matches_to_serve_process(&matches)?;
+        let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+        let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-            let mut on_match =
-                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
-                    ids.push(item_id);
-                    Ok(())
+        client::negotiate_connection(&mut serve_in)?;
+        client::remove(ids, &mut serve_out, &mut serve_in)?;
+        client::hangup(&mut serve_in)?;
+    } else {
+        let mut serve_proc = matches_to_serve_process(&matches)?;
+        let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+        let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+        client::negotiate_connection(&mut serve_in)?;
+
+        let ids: Vec<xid::Xid> = match matches_to_id_and_query(&matches)? {
+            (Some(id), _) => vec![id],
+            (_, query) => {
+                let mut query_cache = matches_to_query_cache(&matches)?;
+
+                // Only sync the client if we have a non id query.
+                client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+
+                let key = matches_to_key(&matches)?;
+                let primary_key_id = key.primary_key_id();
+                let metadata_dctx = match key {
+                    keys::Key::PrimaryKeyV1(k) => {
+                        crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                    }
+                    keys::Key::MetadataKeyV1(k) => {
+                        crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                    }
+                    _ => failure::bail!("provided key is not a decryption key"),
                 };
 
-            let mut tx = query_cache.transaction()?;
-            tx.list(
-                querycache::ListOptions {
-                    primary_key_id,
-                    metadata_dctx: metadata_dctx.clone(),
-                    utc_timestamps: matches.opt_present("utc-timestamps"),
-                    query: Some(query),
-                    now: chrono::Utc::now(),
-                },
-                &mut on_match,
-            )?;
+                let mut ids = Vec::new();
 
-            if ids.len() > 1 && !matches.opt_present("allow-many") {
-                failure::bail!(
-                    "the provided query matched {} items, need a single match unless --allow-many is specified",
-                    ids.len()
-                );
-            };
+                let mut on_match =
+                    |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                        ids.push(item_id);
+                        Ok(())
+                    };
 
-            ids
-        }
+                let mut tx = query_cache.transaction()?;
+                tx.list(
+                    querycache::ListOptions {
+                        primary_key_id,
+                        metadata_dctx: metadata_dctx.clone(),
+                        utc_timestamps: matches.opt_present("utc-timestamps"),
+                        query: Some(query),
+                        now: chrono::Utc::now(),
+                    },
+                    &mut on_match,
+                )?;
+
+                if ids.len() > 1 && !matches.opt_present("allow-many") {
+                    failure::bail!(
+                        "the provided query matched {} items, need a single match unless --allow-many is specified",
+                        ids.len()
+                    );
+                };
+
+                ids
+            }
+        };
+
+        client::remove(ids, &mut serve_out, &mut serve_in)?;
+        client::hangup(&mut serve_in)?;
     };
-
-    client::remove(ids, &mut serve_out, &mut serve_in)?;
-    client::hangup(&mut serve_in)?;
 
     Ok(())
 }

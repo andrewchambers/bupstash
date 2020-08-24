@@ -6,4 +6,8 @@ See the bupstash user manual for a description of the query language.
 
 Examples:
   $ bupstash rm id=8f701cc8c03e1fe23598e95e7b87cb1c
-  $ bupstash --allow-many rm id=*
+  $ bupstash rm id=8f8*
+  $ bupstash rm id=*
+  $ bupstash list --format=jsonl \
+      | custom-backup-rotation-script \
+      | bupstash rm --ids-from-stdin
