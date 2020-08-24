@@ -321,3 +321,16 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   id=$(bupstash put :: "$SCRATCH/foo")
   test 4 = "$(bupstash get id=$id | tar -tf - | wc -l)"
 }
+
+@test "rm from stdin" {
+  id1="$(bupstash put -e echo hello1)"
+  id2="$(bupstash put -e echo hello2)"
+  id3="$(bupstash put -e echo hello3)"
+  test 3 = "$(bupstash list | wc -l)"
+  echo "${id1}" | bupstash rm --ids-from-stdin
+  test 2 = "$(bupstash list | wc -l)"
+  echo -e "${id2}\n${id3}" | bupstash rm --ids-from-stdin
+  bupstash list
+  bupstash list | wc -l
+  test 0 = "$(bupstash list | wc -l)"
+}

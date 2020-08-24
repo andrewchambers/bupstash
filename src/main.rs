@@ -830,6 +830,9 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
         for l in std::io::stdin().lock().lines() {
             let l = l?;
+            if l.is_empty() {
+                continue;
+            }
             match xid::Xid::parse(&l) {
                 Ok(id) => ids.push(id),
                 Err(err) => failure::bail!("error id parsing {:?}: {}", l, err),

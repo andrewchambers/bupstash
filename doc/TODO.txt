@@ -3,7 +3,6 @@ Need to do:
 - Add --version and/or version.
 - Document required rust version.
 - Improve documentation on key exchange packet and 'box' structure.
-- Detailed and nice man pages.
 - Editing of items - work out a scheme that is either backwards compatible, OR implement it.
 - Verify we handle atime correctly when snapshotting.
 - Hardlink support?
@@ -12,8 +11,6 @@ Need to do:
 - Tarball sort by extension to group similar files.
 - use $(pwd) in docs to avoid relative paths.
 - Change timestamp to date or time ?
-- In examples/quickstart show the id output.
-- Explain the id output.
 
 Can do later (medium term):
 
