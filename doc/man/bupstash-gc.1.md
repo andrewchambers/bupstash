@@ -28,6 +28,8 @@ without access to any keys.
   May be of the form `ssh://$SERVER/$PATH` for 
   remote repositories if ssh access is configured.
   If not specified, is set to `BUPSTASH_REPOSITORY`.
+* -q, --quiet:
+  Suppress progress bars (Progress bars are also suppressed when stderr is not a tty).
 
 ## ENVIRONMENT
 

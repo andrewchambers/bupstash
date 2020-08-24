@@ -475,6 +475,9 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         "Disable compression (Use for for already compressed/encrypted data).",
     );
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
+
+    opts.optflag("q", "quiet", "Suppress progress bars.");
+
     opts.optflag(
         "e",
         "exec",
@@ -594,7 +597,14 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let data_source: client::DataSource;
 
-    let progress = indicatif::ProgressBar::new(u64::MAX);
+    let progress = indicatif::ProgressBar::with_draw_target(
+        u64::MAX,
+        if matches.opt_present("quiet") {
+            indicatif::ProgressDrawTarget::hidden()
+        } else {
+            indicatif::ProgressDrawTarget::stderr()
+        },
+    );
     progress.set_style(
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
@@ -873,10 +883,19 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
+    opts.optflag("q", "quiet", "Suppress progress bars.");
+
     repo_opts(&mut opts);
     let matches = default_parse_opts(opts, &args[..]);
 
-    let progress = indicatif::ProgressBar::new(u64::MAX);
+    let progress = indicatif::ProgressBar::with_draw_target(
+        u64::MAX,
+        if matches.opt_present("quiet") {
+            indicatif::ProgressDrawTarget::hidden()
+        } else {
+            indicatif::ProgressDrawTarget::stderr()
+        },
+    );
 
     progress.set_style(
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),

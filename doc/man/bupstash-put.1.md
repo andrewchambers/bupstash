@@ -108,6 +108,9 @@ Default tags can be overidden manually by simply specifying them.
   Disable compression of data chunks, generally should only be used
   if the input data is uncompressible and you wish to increase throughput.
 
+* -q, --quiet:
+  Suppress progress bars (Progress bars are also suppressed when stderr is not a tty).
+
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
