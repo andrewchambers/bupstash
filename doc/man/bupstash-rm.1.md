@@ -62,6 +62,10 @@ more information on the query cache.
   By default bupstash refuses to remove multiple items from a single query, this flag
   disables that safety feature.
 
+* -q, --quiet:
+  Suppress progress bars (Progress bars are also suppressed when stderr
+  is not an interactive terminal).
+
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:

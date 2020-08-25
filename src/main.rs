@@ -89,6 +89,7 @@ fn query_opts(opts: &mut Options) {
         "utc-timestamps",
         "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
     );
+    opts.optflag("q", "quiet", "Suppress progress bars.");
 }
 
 fn repo_opts(opts: &mut Options) {
@@ -336,6 +337,28 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
     Ok(serve_proc)
 }
 
+fn matches_to_progress_bar(
+    matches: &Matches,
+    style: indicatif::ProgressStyle,
+) -> Result<indicatif::ProgressBar, failure::Error> {
+    let want_visible_progress = !matches.opt_present("quiet") && atty::is(atty::Stream::Stderr);
+    let progress = indicatif::ProgressBar::with_draw_target(
+        u64::MAX,
+        if want_visible_progress {
+            indicatif::ProgressDrawTarget::stderr()
+        } else {
+            indicatif::ProgressDrawTarget::hidden()
+        },
+    );
+    progress.set_style(style);
+    progress.set_message(&"connecting to repository...");
+    if want_visible_progress {
+        progress.enable_steady_tick(250)
+    };
+    progress.tick();
+    Ok(progress)
+}
+
 enum ListFormat {
     Human,
     Jsonl,
@@ -391,6 +414,11 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         None
     };
 
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
     let mut query_cache = matches_to_query_cache(&matches)?;
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
@@ -398,7 +426,8 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     client::negotiate_connection(&mut serve_in)?;
-    client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+    progress.set_message(&"acquiring repository lock...");
+    client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
     let mut on_match = |_item_id: xid::Xid, tags: std::collections::BTreeMap<String, String>| {
@@ -598,21 +627,11 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let data_source: client::DataSource;
 
-    let progress = indicatif::ProgressBar::with_draw_target(
-        u64::MAX,
-        if matches.opt_present("quiet") {
-            indicatif::ProgressDrawTarget::hidden()
-        } else {
-            indicatif::ProgressDrawTarget::stderr()
-        },
-    );
-    progress.set_style(
+    let progress = matches_to_progress_bar(
+        &matches,
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
-    );
-    progress.set_message(&"connecting to repository...");
-    progress.tick();
-    progress.enable_steady_tick(250);
+    )?;
 
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
@@ -736,12 +755,18 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         _ => failure::bail!("provided key is not a decryption key"),
     };
 
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
     let (id, query) = matches_to_id_and_query(&matches)?;
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     client::negotiate_connection(&mut serve_in)?;
+    progress.set_message(&"acquiring repository lock...");
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -749,7 +774,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             let mut query_cache = matches_to_query_cache(&matches)?;
 
             // Only sync the client if we have a non id query.
-            client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+            client::sync(
+                progress.clone(),
+                &mut query_cache,
+                &mut serve_out,
+                &mut serve_in,
+            )?;
 
             let mut n_matches: u64 = 0;
             let mut id = xid::Xid::default();
@@ -787,6 +817,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     client::request_data_stream(
         client::RequestContext {
+            progress: progress.clone(),
             primary_key_id,
             hash_key_part_1,
             data_dctx,
@@ -798,6 +829,8 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut std::io::stdout(),
     )?;
     client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
 
     Ok(())
 }
@@ -824,6 +857,11 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let matches = default_parse_opts(opts, &args[..]);
 
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
     if matches.opt_present("ids-from-stdin") {
         let mut ids = Vec::new();
 
@@ -843,13 +881,15 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
         client::negotiate_connection(&mut serve_in)?;
-        client::remove(ids, &mut serve_out, &mut serve_in)?;
+        progress.set_message(&"acquiring repository lock...");
+        client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
     } else {
         let mut serve_proc = matches_to_serve_process(&matches)?;
         let mut serve_out = serve_proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.stdin.as_mut().unwrap();
         client::negotiate_connection(&mut serve_in)?;
+        progress.set_message(&"acquiring repository lock...");
 
         let ids: Vec<xid::Xid> = match matches_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
@@ -857,7 +897,12 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 let mut query_cache = matches_to_query_cache(&matches)?;
 
                 // Only sync the client if we have a non id query.
-                client::sync(&mut query_cache, &mut serve_out, &mut serve_in)?;
+                client::sync(
+                    progress.clone(),
+                    &mut query_cache,
+                    &mut serve_out,
+                    &mut serve_in,
+                )?;
 
                 let key = matches_to_key(&matches)?;
                 let primary_key_id = key.primary_key_id();
@@ -901,10 +946,11 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 ids
             }
         };
-
-        client::remove(ids, &mut serve_out, &mut serve_in)?;
+        client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
     };
+
+    progress.finish_and_clear();
 
     Ok(())
 }
@@ -916,20 +962,10 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     repo_opts(&mut opts);
     let matches = default_parse_opts(opts, &args[..]);
 
-    let progress = indicatif::ProgressBar::with_draw_target(
-        u64::MAX,
-        if matches.opt_present("quiet") {
-            indicatif::ProgressDrawTarget::hidden()
-        } else {
-            indicatif::ProgressDrawTarget::stderr()
-        },
-    );
-    progress.set_style(
+    let progress = matches_to_progress_bar(
+        &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    );
-    progress.set_message(&"connecting to repository...");
-    progress.tick();
-    progress.enable_steady_tick(250);
+    )?;
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();

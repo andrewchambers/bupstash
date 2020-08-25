@@ -55,6 +55,10 @@ more information on the query cache.
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
+* -q, --quiet:
+  Suppress progress bars (Progress bars are also suppressed when stderr
+  is not an interactive terminal).
+
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:

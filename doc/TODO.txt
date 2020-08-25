@@ -10,9 +10,13 @@ Need to do:
 - Send permission denied: Permission denied (os error 13), add path to error message.
 - Tarball sort by extension to group similar files.
 - use $(pwd) in docs to avoid relative paths.
-- Change timestamp to date or time ?
+- Change timestamp to date or time?
 
 Can do later (medium term):
+
+- Repository hooks:
+  - Repository propagation/fan out. I want to be able to forward backups from my external drive
+  - to my remote drive for example.
 
 - Proper text wrapping of command help strings.
 

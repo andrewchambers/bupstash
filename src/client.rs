@@ -475,6 +475,7 @@ fn send_dir(
 }
 
 pub struct RequestContext {
+    pub progress: indicatif::ProgressBar,
     pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub data_dctx: crypto::DecryptionContext,
@@ -497,6 +498,10 @@ pub fn request_data_stream(
         },
         _ => failure::bail!("protocol error, expected ack request packet"),
     };
+
+    // We only wanted to show the progress bar until we could start getting
+    // messages, at this point we know the repository is unlocked.
+    ctx.progress.finish_and_clear();
 
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
@@ -569,6 +574,7 @@ pub fn gc(
 }
 
 pub fn sync(
+    progress: indicatif::ProgressBar,
     query_cache: &mut querycache::QueryCache,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -591,6 +597,9 @@ pub fn sync(
         _ => failure::bail!("protocol error, expected items packet"),
     };
 
+    // At this point we know we have the remote lock, update message.
+    progress.set_message("syncing remote items...");
+
     tx.start_sync(gc_generation)?;
 
     loop {
@@ -612,11 +621,30 @@ pub fn sync(
 }
 
 pub fn remove(
+    progress: indicatif::ProgressBar,
     ids: Vec<Xid>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    for chunked_ids in ids.chunks(100000) {
+    // If the user is watching, we want to set the progress
+    // bar as late as possible so we don't obscure the
+    // 'acquiring repository lock...' message. Here we just
+    // send an empty RmItems, so that when the server responds
+    // we know the repository locks are held and we can
+    // start deleting items in batches.
+    // One extra round trip in exchange for a far better user debugging experience,
+    // but only when we know they are watching.
+    if !progress.is_hidden() {
+        write_packet(w, &Packet::TRmItems(vec![]))?;
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::RRmItems => {}
+            _ => failure::bail!("protocol error, expected RRmItems"),
+        }
+    }
+
+    progress.set_message("removing items...");
+
+    for chunked_ids in ids.chunks(4096) {
         let ids = chunked_ids.to_vec();
         write_packet(w, &Packet::TRmItems(ids))?;
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
