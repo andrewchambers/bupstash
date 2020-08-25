@@ -610,13 +610,11 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
     );
+    progress.set_message(&"connecting to repository...");
+    progress.tick();
+    progress.enable_steady_tick(250);
 
     if matches.opt_present("exec") {
-        let quoted_args: Vec<String> = source_args
-            .iter()
-            .map(|x| shlex::quote(x).to_string())
-            .collect();
-        progress.set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
         failure::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
@@ -626,12 +624,13 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
 
         if source_args[0] == "-" {
-            data_source = client::DataSource::Readable(Box::new(Box::new(std::io::stdin())))
+            data_source = client::DataSource::Readable {
+                description: "<stdin>".to_string(),
+                data: Box::new(Box::new(std::io::stdin())),
+            };
         } else {
             let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
             let input_path = std::fs::canonicalize(&input_path)?;
-
-            progress.set_message(&input_path.to_string_lossy());
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
@@ -668,8 +667,10 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
                     tags.insert("name".to_string(), name);
                 }
 
-                data_source =
-                    client::DataSource::Readable(Box::new(std::fs::File::open(input_path)?))
+                data_source = client::DataSource::Readable {
+                    description: input_path.to_string_lossy().to_string(),
+                    data: Box::new(std::fs::File::open(input_path)?),
+                };
             } else {
                 failure::bail!("{} is not a file or a directory", source_args[0]);
             }
@@ -698,9 +699,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     client::negotiate_connection(&mut serve_in)?;
-
-    progress.tick();
-
+    progress.set_message(&"acquiring repository lock...");
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -925,19 +924,19 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
             indicatif::ProgressDrawTarget::stderr()
         },
     );
-
     progress.set_style(
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
-
-    // This is the first thing that happens, so just start with this message.
-    progress.set_message("acquiring repository lock...");
+    progress.set_message(&"connecting to repository...");
+    progress.tick();
+    progress.enable_steady_tick(250);
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     client::negotiate_connection(&mut serve_in)?;
+    progress.set_message("acquiring repository lock...");
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 

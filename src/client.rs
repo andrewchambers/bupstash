@@ -117,7 +117,10 @@ pub struct SendContext {
 
 pub enum DataSource {
     Subprocess(Vec<String>),
-    Readable(Box<dyn std::io::Read>),
+    Readable {
+        description: String,
+        data: Box<dyn std::io::Read>,
+    },
     Directory {
         path: std::path::PathBuf,
         exclusions: Vec<glob::Pattern>,
@@ -186,11 +189,21 @@ pub fn send(
             if !status.success() {
                 failure::bail!("child failed with status {}", status.code().unwrap());
             }
+
+            let quoted_args: Vec<String> =
+                args.iter().map(|x| shlex::quote(x).to_string()).collect();
+            ctx.progress
+                .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
         }
-        DataSource::Readable(mut data) => {
+        DataSource::Readable {
+            description,
+            mut data,
+        } => {
+            ctx.progress.set_message(&description);
             send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
         }
         DataSource::Directory { path, exclusions } => {
+            ctx.progress.set_message(&path.to_string_lossy());
             send_dir(
                 ctx,
                 &mut chunker,

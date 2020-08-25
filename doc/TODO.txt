@@ -19,10 +19,6 @@ Can do later (medium term):
 - Localization
   - tests for localized tags.
 
-- Upload progress indicator.
-
-- GC progress indicator.
-
 - Tests shouldn't depend on bash.
 
 - Should allow running of single cli tests.
