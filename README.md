@@ -30,46 +30,59 @@ Some key features:
 
 # Typical usage
 
+
+Initialize the repository and create keys.
 ```
-# Initialize the repository and create keys.
 $ ssh $SERVER bupstash init /home/me/backups
 $ bupstash new-key -o backups.key
-
-# Tell bupstash about our repository and keys.
-$ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
-$ export BUPSTASH_KEY=backups.key
-
-# Save a directory as a tarball snapshot.
-$ bupstash put hostname=$(hostname) ./some-data
-ebb66f3baa5d432e9f9a28934888a23d
-
-# Save a file, with arbitrary tag/value tags.
-$ bupstash put mytag=myvalue ./some-file.txt
-bcb8684e6bf5cb453e77486decf61685
-
-# Save the output of a command, checking for errors.
-$ bupstash put --exec name=database.sql pgdump mydatabase
-14ebd2073b258b1f55c5bbc889c49db4
-
-# List items matching a query.
-$ bupstash list name=*.txt and hostname=$(hostname)
-id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020-07-27 11:26:16"
-
-# Get an item matching a query.
-$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
-some data.
-
-# Remove items matching a query.
-$ bupstash rm name=some-data.txt
-
-# Remove everything.
-$ bupstash rm --allow-many id=*
-
-# Run the garbage collector to reclaim disk space.
-$ bupstash gc
-
 ```
 
+Tell bupstash about our repository and keys.
+```
+$ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
+$ export BUPSTASH_KEY=backups.key
+```
+
+
+Save a directory as a tarball snapshot.
+```
+$ bupstash put hostname=$(hostname) ./some-data
+ebb66f3baa5d432e9f9a28934888a23d
+```
+
+Save a file, with arbitrary tag/value tags.
+```
+$ bupstash put mytag=myvalue ./some-file.txt
+bcb8684e6bf5cb453e77486decf61685
+```
+
+Save the output of a command, checking for errors.
+```
+$ bupstash put --exec name=database.sql pgdump mydatabase
+14ebd2073b258b1f55c5bbc889c49db4
+```
+
+List items matching a query.
+```
+$ bupstash list name=*.txt and hostname=$(hostname)
+id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020/07/27 11:26:16"
+```
+
+Get an item matching a query.
+```
+$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
+some data.
+```
+
+Remove items matching a query.
+```
+$ bupstash rm name=some-data.txt and older-than 30d
+```
+
+Run the garbage collector to reclaim disk space.
+```
+$ bupstash gc
+```
 
 # Installation
 
