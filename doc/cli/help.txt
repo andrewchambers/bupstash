@@ -29,6 +29,9 @@ rm
 gc
   Delete data and clear space from a repository.
 
+version
+  Print the version and exit.
+
 help
   Print this message.
 

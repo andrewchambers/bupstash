@@ -63,6 +63,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "remove" | "rm" => include_str!("../doc/cli/rm.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
+        "version" => include_str!("../doc/cli/version.txt"),
         _ => panic!(),
     };
     print!("{}", opts.usage(brief));
@@ -119,6 +120,13 @@ fn default_parse_opts(opts: Options, args: &[String]) -> Matches {
 fn help_main(args: Vec<String>) -> Result<(), failure::Error> {
     let opts = default_cli_opts();
     print_help_and_exit(&args[0], &opts);
+    Ok(())
+}
+
+fn version_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let opts = default_cli_opts();
+    default_parse_opts(opts, &args[..]);
+    println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
 
@@ -1091,6 +1099,10 @@ fn main() {
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
+        "version" | "--version" => {
+            args[0] = "version".to_string();
+            version_main(args)
+        }
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();
             help_main(args)

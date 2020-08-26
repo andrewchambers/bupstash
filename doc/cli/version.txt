@@ -1,0 +1,3 @@
+bupstash version
+
+Print the bupstash version to stdout and exit.

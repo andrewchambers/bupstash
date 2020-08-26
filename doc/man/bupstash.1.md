@@ -17,6 +17,8 @@ Run one of the following `bupstash` subcommands.
 `bupstash rm ...`<br>
 `bupstash gc ...`<br>
 `bupstash serve ...`<br>
+`bupstash help ...`<br>
+`bupstash version ...`<br>
 
 ## DESCRIPTION
 
@@ -74,15 +76,15 @@ $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
 $ export BUPSTASH_KEY=backups.key
 
 # Save a directory as a tarball snapshot.
-$ bupstash put hostname=$(hostname) :: ./some-data
+$ bupstash put hostname=$(hostname) ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 
-# Save a file, with arbitrary key/value tags.
-$ bupstash put mykey=myvalue :: ./some-file.txt
+# Save a file, with arbitrary tag/value tags.
+$ bupstash put mytag=myvalue ./some-file.txt
 bcb8684e6bf5cb453e77486decf61685
 
 # Save the output of a command, checking for errors.
-$ bupstash put --exec name=database.sql :: pgdump ...
+$ bupstash put --exec name=database.sql pgdump mydatabase
 14ebd2073b258b1f55c5bbc889c49db4
 
 # List items matching a query.
@@ -129,7 +131,6 @@ $ bupstash rm -k backups-metadata.key
 
 $ bupstash get -k backups.key id=14ebd2073b258b1f55c5bbc889c49db4 | tar -C ./restore -xf - 
 ```
-
 
 ## SEE ALSO
 
