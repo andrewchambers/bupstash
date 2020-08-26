@@ -1,7 +1,7 @@
 # bupstash 
 
 bupstash is an easy to use tool for making encrypted space efficient backups. Bupstash
-is special because it is open source, and stores all data AND metadata in an ecrypted 
+is special because it is open source, and stores all data AND metadata in an encrypted
 AND deduplicated format.
 
 Typical users of bupstash are people familiar with the command line, such as software developers,
@@ -51,7 +51,7 @@ $ bupstash init
 ```
 
 As a side note, because bupstash accepts some commonly typed options from environment variables, you can
-add them your .bashrc or other equivalent file to avoid retyping them.
+add them to your .bashrc or other equivalent file to avoid retyping them.
 
 # Generating an encryption key
 
@@ -144,7 +144,7 @@ $ bupstash list mykey=value
 
 # Fetching snapshots
 
-Once we have snapshots, we must can fetch them again with `bupstash get` using arbitrary 
+Once we have snapshots, we can fetch them again with `bupstash get` using arbitrary
 queries.
 
 ```
@@ -186,8 +186,8 @@ $ bupstash put --key ./put-backups.key ./data.txt
 $ bupstash list --key ./metadata-backups.key
 ```
 
-With the importand difference th keys cannot decrypt the contents of the snapshots.
-Only the original primary key is able to these snapshots.
+With the important difference that these keys cannot decrypt the contents of the snapshots.
+Only the original primary key is able to decrypt these snapshots.
 
 ```
 $ bupstash get --key ./put-backups.key id=$id 
@@ -230,7 +230,7 @@ Match User backups
 This means the backups user is only able to run the bupstash serve command with a hard coded set of permissions and repository
 path.
 
-Next add an ssh key you indend to use for backuos to `$SERVER/home/backups/.ssh/authorized_keys`, such that the user sending
+Next add an ssh key you indend to use for backups to `$SERVER/home/backups/.ssh/authorized_keys`, such that the user sending
 backups can connect to the remote server using ssh based login.
 
 Because of our sshd configruation, the client is only authorized to create new backups, but not list or remove them:
