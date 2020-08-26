@@ -1,0 +1,32 @@
+(def hpkgs
+  "https://raw.githubusercontent.com/andrewchambers/hpkgs/60314245de9229eb4b9b513b994e56ba373d45cc/")
+
+(defn hpkg-use*
+  [p]
+  (import* (string hpkgs p) :prefix ""))
+
+(defn hpkg-import*
+  [p]
+  (import* (string hpkgs p)))
+
+(hpkg-use* "prelude")
+(hpkg-use* "community/libsodium")
+(hpkg-use* "community/rust-bootstrap")
+(hpkg-import* "core")
+
+(defsrc bupstash-src
+  :url
+  "https://github.com/andrewchambers/bupstash/releases/download/v0.1.0/bupstash-v0.1.0-src+deps.tar.gz"
+  :hash
+  "sha256:0888200451448d5672661d2c22b37d9f023d1d0e34d57c51ee3ce6fd55ddf0bb")
+
+(defpkg bupstash
+  :builder
+  (fn []
+    (os/setenv "PATH" (join-pkg-paths ":" "/bin" [core/build-env rust-bootstrap]))
+    (os/setenv "PKG_CONFIG_PATH" (join-pkg-paths ":" "/lib/pkgconfig" [libsodium]))
+    (unpack-src bupstash-src)
+    (sh/$ cargo build --offline --release)
+    (sh/$ strip target/release/bupstash)
+    (sh/$ mkdir (dyn :pkg-out) ^ /bin)
+    (sh/$ cp target/release/bupstash (dyn :pkg-out) ^ /bin)))
