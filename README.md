@@ -5,23 +5,93 @@ to small scale personal data collections.
 
 Some key features:
 
-- Secure offline master keys, data can't be decrypted without them. [see how]
+- Secure offline master keys, data can't be decrypted without them.
 
-- Append only keys with forward secrecy, preventing data deletion and exfiltration. [see how]
+- Append only keys with forward secrecy, preventing data deletion and exfiltration.
 
-- Data deduplication allowing efficient storage of large numbers of data snapshots. [see how]
+- Data deduplication allowing efficient storage of large numbers of data snapshots.
 
-- Client side encryption of data and metadata - cryptographically assured privacy. [see how]
+- Client side encryption of data and metadata - cryptographically assured privacy.
 
-- Access controls over ssh, allowing different permissions on a per ssh key basis. [see how]
+- Access controls over ssh, allowing different permissions on a per ssh key basis.
 
-- Key/Value backup tagging system and query language. [see how]
+- Key/Value backup tagging system and query language.
 
-- Simple, scriptable command line interface. [see how]
+- Simple, scriptable command line interface.
 
-- Self hosting with nothing more than an ssh server. [see how]
+- Self hosting with nothing more than an ssh server.
 
-- Low ram usage and high performance. [see how]
+- Low ram usage and high performance.
 
-- Written in rust to mitigate many classes of security bugs. [see how]
+- Written in rust to mitigate many classes of security bugs.
+
+
+# Typical usage
+
+```
+# Initialize the repository and create keys.
+$ ssh $SERVER bupstash init /home/me/backups
+$ bupstash new-key -o backups.key
+
+# Tell bupstash about our repository and keys.
+$ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
+$ export BUPSTASH_KEY=backups.key
+
+# Save a directory as a tarball snapshot.
+$ bupstash put hostname=$(hostname) ./some-data
+ebb66f3baa5d432e9f9a28934888a23d
+
+# Save a file, with arbitrary tag/value tags.
+$ bupstash put mytag=myvalue ./some-file.txt
+bcb8684e6bf5cb453e77486decf61685
+
+# Save the output of a command, checking for errors.
+$ bupstash put --exec name=database.sql pgdump mydatabase
+14ebd2073b258b1f55c5bbc889c49db4
+
+# List items matching a query.
+$ bupstash list name=*.txt and hostname=$(hostname)
+id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020-07-27 11:26:16"
+
+# Get an item matching a query.
+$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
+some data.
+
+# Remove items matching a query.
+$ bupstash rm name=some-data.txt
+
+# Remove everything.
+$ bupstash rm --allow-many id=*
+
+# Run the garbage collector to reclaim disk space.
+$ bupstash gc
+
+```
+
+
+# Installation
+
+## From source
+
+First ensure you have a recent rust+cargo, pkg-config and libsodium-dev package.
+```
+$ git clone https://github.com/andrewchambers/bupstash
+$ cd bupstash
+$ cargo build --release
+$ cp ./target/release/bupstash $INSTALL_DIR
+```
+
+## Precompiled releases
+
+Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download for 
+a build for your platform.
+
+Currently we only precompile for linux (help wanted for more platforms).
+
+
+# Guides and documentation
+
+[Quickstart guide](./doc/quickstart.md)
+[Man pages](./doc/man)
+
 

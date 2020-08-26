@@ -1,4 +1,7 @@
-bupstash: Easy, efficient and encrypted Backups
+bupstash
+
+Make efficient encrypted backups easily by running
+one of the subcommands below.
 
 Subcommands:
 
@@ -27,7 +30,7 @@ rm
   Remove items from a repository.
 
 gc
-  Delete data and clear space from a repository.
+  Delete unreferenced data and clear space from a repository.
 
 version
   Print the version and exit.
@@ -35,5 +38,7 @@ version
 help
   Print this message.
 
-For subcommand specific help, run 'bupstash CMD --help'
-For comprehensive documentation see the man pages.
+
+For subcommand specific help, run 'bupstash CMD --help'.
+
+For comprehensive documentation check the man pages.

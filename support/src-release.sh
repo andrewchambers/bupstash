@@ -11,7 +11,7 @@ cd release/src
 
 cargo vendor > .cargo/config
 
-tar -cvf - . | gzip -9 > ../../bupstash-src.tar.gz
+tar -cvf - . | gzip -9 > ../../bupstash-$1-src.tar.gz
 
 cd ..
 mkdir man
@@ -20,4 +20,4 @@ cp ../src/doc/man/*.md ./
 ronn -r *.md
 rm *.md
 
-tar -cvf - . | gzip -9 > ../../bupstash-man.tar.gz
+tar -cvf - . | gzip -9 > ../../bupstash-$1-man.tar.gz

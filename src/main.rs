@@ -60,7 +60,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "put" => include_str!("../doc/cli/put.txt"),
         "list" => include_str!("../doc/cli/list.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
-        "remove" | "rm" => include_str!("../doc/cli/rm.txt"),
+        "rm" => include_str!("../doc/cli/rm.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
         "version" => include_str!("../doc/cli/version.txt"),

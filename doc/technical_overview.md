@@ -5,55 +5,6 @@ This document explains the datastructures and details of the bupstash backup/sto
 Bupstash stores arbitrary encrypted data streams with an associated set of arbitrary
 encrypted key/value metadata, this .
 
-First, lets cover the basics of using bupstash for context:
-
-```
-$ export BUPSTASH_REPOSTIORY=/external/bupstash-repo
-
-# Create a new repository
-$ bupstash init $BUPSTASH_REPOSTIORY
-
-# Create a master key
-$ bupstash new-master-key -o ./master.key
-
-# Store a backup of a directory
-$ bupstash put -k ./master.key date=$(date +%Y/%m/%d) host=$(hostname) :: ./my-files 
-
-# Store a backup of a postgres database, checking exit codes.
-$ bupstash put --exec date=$(date +%Y/%m/%d) name=db.sql  -k ./master.key :: pgdump...
-
-# List backups
-$ bupstash list -k ./master.key date=2020/* and name=*.sql
-id="2" date="2020/06/17" "name=db.dql"
-
-# Get a backup
-$ bupstash get -k ./master.key id=1  | tar -x
-
-# Remove old backups
-$ bupstash rm -k ./master.key --allow-many date=2018/*
-$ bupstash gc
-
-# Less privileged keys
-$ bupstash new-send-key -m ./master.key -o ./send.key
-$ bupstash new-metadata-key -m ./master.key -o ./metadata.key
-
-# Put the master key somewhere secure.
-$ scp master.key $SECUREHOST
-$ shred master.key
-
-# We can only send with the send key, not decrypt or list.
-$ pgdump ... |  bupstash put date=$(date +%Y/%m/%d) name=db.sql --file - -k ./send.key
-
-# We can only list/rm with the metadata key, not decrypt or put.
-$ bupstash list --format=jsonl -k ./metadata.key
-{"id":"2","date":"2020/06/17","name":"db.dql"}
-{"id":"3","date":"2020/06/17","name":"db.dql"}
-```
-
-N.B. The cli interface will almost certainly change in the future.
-
-N.B. Bupstash can operate over ssh with ssh:// style repositories.
-
 ## Repository
 
 The most important part of bupstash is the repository. It is where all data is stored in a mostly
@@ -70,7 +21,7 @@ repo/
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
 │   └── ...
-├── gc.lock
+├── repo.lock
 └── storage-engine.json
 ```
 
@@ -113,10 +64,11 @@ pub struct PlainTextItemMetadata {
 }
 
 pub struct EncryptedItemMetadata {
-    pub plain_text_hash: [u8; HASH_BYTES],
-    pub hash_key_part_2: PartialHashKey,
-    // We want ordered serialization.
-    pub tags: std::collections::BTreeMap<String, Option<String>>,
+    pub plain_text_hash: [u8; crypto::HASH_BYTES],
+    pub send_key_id: Xid,
+    pub hash_key_part_2: crypto::PartialHashKey,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub tags: std::collections::BTreeMap<String, String>,
 }
 
 pub struct ItemMetadata {
@@ -128,7 +80,7 @@ pub struct ItemMetadata {
 ```
 
 It is important to note, all metadata like search tags are stored encrypted and are not 
-readable without a master key or metadata key.
+readable without a primary key or metadata key.
 
 The `Items` table is an aggregated view of current items which have not be marked for removal.
 
@@ -140,7 +92,7 @@ if two chunks are added to the repository with the same hmac, they only need to 
 
 This directory is not used when the repository is configured for external data storage.
 
-### gc.lock
+### repo.lock
 
 A lockfile allowing concurrent repository access.
 
@@ -155,7 +107,7 @@ in an external storage engine.
 ## The hash tree structure
 
 Bupstash stores arbitrary streams of data in the repository by splitting the stream into chunks,
-hmac addressing the chunks, then compressing and encrypting the chunks with the a public key portion of a master key.
+hmac addressing the chunks, then compressing and encrypting the chunks with the a public key portion of a primary key.
 Each chunk is then stored in the data directory in a file named after the hmac hash of the contents.
 As we generate a sequence of chunks with a corresponding hmac addresses,
 we can build a tree structure out of these addresses. Leaf nodes of the tree are simply the encrypted data. 
@@ -215,7 +167,7 @@ based on the item metadata and the hash tree height.
 ### Encrypted data chunk
 
 These chunks form the roots of our hash trees, they contain encrypted data. They contain
-a key exchange packet, with enough information for the master key to derive the ephemeral key.
+a key exchange packet, with enough information for the primary key to derive the ephemeral key.
 
 ```
 KEY_EXCHANGE_PACKET1_BYTES[PACKET1_SZ] || ENCRYPTED_BYTES[...]
@@ -257,28 +209,28 @@ to data chunks when the tree height is 0.
 Bupstash is designed to allow the user to create backups and cycle old backups while
 keeping the decryption key offline. It does this by having three distinct (but optional) key types.
 
-### Master key
+### Primary key
 
-A key capable of encrypting/decrypting chunk data, encrypting/decrypting metdata. A master
-key can be used in any role.
+A key capable of encrypting/decrypting chunk data, encrypting/decrypting metdata. A primary key
+can be used in any role.
 
 For the secure backup use case, we often want to store the master decryption key offline where it 
 cannot be stolen.
 
 ### Metadata key
 
-A key derived from a master key, but only capable of reading/writing metadata. These keys are primarily used
+A key derived from a primary key, but only capable of reading/writing metadata. These keys are primarily used
 for things like automated backup rotation without exposing the contents of our backups. This key can
 be used to execute queries or alter metadata.
 
-### Send key
+### Put key
 
-A send key is derived from a master key and is only capable of encryption. 
-Any data encrypted with a send key can only be decrypted by a master key.
-Metadata encrypted by a send key can be decrypted by a metadata key and a master key.
+A put key is derived from a primary key and is only capable of encryption. 
+Any data encrypted with a put key can only be decrypted by a primary key.
+Metadata encrypted by a put key can be decrypted by a metadata key and a primary key.
 
-The most common use for send keys is to perform one way, append only backups to a remote host or external drive
-without exposing our sensitive master key to attackers.
+The most common use for put keys is to perform one way, append only backups to a remote host or external drive
+without exposing our sensitive primary key to attackers.
 
 ### Key disk format
 
@@ -288,7 +240,7 @@ are pem encoded.
 ```
 
 
-pub struct MasterKey {
+pub struct PrimaryKey {
     pub id: [u8; KEYID_SZ],
     pub hash_key_part_1: PartialHashKey,
     pub hash_key_part_2: PartialHashKey,
@@ -315,7 +267,7 @@ pub struct MetadataKey {
 }
 
 pub enum Key {
-    MasterKeyV1(MasterKey),
+    PrimaryKeyV1(PrimaryKey),
     SendKeyV1(SendKey),
     MetadataKeyV1(MetadataKey),
 }
@@ -325,10 +277,10 @@ pub enum Key {
 
 Bupstash uses ssh forced commands to enforce permissions on a per ssh key basis.
 
-The `bupstash serve` command and be passed flags --allow-add, --allow-edit, --allow-gc, --allow-read 
+The `bupstash serve` command and be passed flags --allow-put, --allow-edit, --allow-gc, --allow-read 
 to control what actions an ssh key can perform.
 
-As an example, a send key, sending data to a repository, where the --allow-add option has been set, means
+As an example, a put key, sending data to a repository, where the --allow-put option has been set, means
 only new backups can be made, and none can be deleted.
 
 ## Send logging
@@ -366,10 +318,8 @@ the repository owner.
 By default the synced query cache resides at `$HOME/.cache/bupstash/query-cache.sqlite3`. But users are given the ability
 to override the query cache path when they wish to optimize cache invalidation.
 
-## Forward secrecy
+## Local machine secrecy
 
-Bupstash provides forward secrecy with respect to sending keys. This protects users
+Bupstash uses an ephemeral key when sending backups, such that that only the primary key can recover it.
+This ephemeral key is deleted by the send client on completion. This protects users
 from compromised or malicious clients that wish to read historic backups, and thus preventing 'undeletion' of sensitive deleted.
-
-This works because when encrypting data chunks, bupstash uses an ephemeral key,
-that only the master key can recover. This ephemeral key is deleted by the send client on completion. 
