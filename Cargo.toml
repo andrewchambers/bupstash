@@ -3,6 +3,9 @@ name = "bupstash"
 version = "0.1.0"
 authors = ["Andrew Chambers <ac@acha.ninja>"]
 edition = "2018"
+license = "MIT"
+repository = "https://github.com/andrewchambers/bupstash"
+readme = "README.md"
 
 [profile.release]
 lto = true
