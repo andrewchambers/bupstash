@@ -15,7 +15,7 @@ Some key features:
 
 - Access controls over ssh, allowing different permissions on a per ssh key basis.
 
-- Key/Value backup tagging system and query language.
+- Key/Value backup tagging system and simple query language.
 
 - Simple, scriptable command line interface.
 
@@ -66,14 +66,16 @@ $ bupstash put --exec name=database.sql pgdump mydatabase
 
 List items matching a query.
 ```
-$ bupstash list name=*.txt and hostname=$(hostname)
+$ bupstash list name="backup.tar" and hostname="server-1"
 id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020/07/27 11:26:16"
 ```
 
 Get an item matching a query.
 ```
 $ bupstash get id=bcb8684e6bf5cb453e77486decf61685
-some data.
+some data...
+
+$ bupstash get id="ebb66*" | tar -C ./restore -xf -
 ```
 
 Remove items matching a query.
