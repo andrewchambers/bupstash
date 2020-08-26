@@ -29,7 +29,7 @@ Some key features:
 
 *WARNING* Bupstash is alpha software, backwards incompatible changes may be made.
 While all efforts are made to keep bupstash bug free, we currently recommend
-it's use for making *REDUNDANT* backups.
+using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 # Typical usage
 
