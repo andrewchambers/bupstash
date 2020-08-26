@@ -73,7 +73,9 @@ $ bupstash gc
 
 ## From source
 
-First ensure you have a recent rust+cargo, pkg-config and libsodium-dev package.
+First ensure you have a recent rust+cargo, pkg-config and libsodium-dev package installed.
+
+Next clone the repository and run cargo build.
 ```
 $ git clone https://github.com/andrewchambers/bupstash
 $ cd bupstash
@@ -91,7 +93,9 @@ Currently we only precompile for linux (help wanted for more platforms).
 
 # Guides and documentation
 
-[Quickstart guide](./doc/quickstart.md)
-[Man pages](./doc/man)
+Check the [Quickstart guide](./doc/quickstart.md) for an introductory tutorial.
+
+
+Check the [Man pages](./doc/man) for more comprehensive documentation.
 
 
