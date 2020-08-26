@@ -27,6 +27,9 @@ Some key features:
 
 - Written in rust to mitigate many classes of security bugs.
 
+*WARNING* Bupstash is alpha software, backwards incompatible changes may be made.
+While all efforts are made to keep bupstash bug free, we currently recommend
+it's use for making *REDUNDANT* backups.
 
 # Typical usage
 
