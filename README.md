@@ -7,9 +7,9 @@ Some key features:
 
 - Secure offline master keys, data can't be decrypted without them.
 
-- Append only keys with forward secrecy, preventing data deletion and exfiltration.
-
 - Data deduplication allowing efficient storage of large numbers of data snapshots.
+
+- Easy incremental backups without the headache.
 
 - Client side encryption of data and metadata - cryptographically assured privacy.
 
@@ -22,6 +22,8 @@ Some key features:
 - Self hosting with nothing more than an ssh server.
 
 - Low ram usage and high performance.
+
+- Append only access controls for high security deployments.
 
 - Written in rust to mitigate many classes of security bugs.
 
@@ -86,7 +88,7 @@ $ cp ./target/release/bupstash $INSTALL_DIR
 ## Precompiled releases
 
 Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download for 
-a build for your platform.
+a build for your platform. Simply extract the archive and add the single bupstash binary to your PATH.
 
 Currently we only precompile for linux (help wanted for more platforms).
 
