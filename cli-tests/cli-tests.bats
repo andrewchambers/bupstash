@@ -25,7 +25,7 @@ teardown () {
 @test "init repository" {
   test -d "$REPO"
   test -f "$REPO/bupstash.sqlite3"
-  test -f "$REPO/gc.lock"
+  test -f "$REPO/repo.lock"
   test -f "$REPO/storage-engine.json"
   test -f "$BUPSTASH_KEY"
   test -f "$SEND_KEY"

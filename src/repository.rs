@@ -38,7 +38,7 @@ pub enum StorageEngineSpec {
 }
 
 #[derive(Clone)]
-pub enum GCLockMode {
+pub enum LockMode {
     Shared,
     Exclusive,
 }
@@ -54,14 +54,14 @@ pub struct GCStats {
 pub struct Repo {
     repo_path: PathBuf,
     conn: rusqlite::Connection,
-    _gc_lock_mode: GCLockMode,
-    _gc_lock: Option<fsutil::FileLock>,
+    _repo_lock_mode: LockMode,
+    _repo_lock: Option<fsutil::FileLock>,
 }
 
 impl Repo {
-    fn gc_lock_path(repo_path: &Path) -> PathBuf {
+    fn repo_lock_path(repo_path: &Path) -> PathBuf {
         let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("gc.lock");
+        lock_path.push("repo.lock");
         lock_path
     }
 
@@ -126,7 +126,7 @@ impl Repo {
 
         fs::DirBuilder::new().create(path_buf.as_path())?;
 
-        path_buf.push("gc.lock");
+        path_buf.push("repo.lock");
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
@@ -183,7 +183,7 @@ impl Repo {
             failure::bail!("no repository at {}", repo_path.to_string_lossy());
         }
 
-        let gc_lock = fsutil::FileLock::get_shared(&Repo::gc_lock_path(&repo_path))?;
+        let repo_lock = fsutil::FileLock::get_shared(&Repo::repo_lock_path(&repo_path))?;
 
         let conn = Repo::open_db(repo_path)?;
 
@@ -199,8 +199,8 @@ impl Repo {
         let r = Repo {
             conn,
             repo_path: fs::canonicalize(&repo_path)?,
-            _gc_lock_mode: GCLockMode::Shared,
-            _gc_lock: Some(gc_lock),
+            _repo_lock_mode: LockMode::Shared,
+            _repo_lock: Some(repo_lock),
         };
 
         r.handle_gc_dirty()?;
@@ -262,14 +262,14 @@ impl Repo {
         Ok(())
     }
 
-    pub fn alter_gc_lock_mode(&mut self, gc_lock_mode: GCLockMode) -> Result<(), failure::Error> {
-        self._gc_lock = None;
-        self._gc_lock_mode = gc_lock_mode.clone();
-        self._gc_lock = match gc_lock_mode {
-            GCLockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::gc_lock_path(
+    pub fn alter_lock_mode(&mut self, repo_lock_mode: LockMode) -> Result<(), failure::Error> {
+        self._repo_lock = None;
+        self._repo_lock_mode = repo_lock_mode.clone();
+        self._repo_lock = match repo_lock_mode {
+            LockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
                 &self.repo_path,
             ))?),
-            GCLockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(
+            LockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(&Repo::repo_lock_path(
                 &self.repo_path,
             ))?),
         };
@@ -370,8 +370,8 @@ impl Repo {
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
-        match self._gc_lock_mode {
-            GCLockMode::Exclusive => (),
+        match self._repo_lock_mode {
+            LockMode::Exclusive => (),
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
