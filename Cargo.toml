@@ -6,6 +6,7 @@ edition = "2018"
 license = "MIT"
 repository = "https://github.com/andrewchambers/bupstash"
 readme = "README.md"
+description = "Easy and efficient encrypted backups."
 
 [profile.release]
 lto = true
