@@ -5,13 +5,13 @@ to small scale personal data collections.
 
 Some key features:
 
-- Secure offline master keys, data can't be decrypted without them.
+- Secure offline keys, data can't be decrypted without them, but new backups can still be made.
 
 - Data deduplication allowing efficient storage of large numbers of data snapshots.
 
 - Easy incremental backups without the headache.
 
-- Client side encryption of data and metadata - cryptographically assured privacy.
+- Client side encryption of data and metadata, cryptographically assured privacy.
 
 - Access controls over ssh, allowing different permissions on a per ssh key basis.
 
@@ -29,7 +29,6 @@ Some key features:
 
 
 # Typical usage
-
 
 Initialize the repository and create keys.
 ```
