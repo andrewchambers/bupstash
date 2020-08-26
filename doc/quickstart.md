@@ -9,34 +9,28 @@ system administrators and other technical users.
 
 
 This guide covers installation and basic usage of bupstash.
-Everything in this guide is also covered in our introduction to bupstash video (make line XXX).
+Everything in this guide is also covered in our introduction to bupstash video (TODO).
 
 ## Install bupstash
 
 ### Precompiled version 
 
-We offer statically linked precompiled versions at our releases page (make link XXX).
-
-Simply extract the bupstash binary for your platform, and add it your system PATH:
-
-```
-wget TODO
-tar xvf ./bupstash-*.tar.gz
-export PATH=$(pwd):$PATH
-```
+Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download for 
+a build for your platform. Simply extract the archive and add the single bupstash binary to your PATH.
 
 ### Via rust and cargo
 
 If you have a rust compiler installed, you can install the latest release
-directly from crates.io using cargo, the rust programming language package manager.
+using cargo (the rust programming language package manager).
 
-Install `libsodium` and `pkg-config` for your platform, and run:
+Install `libsodium-dev` and `pkg-config` for your platform, and run:
+
 
 ```
-$ git clone https://git.sr.ht/~ach/bupstash
+$ git clone https://github.com/andrewchambers/bupstash
 $ cd bupstash
 $ cargo build --release
-$ cp ./target/release/bupstash $BINDIR
+$ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
 # Initializing your repository

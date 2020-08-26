@@ -1,7 +1,7 @@
 # bupstash
 
 bupstash is a secure data store for uses ranging from business critical data archiving,
-to small scale personal data collections.
+to small scale personal data collections. 
 
 Some key features:
 
