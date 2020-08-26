@@ -42,13 +42,13 @@ $ bupstash new-key -o backups.key
 Tell bupstash about our repository and keys.
 ```
 $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
-$ export BUPSTASH_KEY=backups.key
+$ export BUPSTASH_KEY="$(pwd)/backups.key"
 ```
 
 
 Save a directory as a tarball snapshot.
 ```
-$ bupstash put hostname=$(hostname) ./some-data
+$ bupstash put hostname="$(hostname)" ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 ```
 
