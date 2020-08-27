@@ -36,13 +36,13 @@ Some notable features of ```bupstash``` include:
 * A multi layered approach to security.
 
 The ```bupstash``` tool itself is divided into subcommands
-that can each have their own documentation.
+that each have their own documentation.
 
 
 ## SUBCOMMANDS
 
 * bupstash-init(1):
-  Initialize a package store.
+  Initialize a bupstash repository.
 * bupstash-new-key(1):
   Create a new primary key for creating/reading repository items.
 * bupstash-new-put-key(1):
@@ -67,7 +67,7 @@ that can each have their own documentation.
 ### Typical usage
 
 ```
-# Initialize the repository and create keys.
+# Initialize a repository and create keys.
 $ ssh $SERVER bupstash init /home/me/backups
 $ bupstash new-key -o backups.key
 
@@ -108,7 +108,7 @@ $ bupstash gc
 
 ### Using an offline decryption key
 ```
-# Create a primary key, and a put only key.
+# Create a primary key, a put only key, and a metadata (list/rm only) key.
 $ bupstash new-key -o backups.key
 $ bupstash new-put-key -k backups.key -o backups-put.key
 $ bupstash new-metadata-key -k backups.key -o backups-metadata.key
@@ -129,6 +129,7 @@ $ bupstash rm -k backups-metadata.key
 
 ... After emergency, get decryption key from offline storage ...
 
+# Restore by getting an item and decrypting it using the decryption key.
 $ bupstash get -k backups.key id=14ebd2073b258b1f55c5bbc889c49db4 | tar -C ./restore -xf - 
 ```
 
