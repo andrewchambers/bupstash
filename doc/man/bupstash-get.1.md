@@ -23,7 +23,7 @@ For full documentation on the query language, see bupstash-query-language(7).
 ### Get query examples
 
 ```
-$ id=$(bupstash put :: ./some-data)
+$ id=$(bupstash put ./some-data)
 
 # Get an item by id.
 $ bupstash get id=$id > out.txt
@@ -100,13 +100,12 @@ it we use tar.
 
 ```
 # Snapshot a directory.
-$ id=$(bupstash put :: ./data)
+$ id=$(bupstash put ./data)
 
-# Fetch the contents of a snapshot and extract the contents with tar -t
 $ mkdir restore
 $ cd restore 
 
-# e(x)tract the (f)ile from stdin (v)erbosely.
+# Fetch the contents of a snapshot and extract the contents with tar
 $ bupstash get id=$id | tar -xvf -
 ```
 

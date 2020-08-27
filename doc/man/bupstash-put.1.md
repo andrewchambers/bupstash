@@ -170,14 +170,14 @@ $ bupstash get id="$ID" | tar -tf -
 
 ```
 # Snapshot a postgres database with pgdump
-$ bupstash put --exec name=dbdump.sql :: pgdump mydb
+$ bupstash put --exec name=dbdump.sql pgdump mydb
 ```
 
 ### Connecting to an ssh server with a specific ssh config.
 
 ```
 $ export BUPSTASH_REPOSITORY_COMMAND="ssh -F ./my-ssh-config me@$SERVER bupstash serve /my/repo"
-$ bupstash put :: ./files
+$ bupstash put ./files
 ```
 
 ## TIPS
