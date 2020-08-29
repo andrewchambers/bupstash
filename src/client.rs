@@ -237,6 +237,8 @@ pub fn send(
         tags,
     };
 
+    ctx.progress.set_message("syncing disks...".to_string());
+
     write_packet(
         w,
         &Packet::TAddItem(AddItem {
