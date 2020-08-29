@@ -237,7 +237,7 @@ pub fn send(
         tags,
     };
 
-    ctx.progress.set_message("syncing disks...".to_string());
+    ctx.progress.set_message("syncing disks...");
 
     write_packet(
         w,
