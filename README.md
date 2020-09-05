@@ -33,18 +33,17 @@ using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 # Typical usage
 
-Initialize the repository and create keys.
-```
-$ ssh $SERVER bupstash init /home/me/backups
-$ bupstash new-key -o backups.key
-```
-
-Tell bupstash about our repository and keys.
+Initialize a new bupstash repository via ssh.
 ```
 $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
-$ export BUPSTASH_KEY="$(pwd)/backups.key"
+$ bupstash init
 ```
 
+Create a new encryption key, and tell bupstash to use it.
+```
+$ bupstash new-key -o backups.key
+$ export BUPSTASH_KEY="$(pwd)/backups.key"
+```
 
 Save a directory as a tarball snapshot.
 ```
