@@ -633,7 +633,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let default_tags = !matches.opt_present("no-default-tags");
 
-    let data_source: client::DataSource;
+    let mut data_source: client::DataSource;
 
     let progress = matches_to_progress_bar(
         &matches,
@@ -733,7 +733,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut serve_in,
         send_log,
         tags,
-        data_source,
+        &mut data_source,
     )?;
     client::hangup(&mut serve_in)?;
 

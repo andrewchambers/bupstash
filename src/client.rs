@@ -133,7 +133,7 @@ pub fn send(
     w: &mut dyn std::io::Write,
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
-    data: DataSource,
+    data: &mut DataSource,
 ) -> Result<Xid, failure::Error> {
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
@@ -147,121 +147,142 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    let send_log_session = match send_log {
-        Some(ref mut send_log) => Some(std::cell::RefCell::new(
-            send_log.session(ack.gc_generation)?,
-        )),
-        None => None,
-    };
+    'retry: for _i in 0..100 {
+        let send_log_session = match send_log {
+            Some(ref mut send_log) => Some(std::cell::RefCell::new(
+                send_log.session(ack.gc_generation)?,
+            )),
+            None => None,
+        };
 
-    if let Some(ref send_log_session) = send_log_session {
-        send_log_session
-            .borrow_mut()
-            .perform_cache_invalidations(ack.has_delta_id)?;
-    }
+        if let Some(ref send_log_session) = send_log_session {
+            send_log_session
+                .borrow_mut()
+                .perform_cache_invalidations(ack.has_delta_id)?;
+        }
 
-    let mut sink = ConnectionHtreeSink {
-        checkpoint_bytes: ctx.checkpoint_bytes,
-        dirty_bytes: 0,
-        send_log_session: &send_log_session,
-        w,
-        r,
-    };
+        let mut sink = ConnectionHtreeSink {
+            checkpoint_bytes: ctx.checkpoint_bytes,
+            dirty_bytes: 0,
+            send_log_session: &send_log_session,
+            w,
+            r,
+        };
 
-    let min_size = 256 * 1024;
-    let max_size = 8 * 1024 * 1024;
-    let chunk_mask = 0x000f_ffff;
-    // XXX TODO these chunk parameters need to be investigated and tuned.
-    let rs = rollsum::Rollsum::new_with_chunk_mask(chunk_mask);
-    let mut chunker = chunker::RollsumChunker::new(rs, min_size, max_size);
-    let mut tw = htree::TreeWriter::new(&mut sink, max_size, chunk_mask);
+        let min_size = 256 * 1024;
+        let max_size = 8 * 1024 * 1024;
+        let chunk_mask = 0x000f_ffff;
+        // XXX TODO these chunk parameters need to be investigated and tuned.
+        let rs = rollsum::Rollsum::new_with_chunk_mask(chunk_mask);
+        let mut chunker = chunker::RollsumChunker::new(rs, min_size, max_size);
+        let mut tw = htree::TreeWriter::new(&mut sink, max_size, chunk_mask);
 
-    match data {
-        DataSource::Subprocess(args) => {
-            let mut child = std::process::Command::new(args[0].clone())
-                .args(&args[1..])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .spawn()?;
-            let mut data = child.stdout.as_mut().unwrap();
-            send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
-            let status = child.wait()?;
-            if !status.success() {
-                failure::bail!("child failed with status {}", status.code().unwrap());
+        match data {
+            DataSource::Subprocess(args) => {
+                let mut child = std::process::Command::new(args[0].clone())
+                    .args(&args[1..])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()?;
+                let mut data = child.stdout.as_mut().unwrap();
+                send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
+                let status = child.wait()?;
+                if !status.success() {
+                    failure::bail!("child failed with status {}", status.code().unwrap());
+                }
+
+                let quoted_args: Vec<String> =
+                    args.iter().map(|x| shlex::quote(x).to_string()).collect();
+                ctx.progress
+                    .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
             }
-
-            let quoted_args: Vec<String> =
-                args.iter().map(|x| shlex::quote(x).to_string()).collect();
-            ctx.progress
-                .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
+            DataSource::Readable {
+                description,
+                ref mut data,
+            } => {
+                ctx.progress.set_message(&description);
+                send_chunks(ctx, &mut chunker, &mut tw, data, None)?;
+            }
+            DataSource::Directory { path, exclusions } => {
+                match send_dir(
+                    ctx,
+                    &mut chunker,
+                    &mut tw,
+                    &send_log_session,
+                    &path,
+                    &exclusions,
+                ) {
+                    Ok(()) => (),
+                    Err(SendDirError::FilesystemModified) => {
+                        ctx.progress.println(format!(
+                            "filesystem modified while sending, restarting send...",
+                        ));
+                        if let Some(ref send_log_session) = send_log_session {
+                            write_packet(w, &Packet::TSendSync)?;
+                            match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                                Packet::RSendSync => {
+                                    send_log_session.borrow_mut().checkpoint()?;
+                                }
+                                _ => failure::bail!("protocol error, expected RSentSync packet"),
+                            }
+                        }
+                        continue 'retry;
+                    }
+                    Err(SendDirError::Other(err)) => return Err(err),
+                }
+            }
         }
-        DataSource::Readable {
-            description,
-            mut data,
-        } => {
-            ctx.progress.set_message(&description);
-            send_chunks(ctx, &mut chunker, &mut tw, &mut data, None)?;
-        }
-        DataSource::Directory { path, exclusions } => {
-            ctx.progress.set_message(&path.to_string_lossy());
-            send_dir(
-                ctx,
-                &mut chunker,
-                &mut tw,
-                &send_log_session,
-                &path,
-                &exclusions,
-            )?;
-        }
-    }
 
-    let chunk_data = chunker.finish();
-    let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
-    tw.add(
-        &addr,
-        ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
-    )?;
-    let (tree_height, address) = tw.finish()?;
+        let chunk_data = chunker.finish();
+        let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+        tw.add(
+            &addr,
+            ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
+        )?;
+        let (tree_height, address) = tw.finish()?;
 
-    let plain_text_metadata = itemset::PlainTextItemMetadata {
-        primary_key_id: ctx.primary_key_id,
-        tree_height,
-        address,
-    };
+        let plain_text_metadata = itemset::PlainTextItemMetadata {
+            primary_key_id: ctx.primary_key_id,
+            tree_height,
+            address,
+        };
 
-    let e_metadata = itemset::EncryptedItemMetadata {
-        plain_text_hash: plain_text_metadata.hash(),
-        send_key_id: ctx.send_key_id,
-        hash_key_part_2: ctx.hash_key.part2.clone(),
-        timestamp: chrono::Utc::now(),
-        tags,
-    };
+        let e_metadata = itemset::EncryptedItemMetadata {
+            plain_text_hash: plain_text_metadata.hash(),
+            send_key_id: ctx.send_key_id,
+            hash_key_part_2: ctx.hash_key.part2.clone(),
+            timestamp: chrono::Utc::now(),
+            tags,
+        };
 
-    ctx.progress.set_message("syncing disks...");
+        ctx.progress.set_message("syncing disks...");
 
-    write_packet(
-        w,
-        &Packet::TAddItem(AddItem {
-            gc_generation: ack.gc_generation,
-            item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                plain_text_metadata,
-                encrypted_metadata: ctx.metadata_ectx.encrypt_data(
-                    serde_bare::to_vec(&e_metadata)?,
-                    crypto::DataCompression::Zstd,
-                ),
+        write_packet(
+            w,
+            &Packet::TAddItem(AddItem {
+                gc_generation: ack.gc_generation,
+                item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+                    plain_text_metadata,
+                    encrypted_metadata: ctx.metadata_ectx.encrypt_data(
+                        serde_bare::to_vec(&e_metadata)?,
+                        crypto::DataCompression::Zstd,
+                    ),
+                }),
             }),
-        }),
-    )?;
+        )?;
 
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RAddItem(id) => {
-            if send_log_session.is_some() {
-                send_log_session.unwrap().into_inner().commit(&id)?;
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::RAddItem(id) => {
+                if send_log_session.is_some() {
+                    send_log_session.unwrap().into_inner().commit(&id)?;
+                }
+                return Ok(id);
             }
-            Ok(id)
+            _ => failure::bail!("protocol error, expected an RAddItem packet"),
         }
-        _ => failure::bail!("protocol error, expected an RAddItem packet"),
     }
+
+    failure::bail!("put retried too many times");
 }
 
 fn send_chunks(
@@ -301,6 +322,56 @@ fn send_chunks(
     }
 }
 
+#[derive(Debug)]
+enum SendDirError {
+    FilesystemModified,
+    Other(failure::Error),
+}
+
+impl std::fmt::Display for SendDirError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendDirError::FilesystemModified => {
+                write!(f, "filesystem modified during directory send.")
+            }
+            SendDirError::Other(err) => err.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SendDirError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None
+    }
+}
+
+impl From<failure::Error> for SendDirError {
+    fn from(err: failure::Error) -> Self {
+        SendDirError::Other(err)
+    }
+}
+
+impl From<std::io::Error> for SendDirError {
+    fn from(err: std::io::Error) -> Self {
+        SendDirError::Other(err.into())
+    }
+}
+
+impl From<nix::Error> for SendDirError {
+    fn from(err: nix::Error) -> Self {
+        SendDirError::Other(err.into())
+    }
+}
+
+// A smear error is an error likely caused by the filesystem being altered
+// by a concurrent process as we are making a snapshot.
+fn likely_smear_error(err: &std::io::Error) -> bool {
+    match err.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput => true,
+        _ => false,
+    }
+}
+
 fn send_dir(
     ctx: &mut SendContext,
     chunker: &mut chunker::RollsumChunker,
@@ -308,7 +379,7 @@ fn send_dir(
     send_log_session: &Option<std::cell::RefCell<sendlog::SendLogSession>>,
     path: &std::path::PathBuf,
     exclusions: &[glob::Pattern],
-) -> Result<(), failure::Error> {
+) -> Result<(), SendDirError> {
     let path = fsutil::absolute_path(&path)?;
 
     let mut addresses: Vec<u8> = Vec::new();
@@ -324,11 +395,11 @@ fn send_dir(
         // Null byte marks the end of path and tar headers in the hash space.
         hash_state.update(&[0]);
 
-        let mut dir_ents = Vec::new();
-
-        for entry in std::fs::read_dir(&cur_dir)? {
-            dir_ents.push(entry?);
-        }
+        let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
+            Ok(dir_ents) => dir_ents,
+            Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
+            Err(err) => return Err(SendDirError::Other(err.into())),
+        };
 
         dir_ents.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
@@ -337,10 +408,19 @@ fn send_dir(
         if cur_dir == path {
             let metadata = std::fs::metadata(&path)?;
             if !metadata.is_dir() {
-                failure::bail!("{} is not a directory", path.display());
+                return Err(SendDirError::Other(failure::format_err!(
+                    "{} is not a directory",
+                    path.display()
+                )));
             }
             let short_path = ".".into();
-            let tar_hdr_bytes = xtar::dirent_to_tarheader(&metadata, &path, &short_path)?;
+            let tar_hdr_bytes = match xtar::dirent_to_tarheader(&metadata, &path, &short_path) {
+                Ok(hdr) => hdr,
+                Err(err) if likely_smear_error(&err) => {
+                    return Err(SendDirError::FilesystemModified)
+                }
+                Err(err) => return Err(SendDirError::Other(err.into())),
+            };
             hash_state.update(&tar_hdr_bytes);
             tar_dir_ents.push((path.clone(), metadata, tar_hdr_bytes));
         }
@@ -354,9 +434,21 @@ fn send_dir(
                 }
             }
 
-            let metadata = entry.metadata()?;
-            let short_path = ent_path.strip_prefix(&path)?.to_path_buf();
-            let tar_hdr_bytes = xtar::dirent_to_tarheader(&metadata, &ent_path, &short_path)?;
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(err) if likely_smear_error(&err) => {
+                    return Err(SendDirError::FilesystemModified)
+                }
+                Err(err) => return Err(SendDirError::Other(err.into())),
+            };
+            let short_path = ent_path.strip_prefix(&path).unwrap().to_path_buf();
+            let tar_hdr_bytes = match xtar::dirent_to_tarheader(&metadata, &ent_path, &short_path) {
+                Ok(hdr) => hdr,
+                Err(err) if likely_smear_error(&err) => {
+                    return Err(SendDirError::FilesystemModified)
+                }
+                Err(err) => return Err(SendDirError::Other(err.into())),
+            };
 
             if metadata.is_dir() {
                 work_list.push_back(ent_path.clone());
@@ -410,12 +502,18 @@ fn send_dir(
                         send_chunks(ctx, chunker, tw, &mut hdr_cursor, Some(&mut on_chunk))? as u64;
 
                     if metadata.is_file() {
-                        let mut f = std::fs::File::open(&ent_path)?;
+                        let mut f = match std::fs::File::open(&ent_path) {
+                            Ok(f) => f,
+                            Err(err) if likely_smear_error(&err) => {
+                                return Err(SendDirError::FilesystemModified)
+                            }
+                            Err(err) => return Err(SendDirError::Other(err.into())),
+                        };
 
                         // For linux at least, shift file pages to the tail of the page cache, allowing
                         // the kernel to quickly evict these pages. This works well for the case of system
                         // backups, where we don't to trash the users current cache.
-                        // One source on how linux treats this hint - https://lwn.net/Articles/449420"
+                        // One source on how linux treats this hint - https://lwn.net/Articles/449420
                         nix::fcntl::posix_fadvise(
                             f.as_raw_fd(),
                             0,
@@ -441,10 +539,7 @@ fn send_dir(
                         }
 
                         if file_len != metadata.len() as usize {
-                            failure::bail!(
-                                "length of {} changed while sending data",
-                                ent_path.display()
-                            );
+                            return Err(SendDirError::FilesystemModified);
                         }
                     }
                 }

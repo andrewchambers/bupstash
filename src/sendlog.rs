@@ -226,7 +226,7 @@ impl<'a> SendLogSession<'a> {
             size as i64
         ])?;
 
-        // It's unclear to me if something like the following is worth doing:
+        // It's unclear if something like the following is worth doing:
         //
         // let mut addr = Address::default();
         // for bytes in addresses.chunks(ADDRESS_SZ) {
@@ -247,7 +247,7 @@ impl<'a> SendLogSession<'a> {
         let mut stmt = self
             .log
             .conn
-            .prepare_cached("select Size,Addresses from StatCache where Hash = ?;")?;
+            .prepare_cached("select Size, Addresses from StatCache where Hash = ?;")?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
             let sz: i64 = r.get(0)?;
@@ -261,7 +261,9 @@ impl<'a> SendLogSession<'a> {
     }
 
     pub fn checkpoint(&mut self) -> Result<(), failure::Error> {
-        debug_assert!(self.tx_active);
+        if !self.tx_active {
+            failure::bail!("no active transaction");
+        };
 
         self.log.conn.execute("commit;", rusqlite::NO_PARAMS)?;
         self.tx_active = false;

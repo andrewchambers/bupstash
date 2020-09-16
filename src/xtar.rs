@@ -28,11 +28,37 @@ fn format_pax_extended_record(key: &[u8], value: &[u8]) -> Vec<u8> {
     record
 }
 
+cfg_if::cfg_if! {
+    if #[cfg(linux)] {
+
+        fn dev_major(dev: u64) -> u32 {
+            ((dev >> 32) & 0xffff_f000) |
+            ((dev >>  8) & 0x0000_0fff)
+        }
+
+        fn dev_minor(dev: u64) -> u32 {
+            ((dev >> 12) & 0xffff_ff00) |
+            ((dev      ) & 0x0000_00ff)
+        }
+
+    } else {
+
+        fn dev_major(_dev: u64) -> u32 {
+            panic!("unable to get device major number on this platform (file a bug report)");
+        }
+
+        fn dev_minor(_dev: u64) -> u32 {
+            panic!("unable to get device minor number on this platform (file a bug report)");
+        }
+
+    }
+}
+
 pub fn dirent_to_tarheader(
     metadata: &std::fs::Metadata,
     full_path: &std::path::PathBuf,
     short_path: &std::path::PathBuf,
-) -> Result<Vec<u8>, failure::Error> {
+) -> Result<Vec<u8>, std::io::Error> {
     let mut pax_ext_records = Vec::new();
     let mut ustar_hdr = tar::Header::new_ustar();
     ustar_hdr.set_metadata(&metadata);
@@ -53,48 +79,22 @@ pub fn dirent_to_tarheader(
 
     match ustar_hdr.entry_type() {
         tar::EntryType::Char | tar::EntryType::Block => {
-            cfg_if::cfg_if! {
-                if #[cfg(linux)] {
-
-                    fn dev_major(dev: u64) -> Result<u32, failure::Error> {
-                        ((dev >> 32) & 0xffff_f000) |
-                        ((dev >>  8) & 0x0000_0fff)
-                    }
-
-                    fn dev_minor(dev: u64) -> Result<u32, failure::Error> {
-                        ((dev >> 12) & 0xffff_ff00) |
-                        ((dev      ) & 0x0000_00ff)
-                    }
-
-                } else {
-
-                    fn dev_major(_dev: u64) -> Result<u32, failure::Error> {
-                        failure::bail!("unable to get device major number on this platform (file a bug report)");
-                    }
-
-                    fn dev_minor(_dev: u64) -> Result<u32, failure::Error> {
-                        failure::bail!("unable to get device minor number on this platform (file a bug report)");
-                    }
-
-                }
-            }
-
-            ustar_hdr.set_device_major(dev_major(metadata.rdev())?)?;
-            ustar_hdr.set_device_minor(dev_minor(metadata.rdev())?)?;
+            ustar_hdr.set_device_major(dev_major(metadata.rdev()))?;
+            ustar_hdr.set_device_minor(dev_minor(metadata.rdev()))?;
         }
         tar::EntryType::Symlink => {
             let target = std::fs::read_link(full_path)?;
 
             match ustar_hdr.set_link_name(&target) {
                 Ok(()) => (),
-                Err(e) => {
+                Err(err) => {
                     /* 100 is more than ustar can handle as a link parget */
                     if target.as_os_str().len() > 100 {
                         let target_bytes = target.as_os_str().as_bytes();
                         let target_record = format_pax_extended_record(b"linkpath", target_bytes);
                         pax_ext_records.extend_from_slice(&target_record);
                     } else {
-                        return Err(e.into());
+                        return Err(err.into());
                     }
                 }
             }

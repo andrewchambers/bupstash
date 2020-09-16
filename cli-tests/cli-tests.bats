@@ -334,3 +334,49 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   bupstash list | wc -l
   test 0 = "$(bupstash list | wc -l)"
 }
+
+_concurrent_modify_worker () {
+  set -e
+  while test $(date "+%s") -lt "$1"
+  do
+    touch $SCRATCH/t/a$2
+    touch $SCRATCH/t/b$2
+    touch $SCRATCH/t/c$2
+    mkdir $SCRATCH/t/d$2
+    touch $SCRATCH/t/d$2/e$2
+    ln -s a $SCRATCH/t/f$2
+
+    echo a >> $SCRATCH/t/a$2
+    echo b >> $SCRATCH/t/b$2
+    echo c >> $SCRATCH/t/c$2
+    echo e >> $SCRATCH/t/d$2/e$2
+
+    rm $SCRATCH/t/a$2
+    rm $SCRATCH/t/b$2
+    rm $SCRATCH/t/c$2
+    rm -rf $SCRATCH/t/d$2
+    rm $SCRATCH/t/f$2
+  done
+}
+
+@test "concurrent dir modify during put" {
+  now=$(date "+%s")
+  test_end=$(($now + 5))
+  mkdir $SCRATCH/t
+  for i in $(seq 10)
+  do
+    _concurrent_modify_worker $test_end $i &
+  done
+
+  while test $(date "+%s") -lt "$test_end"
+  do
+    bupstash put "$SCRATCH/t"
+  done
+
+  wait
+
+  for id in $(bupstash list --format=jsonl | jq -r .id)
+  do
+    bupstash get id=$id | tar -t > /dev/null
+  done
+}

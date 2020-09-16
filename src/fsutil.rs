@@ -86,3 +86,11 @@ where
 
     Ok(absolute_path)
 }
+
+pub fn read_dirents(path: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
+    let mut dir_ents = Vec::new();
+    for entry in std::fs::read_dir(&path)? {
+        dir_ents.push(entry?);
+    }
+    Ok(dir_ents)
+}

@@ -375,6 +375,8 @@ impl Repo {
             _ => failure::bail!("unable to collect garbage without an exclusive lock"),
         }
 
+        update_progress_msg("preparing repository...".to_string())?;
+
         // We must COMMIT the new gc generation before we start
         // deleting any chunks, the gc generation is how we invalidate
         // client side put caches.
