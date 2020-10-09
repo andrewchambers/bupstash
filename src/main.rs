@@ -87,6 +87,13 @@ fn query_opts(opts: &mut Options) {
     );
     opts.optflag(
         "",
+        "query-encrypted",
+        "The query will also match against items with missing decryption keys, \
+        this option inserts the query tags 'key-id=ID' and 'metadata-encrypted=yes|no' into items \
+        so they may be searched against.",
+    );
+    opts.optflag(
+        "",
         "utc-timestamps",
         "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
     );
@@ -104,7 +111,7 @@ fn repo_opts(opts: &mut Options) {
     );
 }
 
-fn default_parse_opts(opts: Options, args: &[String]) -> Matches {
+fn parse_cli_opts(opts: Options, args: &[String]) -> Matches {
     if args.len() >= 2 && (args[1] == "-h" || args[1] == "--help") {
         print_help_and_exit(&args[0], &opts)
     }
@@ -125,7 +132,7 @@ fn help_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn version_main(args: Vec<String>) -> Result<(), failure::Error> {
     let opts = default_cli_opts();
-    default_parse_opts(opts, &args[..]);
+    parse_cli_opts(opts, &args[..]);
     println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
@@ -139,7 +146,7 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
         "The storage engine specification. one of 'dir', 'sqlite3' or a json specification. Consult the manual for details.",
         "STORAGE",
     );
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
         Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
@@ -163,11 +170,19 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
 }
 
 fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
+    if let Some(k) = matches_to_opt_key(matches)? {
+        Ok(k)
+    } else {
+        failure::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
+    }
+}
+
+fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::Error> {
     match matches.opt_str("key") {
-        Some(k) => Ok(keys::Key::load_from_file(&k)?),
+        Some(k) => Ok(Some(keys::Key::load_from_file(&k)?)),
         None => {
             if let Some(k) = std::env::var_os("BUPSTASH_KEY") {
-                Ok(keys::Key::load_from_file(&k.into_string().unwrap())?)
+                Ok(Some(keys::Key::load_from_file(&k.into_string().unwrap())?))
             } else if let Some(cmd) = std::env::var_os("BUPSTASH_KEY_COMMAND") {
                 match shlex::split(&cmd.into_string().unwrap()) {
                     Some(mut args) => {
@@ -177,14 +192,14 @@ fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
                         let bin = args.remove(0);
 
                         match std::process::Command::new(bin).args(args).output() {
-                            Ok(key_data) => Ok(keys::Key::from_slice(&key_data.stdout)?),
+                            Ok(key_data) => Ok(Some(keys::Key::from_slice(&key_data.stdout)?)),
                             Err(e) => failure::bail!("error running BUPSTASH_KEY_COMMAND: {}", e),
                         }
                     }
                     None => failure::bail!("unable to parse BUPSTASH_KEY_COMMAND"),
                 }
             } else {
-                failure::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
+                Ok(None)
             }
         }
     }
@@ -193,7 +208,7 @@ fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
 fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt("o", "output", "set output file.", "PATH");
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
     let primary_key = keys::Key::PrimaryKeyV1(keys::PrimaryKey::gen());
     primary_key.write_to_file(&matches.opt_str("o").unwrap())
 }
@@ -202,7 +217,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     opts.optopt("k", "key", "primary key to derive put-key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
     let k = matches_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
@@ -222,7 +237,7 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
         "PATH",
     );
     opts.reqopt("o", "output", "output file.", "PATH");
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
     let k = matches_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
@@ -384,30 +399,43 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "format",
-        "Output format, valid values are human | jsonl.",
+        "Output format, valid values are 'human' or 'jsonl'.",
         "PATH",
     );
     query_opts(&mut opts);
 
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     let list_format = match matches.opt_str("format") {
         Some(f) => match &f[..] {
             "jsonl" => ListFormat::Jsonl,
             "human" => ListFormat::Human,
-            _ => failure::bail!("invalid --format, expected one of human | jsonl"),
+            _ => failure::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
         None => ListFormat::Human,
     };
 
-    let key = matches_to_key(&matches)?;
-    let primary_key_id = key.primary_key_id();
-    let metadata_dctx = match key {
-        keys::Key::PrimaryKeyV1(k) => crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk),
-        keys::Key::MetadataKeyV1(k) => {
-            crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+    let (primary_key_id, metadata_dctx) = match matches_to_opt_key(&matches)? {
+        Some(key) => {
+            let primary_key_id = key.primary_key_id();
+            let metadata_dctx = match key {
+                keys::Key::PrimaryKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
+                keys::Key::MetadataKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                }
+                _ => failure::bail!("provided key is not valid for metadata decryption"),
+            };
+
+            (Some(primary_key_id), Some(metadata_dctx))
         }
-        _ => failure::bail!("provided key is not a primary key"),
+        None => {
+            if !matches.opt_present("query-encrypted") {
+                failure::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
+            }
+            (None, None)
+        }
     };
 
     let query = if !matches.free.is_empty() {
@@ -489,6 +517,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             primary_key_id,
             query,
             metadata_dctx: metadata_dctx.clone(),
+            list_encrypted: matches.opt_present("query-encrypted"),
             utc_timestamps: matches.opt_present("utc-timestamps"),
             now: chrono::Utc::now(),
         },
@@ -507,11 +536,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         "Primary or put key to encrypt data with.",
         "PATH",
     );
-    opts.optflag(
-        "",
-        "no-compression",
-        "Disable compression (Use for for already compressed/encrypted data).",
-    );
+    opts.optflag("", "no-compression", "Disable compression.");
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
 
     opts.optflag("q", "quiet", "Suppress progress bars.");
@@ -544,7 +569,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         "PATTERN",
     );
 
-    let matches = default_parse_opts(opts, &args);
+    let matches = parse_cli_opts(opts, &args);
 
     let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$").unwrap();
 
@@ -749,7 +774,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     query_opts(&mut opts);
     opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
 
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
@@ -810,8 +835,9 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             let mut tx = query_cache.transaction()?;
             tx.list(
                 querycache::ListOptions {
-                    primary_key_id,
-                    metadata_dctx: metadata_dctx.clone(),
+                    primary_key_id: Some(primary_key_id),
+                    metadata_dctx: Some(metadata_dctx.clone()),
+                    list_encrypted: matches.opt_present("query-encrypted"),
                     utc_timestamps: matches.opt_present("utc-timestamps"),
                     query: Some(query),
                     now: chrono::Utc::now(),
@@ -863,7 +889,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     opts.optflag("", "allow-many", "Allow multiple removals.");
 
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     let progress = matches_to_progress_bar(
         &matches,
@@ -912,16 +938,29 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                     &mut serve_in,
                 )?;
 
-                let key = matches_to_key(&matches)?;
-                let primary_key_id = key.primary_key_id();
-                let metadata_dctx = match key {
-                    keys::Key::PrimaryKeyV1(k) => {
-                        crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                let (primary_key_id, metadata_dctx) = match matches_to_opt_key(&matches)? {
+                    Some(key) => {
+                        let primary_key_id = key.primary_key_id();
+                        let metadata_dctx = match key {
+                            keys::Key::PrimaryKeyV1(k) => {
+                                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                            }
+                            keys::Key::MetadataKeyV1(k) => {
+                                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                            }
+                            _ => {
+                                failure::bail!("provided key is not valid for metadata decryption")
+                            }
+                        };
+
+                        (Some(primary_key_id), Some(metadata_dctx))
                     }
-                    keys::Key::MetadataKeyV1(k) => {
-                        crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                    None => {
+                        if !matches.opt_present("query-encrypted") {
+                            failure::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
+                        }
+                        (None, None)
                     }
-                    _ => failure::bail!("provided key is not a decryption key"),
                 };
 
                 let mut ids = Vec::new();
@@ -935,8 +974,9 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 let mut tx = query_cache.transaction()?;
                 tx.list(
                     querycache::ListOptions {
-                        primary_key_id,
+                        primary_key_id: primary_key_id,
                         metadata_dctx: metadata_dctx.clone(),
+                        list_encrypted: matches.opt_present("query-encrypted"),
                         utc_timestamps: matches.opt_present("utc-timestamps"),
                         query: Some(query),
                         now: chrono::Utc::now(),
@@ -968,7 +1008,7 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag("q", "quiet", "Suppress progress bars.");
 
     repo_opts(&mut opts);
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     let progress = matches_to_progress_bar(
         &matches,
@@ -1029,7 +1069,7 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         "Allow client to get data from the repository.",
     );
 
-    let matches = default_parse_opts(opts, &args[..]);
+    let matches = parse_cli_opts(opts, &args[..]);
 
     if matches.free.len() != 1 {
         die("Expected a single repository path to serve.".to_string());

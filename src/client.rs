@@ -147,7 +147,7 @@ pub fn send(
         _ => failure::bail!("protocol error, expected begin ack packet"),
     };
 
-    'retry: for _i in 0..100 {
+    'retry: for _i in 0..256 {
         let send_log_session = match send_log {
             Some(ref mut send_log) => Some(std::cell::RefCell::new(
                 send_log.session(ack.gc_generation)?,

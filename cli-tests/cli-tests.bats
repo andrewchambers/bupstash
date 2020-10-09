@@ -380,3 +380,12 @@ _concurrent_modify_worker () {
     bupstash get id=$id | tar -t > /dev/null
   done
 }
+
+@test "list and rm no key" {
+  bupstash put -e echo hello1
+  bupstash put -e echo hello2
+  unset BUPSTASH_KEY
+  test 2 = "$(bupstash list --query-encrypted | wc -l)"
+  bupstash rm --allow-many --query-encrypted id='*'
+  test 0 = "$(bupstash list --query-encrypted | wc -l)"
+}

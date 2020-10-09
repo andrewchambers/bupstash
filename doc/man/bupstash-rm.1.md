@@ -55,6 +55,11 @@ more information on the query cache.
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
+* --query-encrypted:
+  The query will also match against items with missing decryption keys,
+  this option inserts the query tags 'key-id=ID' and 'metadata-encrypted=yes|no' into items
+  so they may be searched against.
+
 * --ids-from-stdin:
   Remove items with IDs read from stdin, one per line, instead of executing a query.
 

@@ -447,6 +447,33 @@ pub fn query_matches(q: &Query, ctx: &QueryContext) -> bool {
     }
 }
 
+pub struct QueryEncryptedContext<'a> {
+    pub tagset: &'a BTreeMap<String, String>,
+}
+
+pub fn query_matches_encrypted(q: &Query, ctx: &QueryEncryptedContext) -> bool {
+    match q {
+        Query::Glob { tag, pattern, .. } => match ctx.tagset.get(tag) {
+            Some(v) => pattern.matches(v),
+            None => false,
+        },
+        Query::Binop {
+            op, left, right, ..
+        } => match op {
+            Binop::And => {
+                query_matches_encrypted(&left, ctx) && query_matches_encrypted(&right, ctx)
+            }
+            Binop::Or => {
+                query_matches_encrypted(&left, ctx) || query_matches_encrypted(&right, ctx)
+            }
+        },
+        Query::Unop { op, query, .. } => match op {
+            Unop::Not => !query_matches_encrypted(&query, ctx),
+        },
+        Query::AgeAssertion { .. } => false,
+    }
+}
+
 pub fn get_id_query(q: &Query) -> Option<Xid> {
     match q {
         Query::Glob { tag, pattern, .. }
@@ -484,6 +511,7 @@ mod tests {
             age: std::time::Duration::new(5, 0),
             tagset: &tagset,
         };
+        let ectx = QueryEncryptedContext { tagset: &tagset };
         assert!(query_matches(&parse("foo=123•and•bar=").unwrap(), &ctx));
         assert!(query_matches(&parse("foo=12*").unwrap(), &ctx));
         assert!(query_matches(&parse("foo=12?").unwrap(), &ctx));
@@ -493,5 +521,21 @@ mod tests {
         assert!(!query_matches(&parse("older-than•6s").unwrap(), &ctx));
         assert!(!query_matches(&parse("newer-than•2s").unwrap(), &ctx));
         assert!(!query_matches(&parse("~•[•foo==123•]").unwrap(), &ctx));
+
+        assert!(query_matches_encrypted(
+            &parse("foo=123•and•bar=").unwrap(),
+            &ectx
+        ));
+        assert!(query_matches_encrypted(&parse("foo=12*").unwrap(), &ectx));
+        assert!(query_matches_encrypted(&parse("foo=12?").unwrap(), &ectx));
+        assert!(query_matches_encrypted(&parse("~foo=xxx").unwrap(), &ectx));
+        assert!(!query_matches_encrypted(
+            &parse("older-than•2s").unwrap(),
+            &ectx
+        ));
+        assert!(!query_matches_encrypted(
+            &parse("newer-than•6s").unwrap(),
+            &ectx
+        ));
     }
 }

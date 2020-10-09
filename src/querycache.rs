@@ -14,9 +14,10 @@ pub struct QueryCacheTx<'a> {
 
 pub struct ListOptions {
     pub now: chrono::DateTime<chrono::Utc>,
+    pub list_encrypted: bool,
     pub utc_timestamps: bool,
-    pub primary_key_id: Xid,
-    pub metadata_dctx: crypto::DecryptionContext,
+    pub primary_key_id: Option<Xid>,
+    pub metadata_dctx: Option<crypto::DecryptionContext>,
     pub query: Option<query::Query>,
 }
 
@@ -191,25 +192,33 @@ impl<'a> QueryCacheTx<'a> {
         let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
             match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if metadata.plain_text_metadata.primary_key_id != opts.primary_key_id {
-                        /* XXX, we should allow some sort of notification or query on
-                          keys that do not match.
-                        */
-                        return Ok(());
-                    } else {
-                        let mut metadata = metadata.decrypt_metadata(&mut opts.metadata_dctx)?;
+                    if opts.primary_key_id.is_some()
+                        && opts.primary_key_id.unwrap()
+                            == metadata.plain_text_metadata.primary_key_id
+                    {
+                        let mut dmetadata =
+                            metadata.decrypt_metadata(opts.metadata_dctx.as_mut().unwrap())?;
 
                         let ts = if opts.utc_timestamps {
-                            metadata.timestamp.format("%Y/%m/%d %T").to_string()
+                            dmetadata.timestamp.format("%Y/%m/%d %T").to_string()
                         } else {
                             let local_ts: chrono::DateTime<chrono::Local> =
-                                chrono::DateTime::from(metadata.timestamp);
+                                chrono::DateTime::from(dmetadata.timestamp);
                             local_ts.format("%Y/%m/%d %T").to_string()
                         };
 
                         // Add special builtin tags.
-                        metadata.tags.insert("id".to_string(), item_id.to_string());
-                        metadata.tags.insert("timestamp".to_string(), ts);
+                        dmetadata.tags.insert("id".to_string(), item_id.to_string());
+                        dmetadata.tags.insert("timestamp".to_string(), ts);
+                        if opts.list_encrypted {
+                            dmetadata.tags.insert(
+                                "key-id".to_string(),
+                                metadata.plain_text_metadata.primary_key_id.to_string(),
+                            );
+                            dmetadata
+                                .tags
+                                .insert("metadata-encrypted".to_string(), "no".to_string());
+                        }
 
                         let query_matches = match opts.query {
                             Some(ref query) => query::query_matches(
@@ -217,16 +226,45 @@ impl<'a> QueryCacheTx<'a> {
                                 &query::QueryContext {
                                     age: opts
                                         .now
-                                        .signed_duration_since(metadata.timestamp)
+                                        .signed_duration_since(dmetadata.timestamp)
                                         .to_std()?,
-                                    tagset: &metadata.tags,
+                                    tagset: &dmetadata.tags,
                                 },
                             ),
                             None => true,
                         };
 
                         if query_matches {
-                            on_match(item_id, metadata.tags)?;
+                            on_match(item_id, dmetadata.tags)?;
+                        }
+
+                        Ok(())
+                    } else {
+                        if !opts.list_encrypted {
+                            return Ok(());
+                        }
+
+                        let mut tags = std::collections::BTreeMap::new();
+
+                        tags.insert("id".to_string(), item_id.to_string());
+                        if opts.list_encrypted {
+                            tags.insert(
+                                "key-id".to_string(),
+                                metadata.plain_text_metadata.primary_key_id.to_string(),
+                            );
+                            tags.insert("metadata-encrypted".to_string(), "yes".to_string());
+                        }
+
+                        let query_matches = match opts.query {
+                            Some(ref query) => query::query_matches_encrypted(
+                                query,
+                                &query::QueryEncryptedContext { tagset: &tags },
+                            ),
+                            None => true,
+                        };
+
+                        if query_matches {
+                            on_match(item_id, tags)?;
                         }
 
                         Ok(())

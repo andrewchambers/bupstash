@@ -51,6 +51,11 @@ the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   Primary key used to decrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
+* --query-encrypted:
+  The query will also match against items with missing decryption keys,
+  this option inserts the query tags 'key-id=ID' and 'metadata-encrypted=yes|no' into items
+  so they may be searched against.
+
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
