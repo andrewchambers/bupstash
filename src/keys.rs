@@ -79,14 +79,7 @@ impl Key {
             .open(path)
             .with_context(|e| format!("error opening {}: {}", path, e))?; // Give read/write for owner and read for others.
 
-        let pem_data = pem::encode(&pem::Pem {
-            tag: String::from(pem_tag(self)),
-            contents: serde_bare::to_vec(self)?,
-        });
-
-        f.write_all(
-            format!("# This file is a bupstash key.{}\n", self.id().to_string()).as_bytes(),
-        )?;
+        f.write_all("# This file contains a cryptographic key used by 'bupstash' to encrypt and decrypt data.\n#\n".to_string().as_bytes())?;
         f.write_all(format!("# key-id={}\n", self.id().to_string()).as_bytes())?;
 
         match self {
@@ -101,8 +94,15 @@ impl Key {
                 )?;
             }
         }
+        f.write_all("\n".to_string().as_bytes())?;
 
+        let pem_data = pem::encode(&pem::Pem {
+            tag: String::from(pem_tag(self)),
+            contents: serde_bare::to_vec(self)?,
+        });
         f.write_all(pem_data.as_bytes())?;
+
+        f.flush()?;
 
         Ok(())
     }
