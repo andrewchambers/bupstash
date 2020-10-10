@@ -84,8 +84,26 @@ impl Key {
             contents: serde_bare::to_vec(self)?,
         });
 
-        f.write_all(pem_data.as_bytes())
-            .with_context(|e| format!("writing key file failed: {}", e))?;
+        f.write_all(
+            format!("# This file is a bupstash key.{}\n", self.id().to_string()).as_bytes(),
+        )?;
+        f.write_all(format!("# key-id={}\n", self.id().to_string()).as_bytes())?;
+
+        match self {
+            Key::PrimaryKeyV1(_) => (),
+            Key::PutKeyV1(_) | Key::MetadataKeyV1(_) => {
+                f.write_all(
+                    format!(
+                        "# derived-from-key-id={}\n",
+                        self.primary_key_id().to_string(),
+                    )
+                    .as_bytes(),
+                )?;
+            }
+        }
+
+        f.write_all(pem_data.as_bytes())?;
+
         Ok(())
     }
 

@@ -88,9 +88,9 @@ fn query_opts(opts: &mut Options) {
     opts.optflag(
         "",
         "query-encrypted",
-        "The query will also match against items with missing decryption keys, \
-        this option inserts the query tags 'key-id=ID' and 'metadata-encrypted=yes|no' into items \
-        so they may be searched against.",
+        "The query will not decrypt any metadata, allowing you to \
+        list items you do not have a decryption key for.\
+        This option inserts the pseudo query tag 'decryption-key-id'.",
     );
     opts.optflag(
         "",

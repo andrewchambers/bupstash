@@ -56,9 +56,9 @@ more information on the query cache.
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 * --query-encrypted:
-  The query will also match against items with missing decryption keys,
-  this option inserts the query tags 'key-id=ID' and 'metadata-encrypted=yes|no' into items
-  so they may be searched against.
+  The query will not decrypt any metadata, allowing you to
+  list items you do not have a decryption key for.
+  This option inserts the pseudo query tag 'decryption-key-id'.
 
 * --ids-from-stdin:
   Remove items with IDs read from stdin, one per line, instead of executing a query.

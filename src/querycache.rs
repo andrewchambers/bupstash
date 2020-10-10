@@ -192,7 +192,8 @@ impl<'a> QueryCacheTx<'a> {
         let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
             match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {
-                    if opts.primary_key_id.is_some()
+                    if !opts.list_encrypted
+                        && opts.primary_key_id.is_some()
                         && opts.primary_key_id.unwrap()
                             == metadata.plain_text_metadata.primary_key_id
                     {
@@ -210,15 +211,6 @@ impl<'a> QueryCacheTx<'a> {
                         // Add special builtin tags.
                         dmetadata.tags.insert("id".to_string(), item_id.to_string());
                         dmetadata.tags.insert("timestamp".to_string(), ts);
-                        if opts.list_encrypted {
-                            dmetadata.tags.insert(
-                                "key-id".to_string(),
-                                metadata.plain_text_metadata.primary_key_id.to_string(),
-                            );
-                            dmetadata
-                                .tags
-                                .insert("metadata-encrypted".to_string(), "no".to_string());
-                        }
 
                         let query_matches = match opts.query {
                             Some(ref query) => query::query_matches(
@@ -247,13 +239,10 @@ impl<'a> QueryCacheTx<'a> {
                         let mut tags = std::collections::BTreeMap::new();
 
                         tags.insert("id".to_string(), item_id.to_string());
-                        if opts.list_encrypted {
-                            tags.insert(
-                                "key-id".to_string(),
-                                metadata.plain_text_metadata.primary_key_id.to_string(),
-                            );
-                            tags.insert("metadata-encrypted".to_string(), "yes".to_string());
-                        }
+                        tags.insert(
+                            "decryption-key-id".to_string(),
+                            metadata.plain_text_metadata.primary_key_id.to_string(),
+                        );
 
                         let query_matches = match opts.query {
                             Some(ref query) => query::query_matches_encrypted(
