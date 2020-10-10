@@ -265,6 +265,7 @@ impl Repo {
     pub fn alter_lock_mode(&mut self, repo_lock_mode: LockMode) -> Result<(), failure::Error> {
         self._repo_lock = None;
         self._repo_lock_mode = repo_lock_mode.clone();
+        // On error we should perhaps put a poison value.
         self._repo_lock = match repo_lock_mode {
             LockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
                 &self.repo_path,
@@ -371,11 +372,49 @@ impl Repo {
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
         match self._repo_lock_mode {
-            LockMode::Exclusive => (),
-            _ => failure::bail!("unable to collect garbage without an exclusive lock"),
+            LockMode::Shared | LockMode::Exclusive => (),
+            // XXX add poison lock value.
+            // _ => failure::bail!("unable to collect garbage without a repository lock"),
         }
 
-        update_progress_msg("preparing repository...".to_string())?;
+        let mut reachable: HashSet<Address> = std::collections::HashSet::new();
+        let mut storage_engine = self.storage_engine()?;
+
+        let mut walk_item = |_op_id, _item_id, metadata| match metadata {
+            itemset::VersionedItemMetadata::V1(metadata) => {
+                let addr = &metadata.plain_text_metadata.address;
+                // IDEA:
+                // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
+                // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
+                let mut tr = htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
+                while let Some((height, addr)) = tr.next_addr()? {
+                    if !reachable.contains(&addr) {
+                        reachable.insert(addr);
+                        if height != 0 {
+                            let data = storage_engine.get_chunk(&addr)?;
+                            tr.push_level(height - 1, data)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        };
+
+        update_progress_msg("walking reachable data...".to_string())?;
+
+        {
+            // Walk all reachable data WITHOUT an exclusive lock, this means
+            // we should be able to walk most of the data except data
+            // that arrives between the end of this walk and us getting the
+            // exclusive lock on the repository.
+            let tx = self.conn.transaction()?;
+            update_progress_msg("walking reachable data...".to_string())?;
+            itemset::walk_items(&tx, &mut walk_item)?;
+            tx.commit()?;
+        }
+
+        update_progress_msg("acquiring exclusive repository lock...".to_string())?;
+        self.alter_lock_mode(LockMode::Exclusive)?;
 
         // We must COMMIT the new gc generation before we start
         // deleting any chunks, the gc generation is how we invalidate
@@ -385,36 +424,16 @@ impl Repo {
             rusqlite::params![Xid::new()],
         )?;
 
-        let mut reachable: HashSet<Address> = std::collections::HashSet::new();
-        let mut storage_engine = self.storage_engine()?;
-
         {
             let tx = self.conn.transaction()?;
 
             update_progress_msg("compacting item log...".to_string())?;
             itemset::compact(&tx)?;
 
-            update_progress_msg("walking reachable data...".to_string())?;
-            itemset::walk_items(&tx, &mut |_op_id, _item_id, metadata| match metadata {
-                itemset::VersionedItemMetadata::V1(metadata) => {
-                    let addr = &metadata.plain_text_metadata.address;
-                    // IDEA:
-                    // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
-                    // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
-                    let mut tr =
-                        htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
-                    while let Some((height, addr)) = tr.next_addr()? {
-                        if !reachable.contains(&addr) {
-                            reachable.insert(addr);
-                            if height != 0 {
-                                let data = storage_engine.get_chunk(&addr)?;
-                                tr.push_level(height - 1, data)?;
-                            }
-                        }
-                    }
-                    Ok(())
-                }
-            })?;
+            update_progress_msg("finalizing reachable data...".to_string())?;
+            // Will skip items that we already processed when we did not hold
+            // an exclusive repository lock.
+            itemset::walk_items(&tx, &mut walk_item)?;
             tx.commit()?;
         }
 

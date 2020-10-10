@@ -258,12 +258,7 @@ fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), fai
         Ok(())
     };
 
-    let stats = {
-        repo.alter_lock_mode(repository::LockMode::Exclusive)?;
-        let stats = repo.gc(&mut update_progress_msg);
-        repo.alter_lock_mode(repository::LockMode::Shared)?;
-        stats?
-    };
+    let stats = repo.gc(&mut update_progress_msg)?;
 
     write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())
