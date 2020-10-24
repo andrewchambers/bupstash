@@ -214,9 +214,9 @@ pub fn send(
                 ) {
                     Ok(()) => (),
                     Err(SendDirError::FilesystemModified) => {
-                        ctx.progress.println(format!(
-                            "filesystem modified while sending, restarting send...",
-                        ));
+                        ctx.progress.println(
+                            "filesystem modified while sending, restarting send...".to_string(),
+                        );
                         if let Some(ref send_log_session) = send_log_session {
                             write_packet(w, &Packet::TSendSync)?;
                             match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -366,10 +366,10 @@ impl From<nix::Error> for SendDirError {
 // A smear error is an error likely caused by the filesystem being altered
 // by a concurrent process as we are making a snapshot.
 fn likely_smear_error(err: &std::io::Error) -> bool {
-    match err.kind() {
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput => true,
-        _ => false,
-    }
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
+    )
 }
 
 fn send_dir(
@@ -401,7 +401,7 @@ fn send_dir(
             Err(err) => return Err(SendDirError::Other(err.into())),
         };
 
-        dir_ents.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        dir_ents.sort_by_key(|a| a.file_name());
 
         let mut tar_dir_ents = Vec::new();
 

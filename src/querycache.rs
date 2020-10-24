@@ -86,7 +86,7 @@ impl QueryCache {
         Ok(QueryCache { conn })
     }
 
-    pub fn transaction(self: &mut Self) -> Result<QueryCacheTx, failure::Error> {
+    pub fn transaction(&mut self) -> Result<QueryCacheTx, failure::Error> {
         let tx = self.conn.transaction()?;
         Ok(QueryCacheTx { tx })
     }
@@ -104,7 +104,7 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn last_log_op(self: &mut Self) -> Result<i64, failure::Error> {
+    pub fn last_log_op(&mut self) -> Result<i64, failure::Error> {
         let last_id = match self.tx.query_row(
             "select OpId from ItemOpLog order by OpId desc limit 1;",
             rusqlite::NO_PARAMS,
@@ -136,7 +136,7 @@ impl<'a> QueryCacheTx<'a> {
         }
     }
 
-    pub fn start_sync(self: &mut Self, gc_generation: Xid) -> Result<(), failure::Error> {
+    pub fn start_sync(&mut self, gc_generation: Xid) -> Result<(), failure::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
@@ -168,7 +168,7 @@ impl<'a> QueryCacheTx<'a> {
     }
 
     pub fn sync_op(
-        self: &mut Self,
+        &mut self,
         op_id: i64,
         item_id: Option<Xid>,
         op: itemset::LogOp,
@@ -176,13 +176,13 @@ impl<'a> QueryCacheTx<'a> {
         itemset::sync_ops(&self.tx, op_id, item_id, &op)
     }
 
-    pub fn commit(self: Self) -> Result<(), failure::Error> {
+    pub fn commit(self) -> Result<(), failure::Error> {
         self.tx.commit()?;
         Ok(())
     }
 
     pub fn list(
-        self: &mut Self,
+        &mut self,
         mut opts: ListOptions,
         on_match: &mut dyn FnMut(
             Xid,

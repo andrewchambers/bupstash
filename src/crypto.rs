@@ -29,20 +29,14 @@ pub fn init() {
 #[inline(always)]
 pub fn randombytes(buf: &mut [u8]) {
     unsafe {
-        sodium::randombytes_buf(
-            buf.as_mut_ptr() as *mut std::ffi::c_void,
-            buf.len().try_into().unwrap(),
-        );
+        sodium::randombytes_buf(buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len());
     }
 }
 
 #[inline(always)]
 pub fn memzero(buf: &mut [u8]) {
     unsafe {
-        sodium::sodium_memzero(
-            buf.as_mut_ptr() as *mut std::ffi::c_void,
-            buf.len().try_into().unwrap(),
-        );
+        sodium::sodium_memzero(buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len());
     }
 }
 
@@ -59,12 +53,7 @@ impl BoxNonce {
     }
 
     pub fn inc(&mut self) {
-        unsafe {
-            sodium::sodium_increment(
-                self.bytes.as_mut_ptr(),
-                self.bytes.len().try_into().unwrap(),
-            )
-        }
+        unsafe { sodium::sodium_increment(self.bytes.as_mut_ptr(), self.bytes.len()) }
     }
 }
 
@@ -170,11 +159,11 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedK
         unsafe {
             if sodium::crypto_generichash(
                 mixed_key_bytes.as_mut_ptr(),
-                mixed_key_bytes.len().try_into().unwrap(),
+                mixed_key_bytes.len(),
                 unmixed_key_bytes.as_ptr(),
                 unmixed_key_bytes.len().try_into().unwrap(),
                 psk.bytes.as_ptr(),
-                psk.bytes.len().try_into().unwrap(),
+                psk.bytes.len(),
             ) != 0
             {
                 panic!();
@@ -475,12 +464,8 @@ impl HashState {
                 } else {
                     std::ptr::null()
                 },
-                if let Some(k) = key {
-                    k.bytes.len().try_into().unwrap()
-                } else {
-                    0
-                },
-                HASH_BYTES.try_into().unwrap(),
+                if let Some(k) = key { k.bytes.len() } else { 0 },
+                HASH_BYTES,
             )
         } != 0
         {
@@ -508,7 +493,7 @@ impl HashState {
             sodium::crypto_generichash_final(
                 &mut self.st as *mut sodium::crypto_generichash_state,
                 out.as_mut_ptr(),
-                out.len().try_into().unwrap(),
+                out.len(),
             )
         } != 0
         {

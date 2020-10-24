@@ -8,8 +8,7 @@ pub fn encode(buf: &[u8]) -> String {
         sodium::sodium_base64_encoded_len(buf.len(), sodium::sodium_base64_VARIANT_ORIGINAL as i32)
     };
 
-    let mut out_buf: Vec<u8> = Vec::with_capacity(max_out_len);
-    out_buf.resize(max_out_len, 0);
+    let mut out_buf = vec![0; max_out_len];
 
     unsafe {
         assert!(!sodium::sodium_bin2base64(
@@ -36,9 +35,7 @@ pub fn encode(buf: &[u8]) -> String {
 
 pub fn decode(data: &str) -> Option<Vec<u8>> {
     let mut out_len = 0;
-
-    let mut out_buf: Vec<u8> = Vec::with_capacity(data.len());
-    out_buf.resize(data.len(), 0);
+    let mut out_buf = vec![0; data.len()];
 
     let rc = unsafe {
         sodium::sodium_base642bin(
@@ -48,7 +45,7 @@ pub fn decode(data: &str) -> Option<Vec<u8>> {
             data.len(),
             std::ptr::null(),
             &mut out_len as *mut usize,
-            0 as *mut *const i8,
+            std::ptr::null_mut::<*const i8>(),
             sodium::sodium_base64_VARIANT_ORIGINAL as i32,
         )
     };

@@ -101,7 +101,7 @@ impl SendLog {
         Ok(SendLog { conn })
     }
 
-    pub fn session(self: &mut Self, gc_generation: Xid) -> Result<SendLogSession, failure::Error> {
+    pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, failure::Error> {
         // We manually control the sqlite3 transaction so we are able
         // to issue checkpoints and commit part way through a send operation.
         self.conn.execute("begin;", rusqlite::NO_PARAMS)?;
@@ -114,7 +114,7 @@ impl SendLog {
         })
     }
 
-    pub fn last_send_id(self: &Self) -> Result<Option<Xid>, failure::Error> {
+    pub fn last_send_id(&self) -> Result<Option<Xid>, failure::Error> {
         match self.conn.query_row(
             "select value from LogMeta where key = 'last-send-id';",
             rusqlite::NO_PARAMS,
@@ -131,14 +131,11 @@ impl SendLog {
 }
 
 impl<'a> SendLogSession<'a> {
-    pub fn last_send_id(self: &Self) -> Result<Option<Xid>, failure::Error> {
+    pub fn last_send_id(&self) -> Result<Option<Xid>, failure::Error> {
         self.log.last_send_id()
     }
 
-    pub fn perform_cache_invalidations(
-        self: &Self,
-        had_send_id: bool,
-    ) -> Result<(), failure::Error> {
+    pub fn perform_cache_invalidations(&self, had_send_id: bool) -> Result<(), failure::Error> {
         if !self.tx_active {
             panic!()
         };
@@ -168,7 +165,7 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn add_address(self: &Self, addr: &Address) -> Result<(), failure::Error> {
+    pub fn add_address(&self, addr: &Address) -> Result<(), failure::Error> {
         if !self.tx_active {
             failure::bail!("no active transaction");
         };
@@ -187,7 +184,7 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn cached_address(self: &Self, addr: &Address) -> Result<bool, failure::Error> {
+    pub fn cached_address(&self, addr: &Address) -> Result<bool, failure::Error> {
         let mut stmt = self
             .log
             .conn

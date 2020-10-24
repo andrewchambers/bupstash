@@ -72,7 +72,7 @@ pub fn dirent_to_tarheader(
                 let path_record = format_pax_extended_record(b"path", path_bytes);
                 pax_ext_records.extend_from_slice(&path_record);
             } else {
-                return Err(e.into());
+                return Err(e);
             }
         }
     }
@@ -94,7 +94,7 @@ pub fn dirent_to_tarheader(
                         let target_record = format_pax_extended_record(b"linkpath", target_bytes);
                         pax_ext_records.extend_from_slice(&target_record);
                     } else {
-                        return Err(err.into());
+                        return Err(err);
                     }
                 }
             }

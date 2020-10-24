@@ -516,7 +516,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         querycache::ListOptions {
             primary_key_id,
             query,
-            metadata_dctx: metadata_dctx.clone(),
+            metadata_dctx,
             list_encrypted: matches.opt_present("query-encrypted"),
             utc_timestamps: matches.opt_present("utc-timestamps"),
             now: chrono::Utc::now(),
@@ -974,8 +974,8 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 let mut tx = query_cache.transaction()?;
                 tx.list(
                     querycache::ListOptions {
-                        primary_key_id: primary_key_id,
-                        metadata_dctx: metadata_dctx.clone(),
+                        primary_key_id,
+                        metadata_dctx,
                         list_encrypted: matches.opt_present("query-encrypted"),
                         utc_timestamps: matches.opt_present("utc-timestamps"),
                         query: Some(query),
