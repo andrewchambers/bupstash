@@ -111,7 +111,7 @@ Currently we only precompile for linux (help wanted for more platforms).
 
 # Guides and documentation
 
-Check the [Quickstart guide](./doc/quickstart.md) for an introductory tutorial.
+Check the [Quickstart guide](./doc/guides/Quick Start.md) for an introductory tutorial.
 
 
 Check the [Man pages](./doc/man) for more comprehensive documentation.

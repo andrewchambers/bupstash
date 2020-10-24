@@ -1,4 +1,4 @@
-# bupstash 
+# Getting started
 
 bupstash is an easy to use tool for making encrypted space efficient backups. Bupstash
 is special because it is open source, and stores all data AND metadata in an encrypted
@@ -33,7 +33,7 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
-# Initializing your repository
+## Initializing your repository
 
 First we must initialize a repository to save data into, for that we use the `bupstash init` command.
 
@@ -53,7 +53,7 @@ $ bupstash init
 As a side note, because bupstash accepts some commonly typed options from environment variables, you can
 add them to your .bashrc or other equivalent file to avoid retyping them.
 
-# Generating an encryption key
+## Generating an encryption key
 
 All data stored in a bupstash repository is encrypted, so first we need to generate an encryption key.
 
@@ -66,7 +66,7 @@ KEEP THIS KEY SAFE, if you lose it, you will have lost all your backups made wit
 
 Later sections will explain how to create and use secure offline keys.
 
-# Making snapshots
+## Making snapshots
 
 First we must tell bupstash which encryption key to use.
 ```
@@ -108,7 +108,7 @@ $ bupstash put --exec echo hello
 Note that bupstash automatically applies compression and deduplicates your data so you 
 do not need to do this manually.
 
-# Listing snapshots
+## Listing snapshots
 
 ```
 $ bupstash list 
@@ -133,7 +133,7 @@ $ bupstash list name=backup.tar and newer-than 7d
 
 For a full description of the query language see the query language manual pages.
 
-# Snapshot tags
+## Snapshot tags
 
 When we make snapshots, we can add our own arbitrary tags in addition to the default tags:
 
@@ -142,7 +142,7 @@ $ bupstash put mykey=value ./my-important-files
 $ bupstash list mykey=value
 ```
 
-# Fetching snapshots
+## Fetching snapshots
 
 Once we have snapshots, we can fetch them again with `bupstash get` using arbitrary
 queries.
@@ -152,7 +152,7 @@ $ id=$(bupstash put ./dir)
 $ bupstash get id=$id | tar -xvf -
 ```
 
-# Removing snapshots
+## Removing snapshots
 
 We can remove snapshots via the same query language and the `bupstash rm` command.
 
@@ -167,7 +167,7 @@ garbage collector.
 $ bupstash gc
 ```
 
-# Secure offline keys
+## Secure offline keys
 
 In a high security setting, we do not want our decryption keys stored online where they could 
 inadvertantly be leaked. To support this bupstash has the notion of put keys and metadata keys.
@@ -208,45 +208,4 @@ have access to your existing snapshots.
 
 Note that we recommend creating a new put key for every backup client if you have a shared bupstash
 repository.
-
-
-# Access controls
-
-When designing a backup plan, we must remember that if ransomware or some other malicious agent compromises your computer,
-it may be able to delete your backups too. To solve this issue bupstash supports access controls on remote repositories
-that can be configured on a per ssh key basis. To do this, we can utilize ssh force commands to restrict a backup client to
-only run an instance of `bupstash serve` that has a limited permissions.
-
-The following assumes you have a backup server with a user called `backups` that has openssh sshd running,
-and a client computer with an ssh client installed.
-
-In your sshd config file on your server add the following lines:
-
-```
-Match User backups
-    ForceCommand "bupstash serve --allow-put /home/backups/bupstash-repository"
-```
-
-This means the backups user is only able to run the bupstash serve command with a hard coded set of permissions and repository
-path.
-
-Next add an ssh key you indend to use for backups to `$SERVER/home/backups/.ssh/authorized_keys`, such that the user sending
-backups can connect to the remote server using ssh based login.
-
-Because of our sshd configruation, the client is only authorized to create new backups, but not list or remove them:
-```
-export BUPSTASH_REPOSITORY="ssh://backups@$SERVER/backups"
-$ bupstash put ./files
-...
-$ bupstash list
-server has disabled query and search for this client
-```
-
-The `bupstash serve` command also supports allowing fetching data, entry removal and garbage collection. With these
-options we can create a backup plan where clients can create new backups, and an administrator is able to cycle old backups
-while keeping the decryption key offline.
-
-## More resources
-
-All bupstash commands, protocols and file formats are fully documented in the user manuals here (TODO).
 
