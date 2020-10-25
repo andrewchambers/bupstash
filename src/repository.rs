@@ -55,19 +55,28 @@ pub struct Repo {
 }
 
 impl Repo {
+    fn gc_lock_path(repo_path: &Path) -> PathBuf {
+        let mut lock_path = repo_path.to_path_buf();
+        lock_path.push("gc.lock");
+        lock_path
+    }
+
     fn repo_lock_path(repo_path: &Path) -> PathBuf {
         let mut lock_path = repo_path.to_path_buf();
         lock_path.push("repo.lock");
         lock_path
     }
 
-    fn open_db_with_flags(
-        repo_path: &Path,
-        flags: rusqlite::OpenFlags,
-    ) -> rusqlite::Result<rusqlite::Connection> {
+    fn repo_db_path(repo_path: &Path) -> PathBuf {
         let mut db_path = repo_path.to_path_buf();
         db_path.push("bupstash.sqlite3");
+        db_path
+    }
 
+    fn open_db_with_flags(
+        db_path: &Path,
+        flags: rusqlite::OpenFlags,
+    ) -> Result<rusqlite::Connection, failure::Error> {
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
 
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
@@ -77,9 +86,9 @@ impl Repo {
         Ok(conn)
     }
 
-    fn open_db(repo_path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+    fn open_db(db_path: &Path) -> Result<rusqlite::Connection, failure::Error> {
         let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
-        Repo::open_db_with_flags(repo_path, default_flags)
+        Repo::open_db_with_flags(db_path, default_flags)
     }
 
     pub fn init(
@@ -126,13 +135,17 @@ impl Repo {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
+        path_buf.push("gc.lock");
+        fsutil::create_empty_file(path_buf.as_path())?;
+        path_buf.pop();
+
         path_buf.push("storage-engine.json");
         let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
         fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
         path_buf.pop();
 
         let mut conn = Repo::open_db_with_flags(
-            &path_buf,
+            &Repo::repo_db_path(&path_buf),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
 
@@ -181,7 +194,7 @@ impl Repo {
 
         let repo_lock = fsutil::FileLock::get_shared(&Repo::repo_lock_path(&repo_path))?;
 
-        let conn = Repo::open_db(repo_path)?;
+        let conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
 
         let v: String = conn.query_row(
             "select Value from RepositoryMeta where Key='schema-version';",
@@ -357,53 +370,63 @@ impl Repo {
         itemset::walk_log(&tx, after, f)
     }
 
+    fn reachability_db_path(repo_path: &Path) -> PathBuf {
+        let mut db_path = repo_path.to_path_buf();
+        db_path.push("reachability.sqlite3");
+        db_path
+    }
+
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
+        update_progress_msg("acquiring exclusive garbage collection lock...".to_string())?;
+        let gc_lock = fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path))?;
+
         match self._repo_lock_mode {
             LockMode::Shared | LockMode::Exclusive => (),
             // XXX add poison lock value.
             // _ => failure::bail!("unable to collect garbage without a repository lock"),
         }
 
-        let reachability_db_path = {
-            let mut path = self.repo_path.clone();
-            path.push("reachability.sqlite3");
-            path
-        };
+        let reachability_db_path = Repo::reachability_db_path(&self.repo_path);
+        let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
+        let reachability_tx =
+            reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
 
-        let mut reachability_db = rusqlite::Connection::open_with_flags(
-            &reachability_db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
-        )?;
-
-        reachability_db.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
-
-        reachability_db.query_row(
-            "pragma locking_mode = EXCLUSIVE;",
+        reachability_tx.execute(
+            "create table if not exists ReachabilityMeta(Key primary key, Value) without rowid;",
             rusqlite::NO_PARAMS,
-            |_| Ok(()),
         )?;
 
-        update_progress_msg("acquiring garbage collection lock...".to_string())?;
-        // Create an exclusive transaction on the reachability database so we know.
-        match reachability_db.execute("begin exclusive;", rusqlite::NO_PARAMS) {
-            Ok(_) => (),
-            Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error { code, .. }, _))
-                if code == rusqlite::ffi::ErrorCode::DatabaseBusy
-                    || code == rusqlite::ffi::ErrorCode::DatabaseLocked =>
-            {
-                failure::bail!("garbage collection already in progress")
+        match reachability_tx.query_row(
+            "select Value from ReachabilityMeta where Key = 'schema-version';",
+            rusqlite::NO_PARAMS,
+            |r| {
+                let v: i64 = r.get(0)?;
+                Ok(v)
+            },
+        ) {
+            Ok(v) => {
+                if v != 0 {
+                    failure::bail!("reachability database is from a different version of the software and must be upgraded");
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                reachability_tx.execute(
+                    "insert into ReachabilityMeta(Key, Value) values('schema-version', 0);",
+                    rusqlite::NO_PARAMS,
+                )?;
             }
             Err(err) => return Err(err.into()),
-        };
+        }
 
-        reachability_db.execute("drop table if exists reachability;", rusqlite::NO_PARAMS)?;
-        reachability_db.execute(
-            "create table reachability(Address primary key) without rowid;",
+        // We want to maintain the invariant that the reachability table contains ALL reachable
+        // chunks, or it does not exist at all. This means we can't accidentally query an empty
+        // reachability table from a chunk storage plugin and delete everything.
+        reachability_tx.execute("drop table if exists Reachability;", rusqlite::NO_PARAMS)?;
+        reachability_tx.execute(
+            "create table Reachability(Address primary key) without rowid;",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -411,23 +434,20 @@ impl Repo {
 
         let mut walk_item = |_op_id, _item_id, metadata| match metadata {
             itemset::VersionedItemMetadata::V1(metadata) => {
-                let mut add_reachability_stmt = reachability_db.prepare_cached(
-                    "insert into reachability(Address) values(?) on conflict do nothing;",
+                let mut add_reachability_stmt = reachability_tx.prepare_cached(
+                    "insert into Reachability(Address) values(?) on conflict do nothing;",
                 )?;
 
                 let addr = &metadata.plain_text_metadata.address;
-                // IDEA:
                 // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
                 // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
                 let mut tr = htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
                 while let Some((height, addr)) = tr.next_addr()? {
                     let rows_changed =
                         add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
-                    if rows_changed != 0 {
-                        if height != 0 {
-                            let data = storage_engine.get_chunk(&addr)?;
-                            tr.push_level(height - 1, data)?;
-                        }
+                    if rows_changed != 0 && height != 0 {
+                        let data = storage_engine.get_chunk(&addr)?;
+                        tr.push_level(height - 1, data)?;
                     }
                 }
                 Ok(())
@@ -435,9 +455,8 @@ impl Repo {
         };
 
         update_progress_msg("walking reachable data...".to_string())?;
-
         {
-            // Walk all reachable data WITHOUT an exclusive lock, this means
+            // Walk all reachable data WITHOUT an exclusive repo lock, this means
             // we should be able to walk most of the data except data
             // that arrives between the end of this walk and us getting the
             // exclusive lock on the repository.
@@ -461,20 +480,16 @@ impl Repo {
         {
             let tx = self.conn.transaction()?;
 
-            update_progress_msg("compacting item log...".to_string())?;
-            itemset::compact(&tx)?;
-
             update_progress_msg("finalizing reachable data...".to_string())?;
             // Will skip items that we already processed when we did not hold
             // an exclusive repository lock.
             itemset::walk_items(&tx, &mut walk_item)?;
+
+            update_progress_msg("compacting item log...".to_string())?;
+            itemset::compact(&tx)?;
+
             tx.commit()?;
         }
-
-        // The after this commit, the reachability database now contains all reachable chunks.
-        // We also hold and exclusive lock on both the reachability database (due to pragma exclusive) and
-        // also on the whole repository itself due to the repository lock we upgraded.
-        reachability_db.execute("commit;", rusqlite::NO_PARAMS)?;
 
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
 
@@ -483,16 +498,24 @@ impl Repo {
             rusqlite::params![true],
         )?;
 
+        // The after this commit, the reachability database now contains all reachable chunks
+        // ready for use by the storage engine.
+        reachability_tx.commit()?;
+
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = storage_engine.gc(&reachability_db_path, &mut reachability_db)?;
+
+        // Remove the reachability database, it is not needed anymore.
+        std::fs::remove_file(reachability_db_path)?;
 
         self.conn.execute(
             "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
             rusqlite::params![false],
         )?;
 
-        reachability_db.execute("drop table if exists reachability;", rusqlite::NO_PARAMS)?;
-
+        // Release the exclusive gc lock explicitly to keep it alive
+        // during the duration of the full gc.
+        drop(gc_lock);
         Ok(stats)
     }
 }

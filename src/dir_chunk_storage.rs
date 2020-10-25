@@ -355,7 +355,7 @@ impl Engine for DirStorage {
 
         let reachability_tx = reachability_db.transaction()?;
         let mut check_reachability_stmt =
-            reachability_tx.prepare_cached("select 1 from reachability where Address = ?;")?;
+            reachability_tx.prepare_cached("select 1 from Reachability where Address = ?;")?;
 
         // Collect removals into memory first so we don't have to
         // worry about fs semantics of removing while iterating.

@@ -85,7 +85,9 @@ pub struct Abort {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct StorageBeginGC {}
+pub struct StorageBeginGC {
+    pub reachability_db_path: std::path::PathBuf,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -115,8 +117,7 @@ pub enum Packet {
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
-    StorageBeginGC,
-    StorageGCReachable(Vec<u8>), /* Actually vector of addresses, u8 to avoid copy */
+    StorageBeginGC(StorageBeginGC),
     StorageGCHeartBeat,
     StorageGCComplete(repository::GCStats),
     EndOfTransmission,
@@ -151,9 +152,8 @@ const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
 const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
 const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 103;
-const PACKET_KIND_STORAGE_GC_REACHABLE: u8 = 104;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 105;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 106;
+const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 104;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 105;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
@@ -240,8 +240,7 @@ pub fn read_packet_raw(
         PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
-        PACKET_KIND_STORAGE_GC_REACHABLE => Packet::StorageGCReachable(buf),
+        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
@@ -380,16 +379,10 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
-        Packet::StorageBeginGC => {
-            send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, 0)?;
-        }
-        Packet::StorageGCReachable(reachable) => {
-            send_hdr(
-                w,
-                PACKET_KIND_STORAGE_GC_REACHABLE,
-                reachable.len().try_into()?,
-            )?;
-            w.write_all(&reachable)?;
+        Packet::StorageBeginGC(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, b.len().try_into()?)?;
+            w.write_all(&b)?;
         }
         Packet::StorageGCHeartBeat => {
             send_hdr(w, PACKET_KIND_STORAGE_GC_HEARTBEAT, 0)?;
