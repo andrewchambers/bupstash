@@ -348,9 +348,14 @@ impl Engine for DirStorage {
 
     fn gc(
         &mut self,
-        reachable: std::collections::HashSet<Address>,
+        _reachability_db_path: &std::path::Path,
+        reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
+
+        let reachability_tx = reachability_db.transaction()?;
+        let mut check_reachability_stmt =
+            reachability_tx.prepare_cached("select 1 from reachability where Address = ?;")?;
 
         let mut entries = Vec::new();
         // Collect entries into memory first so we don't have to
@@ -367,7 +372,15 @@ impl Engine for DirStorage {
         for e in entries {
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
-                    if !reachable.contains(&addr) {
+                    let reachable = match check_reachability_stmt
+                        .query_row(rusqlite::params![&addr.bytes[..]], |_| Ok(()))
+                    {
+                        Ok(_) => true,
+                        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+                        Err(err) => return Err(err.into()),
+                    };
+
+                    if !reachable {
                         if let Ok(md) = e.metadata() {
                             bytes_freed += md.len() as usize
                         }

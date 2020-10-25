@@ -20,7 +20,6 @@ pub mod rollsum;
 pub mod sendlog;
 pub mod server;
 pub mod sodium;
-pub mod sqlite3_chunk_storage;
 pub mod xid;
 pub mod xtar;
 
@@ -150,7 +149,6 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
 
     let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
         Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
-        Some(s) if s == "sqlite3" => Some(repository::StorageEngineSpec::Sqlite3Store),
         Some(s) => match serde_json::from_str(&s) {
             Ok(s) => Some(s),
             Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),

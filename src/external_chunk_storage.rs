@@ -1,4 +1,4 @@
-use super::address::{Address, ADDRESS_SZ};
+use super::address::Address;
 use super::chunk_storage::Engine;
 use super::protocol;
 use super::repository;
@@ -310,7 +310,8 @@ impl Engine for ExternalStorage {
 
     fn gc(
         &mut self,
-        reachable: std::collections::HashSet<Address>,
+        _reachability_db_path: &std::path::Path,
+        _reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
 
@@ -318,6 +319,8 @@ impl Engine for ExternalStorage {
 
         protocol::write_packet(&mut sock, &protocol::Packet::StorageBeginGC)?;
 
+        failure::bail!("unimplemented, external chunk storage gc");
+        /* XXX Replace
         /* Transfer addresses over in chunks, terminated with an empty block */
         const ADDRESSES_PER_PACKET: usize = 4096;
         let mut reachable_part = Vec::with_capacity(ADDRESSES_PER_PACKET * ADDRESS_SZ);
@@ -338,7 +341,10 @@ impl Engine for ExternalStorage {
             )?;
             reachable_part.clear();
         }
+        */
+
         /* Empty block */
+        /*
         protocol::write_packet(
             &mut sock,
             &protocol::Packet::StorageGCReachable(reachable_part),
@@ -355,5 +361,6 @@ impl Engine for ExternalStorage {
                 Err(err) => return Err(err),
             }
         }
+        */
     }
 }
