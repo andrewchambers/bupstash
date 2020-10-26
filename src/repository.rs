@@ -149,7 +149,7 @@ impl Repo {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
 
-        conn.query_row("PRAGMA journal_mode = WAL;", rusqlite::NO_PARAMS, |_r| {
+        conn.query_row("PRAGMA journal_mode = WAL;", rusqlite::NO_PARAMS, |_| {
             Ok(())
         })?;
 
