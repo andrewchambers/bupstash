@@ -1,7 +1,9 @@
 use super::chunk_storage;
+use super::crypto;
 use super::dir_chunk_storage;
 use super::external_chunk_storage;
 use super::fsutil;
+use super::hex;
 use super::htree;
 use super::itemset;
 use super::xid::*;
@@ -59,6 +61,29 @@ impl Repo {
         let mut lock_path = repo_path.to_path_buf();
         lock_path.push("repo.lock");
         lock_path
+    }
+
+    fn tmp_dir_path(repo_path: &Path) -> PathBuf {
+        let mut lock_path = repo_path.to_path_buf();
+        lock_path.push("tmp");
+        lock_path
+    }
+
+    fn random_tmp_reachability_db_path(repo_path: &Path) -> PathBuf {
+        let random_suffix = {
+            let mut buf = [0; 16];
+            crypto::randombytes(&mut buf[..]);
+            hex::easy_encode_to_string(&buf[..])
+        };
+        let file_name = "reachability."
+            .chars()
+            .chain(random_suffix.chars())
+            .chain(".sqlite3".chars())
+            .collect::<String>();
+
+        let mut db_path = Repo::tmp_dir_path(repo_path);
+        db_path.push(file_name);
+        db_path
     }
 
     fn repo_db_path(repo_path: &Path) -> PathBuf {
@@ -127,6 +152,10 @@ impl Repo {
 
         path_buf.push("repo.lock");
         fsutil::create_empty_file(path_buf.as_path())?;
+        path_buf.pop();
+
+        path_buf.push("tmp");
+        fs::DirBuilder::new().create(path_buf.as_path())?;
         path_buf.pop();
 
         path_buf.push("storage-engine.json");
@@ -362,31 +391,36 @@ impl Repo {
         itemset::walk_log(&tx, after, f)
     }
 
-    fn reachability_db_path(repo_path: &Path) -> PathBuf {
-        let mut db_path = repo_path.to_path_buf();
-        db_path.push("reachability.sqlite3");
-        db_path
-    }
-
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
-        match self._repo_lock_mode {
-            LockMode::Shared | LockMode::Exclusive => (),
-            // XXX add poison lock value.
-            // _ => failure::bail!("unable to collect garbage without a repository lock"),
+        update_progress_msg("acquiring exclusive repository lock...".to_string())?;
+        self.alter_lock_mode(LockMode::Exclusive)?;
+        // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
+        // For example, this could make out of space problems even worse.
+        update_progress_msg("removing temporary files...".to_string())?;
+        {
+            let mut to_remove = Vec::new();
+            for e in std::fs::read_dir(Repo::tmp_dir_path(&self.repo_path))? {
+                let e = e?;
+                to_remove.push(e.path());
+            }
+            for p in to_remove.iter() {
+                std::fs::remove_file(p)?;
+            }
         }
+        // Once we have removed temporary files, we can go back to a shared lock.
+        self.alter_lock_mode(LockMode::Shared)?;
 
-        let reachability_db_path = Repo::reachability_db_path(&self.repo_path);
-
-        // We exclusively hold the reachability database, when computing the reachable set.
-        update_progress_msg("acquiring exclusive garbage collection lock...".to_string())?;
-
+        let reachability_db_path = Repo::random_tmp_reachability_db_path(&self.repo_path);
         let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
-        reachability_db.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
+
+        // Because this is a fresh database (we already removed all tmp files), we
+        // are ok to disable synchronous operation. If we get power off event, the next
+        // gc will remove the corrupt database first so theres no chance we open a corrupt db.
+        reachability_db.execute("pragma synchronous = OFF;", rusqlite::NO_PARAMS)?;
+
         let reachability_tx =
             reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
 
@@ -420,7 +454,6 @@ impl Repo {
         // We want to maintain the invariant that the reachability table contains ALL reachable
         // chunks, or it does not exist at all. This means we can't accidentally query an empty
         // reachability table from a chunk storage plugin and delete everything.
-        reachability_tx.execute("drop table if exists Reachability;", rusqlite::NO_PARAMS)?;
         reachability_tx.execute(
             "create table Reachability(Address primary key) without rowid;",
             rusqlite::NO_PARAMS,
@@ -501,8 +534,8 @@ impl Repo {
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = storage_engine.gc(&reachability_db_path, &mut reachability_db)?;
 
-        // Remove the reachability database, it is not needed anymore.
-        std::fs::remove_file(reachability_db_path)?;
+        // We no longer need this reachability database.
+        std::fs::remove_file(&reachability_db_path)?;
 
         self.conn.execute(
             "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
