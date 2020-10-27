@@ -55,12 +55,6 @@ pub struct Repo {
 }
 
 impl Repo {
-    fn gc_lock_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("gc.lock");
-        lock_path
-    }
-
     fn repo_lock_path(repo_path: &Path) -> PathBuf {
         let mut lock_path = repo_path.to_path_buf();
         lock_path.push("repo.lock");
@@ -135,10 +129,6 @@ impl Repo {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        path_buf.push("gc.lock");
-        fsutil::create_empty_file(path_buf.as_path())?;
-        path_buf.pop();
-
         path_buf.push("storage-engine.json");
         let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
         fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
@@ -149,9 +139,11 @@ impl Repo {
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
         )?;
 
-        conn.query_row("PRAGMA journal_mode = WAL;", rusqlite::NO_PARAMS, |_| {
-            Ok(())
-        })?;
+        conn.query_row(
+            "PRAGMA journal_mode = WAL;",
+            rusqlite::NO_PARAMS,
+            |_| Ok(()),
+        )?;
 
         let tx = conn.transaction()?;
 
@@ -380,9 +372,6 @@ impl Repo {
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
-        update_progress_msg("acquiring exclusive garbage collection lock...".to_string())?;
-        let gc_lock = fsutil::FileLock::get_exclusive(&Repo::gc_lock_path(&self.repo_path))?;
-
         match self._repo_lock_mode {
             LockMode::Shared | LockMode::Exclusive => (),
             // XXX add poison lock value.
@@ -390,7 +379,14 @@ impl Repo {
         }
 
         let reachability_db_path = Repo::reachability_db_path(&self.repo_path);
+
+        // We exclusively hold the reachability database, when computing the reachable set.
+        update_progress_msg("acquiring exclusive garbage collection lock...".to_string())?;
+
         let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
+        reachability_db.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
         let reachability_tx =
             reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
 
@@ -513,9 +509,6 @@ impl Repo {
             rusqlite::params![false],
         )?;
 
-        // Release the exclusive gc lock explicitly to keep it alive
-        // during the duration of the full gc.
-        drop(gc_lock);
         Ok(stats)
     }
 }
