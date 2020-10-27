@@ -17,7 +17,8 @@ pub trait Engine {
     // Remove all chunks not in the reachable set.
     fn gc(
         &mut self,
-        reachable: std::collections::HashSet<Address>,
+        reachability_db_path: &std::path::Path,
+        reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, failure::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing

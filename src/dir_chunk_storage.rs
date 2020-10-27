@@ -348,44 +348,60 @@ impl Engine for DirStorage {
 
     fn gc(
         &mut self,
-        reachable: std::collections::HashSet<Address>,
+        _reachability_db_path: &std::path::Path,
+        reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
 
-        let mut entries = Vec::new();
-        // Collect entries into memory first so we don't have to
+        let reachability_tx = reachability_db.transaction()?;
+        let mut check_reachability_stmt =
+            reachability_tx.prepare_cached("select 1 from Reachability where Address = ?;")?;
+
+        // Collect removals into memory first so we don't have to
         // worry about fs semantics of removing while iterating.
-        for e in std::fs::read_dir(&self.dir_path)? {
-            entries.push(e?);
-        }
+        let mut to_remove = Vec::new();
 
         let mut bytes_freed = 0;
         let mut chunks_remaining = 0;
         let mut chunks_freed = 0;
         let mut bytes_remaining = 0;
 
-        for e in entries {
+        for e in std::fs::read_dir(&self.dir_path)? {
+            let e = e?;
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
-                    if !reachable.contains(&addr) {
+                    let reachable = match check_reachability_stmt
+                        .query_row(rusqlite::params![&addr.bytes[..]], |_| Ok(()))
+                    {
+                        Ok(_) => true,
+                        Err(rusqlite::Error::QueryReturnedNoRows) => false,
+                        Err(err) => return Err(err.into()),
+                    };
+
+                    if !reachable {
                         if let Ok(md) = e.metadata() {
                             bytes_freed += md.len() as usize
                         }
-                        std::fs::remove_file(e.path())?;
+                        to_remove.push(e.path());
                         chunks_freed += 1;
                     } else {
                         if let Ok(md) = e.metadata() {
                             bytes_remaining += md.len() as usize
                         }
-                        chunks_remaining += 1;
+                        chunks_remaining += 1
                     }
                 }
                 Err(_) => {
                     // This is not a chunk, so don't count it.
-                    std::fs::remove_file(e.path())?;
+                    to_remove.push(e.path());
                 }
             }
         }
+
+        for p in to_remove.iter() {
+            std::fs::remove_file(p)?;
+        }
+
         Ok(repository::GCStats {
             chunks_remaining: Some(chunks_remaining),
             chunks_freed: Some(chunks_freed),

@@ -1,4 +1,4 @@
-use super::address::{Address, ADDRESS_SZ};
+use super::address::Address;
 use super::chunk_storage::Engine;
 use super::protocol;
 use super::repository;
@@ -310,38 +310,18 @@ impl Engine for ExternalStorage {
 
     fn gc(
         &mut self,
-        reachable: std::collections::HashSet<Address>,
+        reachability_db_path: &std::path::Path,
+        _reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, failure::Error> {
         self.stop_workers();
 
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
 
-        protocol::write_packet(&mut sock, &protocol::Packet::StorageBeginGC)?;
-
-        /* Transfer addresses over in chunks, terminated with an empty block */
-        const ADDRESSES_PER_PACKET: usize = 4096;
-        let mut reachable_part = Vec::with_capacity(ADDRESSES_PER_PACKET * ADDRESS_SZ);
-        for a in reachable.iter() {
-            reachable_part.extend_from_slice(&a.bytes[..]);
-            if reachable_part.len() == ADDRESSES_PER_PACKET * ADDRESS_SZ {
-                protocol::write_packet(
-                    &mut sock,
-                    &protocol::Packet::StorageGCReachable(reachable_part.clone()),
-                )?;
-                reachable_part.clear();
-            }
-        }
-        if !reachable_part.is_empty() {
-            protocol::write_packet(
-                &mut sock,
-                &protocol::Packet::StorageGCReachable(reachable_part.clone()),
-            )?;
-            reachable_part.clear();
-        }
-        /* Empty block */
         protocol::write_packet(
             &mut sock,
-            &protocol::Packet::StorageGCReachable(reachable_part),
+            &protocol::Packet::StorageBeginGC(protocol::StorageBeginGC {
+                reachability_db_path: reachability_db_path.to_owned(),
+            }),
         )?;
 
         loop {
