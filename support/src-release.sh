@@ -11,7 +11,7 @@ cd release/src
 
 cargo vendor > .cargo/config
 
-tar -cvf - . | gzip -9 > ../../bupstash-$1-src.tar.gz
+tar -cvf - . | gzip -9 > ../../bupstash-$1-src+deps.tar.gz
 
 cd ..
 mkdir man
