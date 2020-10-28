@@ -32,7 +32,7 @@ An sqlite repository, with the following schema:
 ```
 RepositoryMeta(Key primary key, Value) without rowid;
 ItemOpLog(OpId INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData)
-Items(ItemId PRIMARY KEY, Metadata) WITHOUT ROWID
+Items(ItemId PRIMARY KEY, OpId INTEGER NOT NULL, Metadata NOT NULL, Unique(OpId)) WITHOUT ROWID
 ```
 
 The metadata table has the follows key/value pairs:
