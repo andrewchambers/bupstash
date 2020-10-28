@@ -68,7 +68,7 @@ more information on the query cache.
   disables that safety feature.
 
 * -q, --quiet:
-  Suppress progress bars (Progress bars are also suppressed when stderr
+  Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
 ## ENVIRONMENT

@@ -1,25 +1,21 @@
-bupstash-gc(1) 
+bupstash-restore-removed(1) 
 ==============
 
 ## SYNOPSIS
 
-Run the garbage collector against a repository, removing
-unreferenced data and freeing disk space.
+Restore repository items that were removed, but that have not
+yet been deleted via garbage collection.
 
-`bupstash gc [OPTIONS]`
+`bupstash restore-removed [OPTIONS]`
 
 ## DESCRIPTION
 
-`bupstash gc` walks the repository contents attempting to find
-unreachable data chunks and removing them, potentially reclaiming disk space.
+`bupstash restore-removed` allows a user to undo all 'rm' operations that
+have taken place since the last invocation of bupstash-gc(1).
+In other words, this command provides a way to correct errors and other unforeseen accidental
+invocations of bupstash-rm(1).
 
-When garbage collection is in process, get and put operations are paused for the
-duration.
-
-The garbage collector only relies on unencrypted metadata, so does not need
-access to decryption keys to operate, and can thus be run on a storage server
-without access to any keys.
-
+`bupstash restore-removed` requires 'put' and 'get' permissions for the repository being operated on.
 
 ## OPTIONS
 
@@ -44,4 +40,4 @@ without access to any keys.
 
 ## SEE ALSO
 
-bupstash(1), bupstash-repository(7)
+bupstash(1), bupstash-rm(1), bupstash-gc(1)

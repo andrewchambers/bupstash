@@ -26,7 +26,7 @@ pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::E
     write_packet(
         w,
         &Packet::ClientInfo(ClientInfo {
-            protocol: "0".to_string(),
+            protocol: "1".to_string(),
             now: chrono::Utc::now(),
         }),
     )?;
@@ -648,6 +648,25 @@ pub fn request_data_stream(
     }
 }
 
+pub fn restore_removed(
+    progress: indicatif::ProgressBar,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<u64, failure::Error> {
+    write_packet(w, &Packet::TRestoreRemoved)?;
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::Progress(Progress::SetMessage(msg)) => {
+                progress.set_message(&msg);
+            }
+            Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => return Ok(n_restored),
+            _ => failure::bail!(
+                "protocol error, expected restore packet response or progress packet",
+            ),
+        };
+    }
+}
+
 pub fn gc(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
@@ -665,7 +684,7 @@ pub fn gc(
             }
             Packet::Progress(_) => (), /* Reserved unused. */
             Packet::RGc(rgc) => return Ok(rgc.stats),
-            _ => failure::bail!("protocol error, expected gc pcket or progress packet."),
+            _ => failure::bail!("protocol error, expected gc packet or progress packe."),
         };
     }
 }

@@ -56,7 +56,7 @@ more information on the query cache.
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 * -q, --quiet:
-  Suppress progress bars (Progress bars are also suppressed when stderr
+  Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
 ## ENVIRONMENT

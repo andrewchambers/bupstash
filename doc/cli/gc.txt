@@ -3,10 +3,9 @@ bupstash gc [OPTIONS]
 Run the garbage collector against a repository, removing
 unreferenced data and freeing disk space.
 
-'put' and 'get' operations will be blocked while garbage collection
+'put' and 'get' operations will be blocked during periods while garbage collection
 is in progress.
 
 Examples:
-  $ bupstash gc ./backups
-  $ bupstash -r ssh://$server/repository gc
-  $ bupstash -r ./repository gc
+  $ bupstash gc -r ./backups
+  $ bupstash gc -r ssh://$server/repository

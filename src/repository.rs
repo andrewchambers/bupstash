@@ -182,7 +182,7 @@ impl Repo {
         )?;
         tx.execute(
             /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '0');",
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '1');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -222,7 +222,7 @@ impl Repo {
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
-        if v.parse::<u64>().unwrap() != 0 {
+        if v.parse::<u64>().unwrap() != 1 {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
@@ -391,11 +391,19 @@ impl Repo {
         itemset::walk_log(&tx, after, f)
     }
 
+    pub fn restore_removed(&mut self) -> Result<u64, failure::Error> {
+        let tx = self.conn.transaction()?;
+        let n_restored = itemset::restore_removed(&tx)?;
+        if n_restored > 0 {
+            tx.commit()?;
+        }
+        Ok(n_restored)
+    }
+
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
     ) -> Result<GCStats, failure::Error> {
-        update_progress_msg("acquiring exclusive repository lock...".to_string())?;
         self.alter_lock_mode(LockMode::Exclusive)?;
         // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
         // For example, this could make out of space problems even worse.
@@ -423,33 +431,6 @@ impl Repo {
 
         let reachability_tx =
             reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
-
-        reachability_tx.execute(
-            "create table if not exists ReachabilityMeta(Key primary key, Value) without rowid;",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        match reachability_tx.query_row(
-            "select Value from ReachabilityMeta where Key = 'schema-version';",
-            rusqlite::NO_PARAMS,
-            |r| {
-                let v: i64 = r.get(0)?;
-                Ok(v)
-            },
-        ) {
-            Ok(v) => {
-                if v != 0 {
-                    failure::bail!("reachability database is from a different version of the software and must be upgraded");
-                }
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                reachability_tx.execute(
-                    "insert into ReachabilityMeta(Key, Value) values('schema-version', 0);",
-                    rusqlite::NO_PARAMS,
-                )?;
-            }
-            Err(err) => return Err(err.into()),
-        }
 
         // We want to maintain the invariant that the reachability table contains ALL reachable
         // chunks, or it does not exist at all. This means we can't accidentally query an empty
@@ -548,6 +529,7 @@ impl Repo {
 
 #[cfg(test)]
 mod tests {
+    use super::super::address::*;
     use super::*;
 
     #[test]

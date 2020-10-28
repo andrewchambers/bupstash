@@ -29,6 +29,9 @@ get
 rm
   Remove items from a repository.
 
+restore-removed
+  Restore removed items that have not been garbage collected.
+
 gc
   Delete unreferenced data and clear space from a repository.
 

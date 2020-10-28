@@ -166,6 +166,41 @@ _concurrent_send_test_worker () {
   test 0 = "$(ls "$REPO"/data | wc -l)"
 }
 
+@test "rm and restore-removed" {
+  bupstash list
+  test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
+  id1="$(bupstash put -e :: echo hello1)"
+  id2="$(bupstash put -e :: echo hello2)"
+  test 2 = "$(bupstash list | wc -l)"
+  test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
+  test 2 = "$(ls "$REPO"/data | wc -l)"
+  bupstash rm id=$id1
+  bupstash restore-removed
+  test 2 = "$(bupstash list | wc -l)"
+  test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 4 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
+  test 2 = "$(ls "$REPO"/data | wc -l)"
+  bupstash rm id=$id1
+  bupstash gc
+  bupstash restore-removed
+  test 1 = "$(bupstash list | wc -l)"
+  test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
+  test 1 = "$(ls "$REPO"/data | wc -l)"
+  bupstash rm id=$id2
+  bupstash gc
+  bupstash restore-removed
+  test 0 = "$(bupstash list | wc -l)"
+  test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
+  test 0 = "$(ls "$REPO"/data | wc -l)"
+}
+
 @test "query sync" {
   id1="$(bupstash put -e :: echo hello1)"
   test 1 = $(bupstash list | wc -l)

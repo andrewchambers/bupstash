@@ -85,6 +85,11 @@ pub struct Abort {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RRestoreRemoved {
+    pub n_restored: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct StorageBeginGC {
     pub reachability_db_path: std::path::PathBuf,
 }
@@ -114,6 +119,8 @@ pub enum Packet {
     RRequestChunk(Vec<u8>),
     Progress(Progress),
     Abort(Abort),
+    TRestoreRemoved,
+    RRestoreRemoved(RRestoreRemoved),
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
@@ -146,6 +153,8 @@ const PACKET_KIND_T_REQUEST_CHUNK: u8 = 19;
 const PACKET_KIND_R_REQUEST_CHUNK: u8 = 20;
 const PACKET_KIND_PROGRESS: u8 = 21;
 const PACKET_KIND_ABORT: u8 = 22;
+const PACKET_KIND_T_RESTORE_REMOVED: u8 = 23;
+const PACKET_KIND_R_RESTORE_REMOVED: u8 = 24;
 
 // Backend storage protocol messages.
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
@@ -239,6 +248,8 @@ pub fn read_packet_raw(
         PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
         PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_RESTORE_REMOVED => Packet::TRestoreRemoved,
+        PACKET_KIND_R_RESTORE_REMOVED => Packet::RRestoreRemoved(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
@@ -372,6 +383,14 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
         Packet::Abort(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_ABORT, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::TRestoreRemoved => {
+            send_hdr(w, PACKET_KIND_T_RESTORE_REMOVED, 0)?;
+        }
+        Packet::RRestoreRemoved(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_RESTORE_REMOVED, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::StorageConnect(ref v) => {

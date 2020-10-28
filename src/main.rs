@@ -60,6 +60,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "list" => include_str!("../doc/cli/list.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
         "rm" => include_str!("../doc/cli/rm.txt"),
+        "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
@@ -96,7 +97,7 @@ fn query_opts(opts: &mut Options) {
         "utc-timestamps",
         "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
     );
-    opts.optflag("q", "quiet", "Suppress progress bars.");
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
 }
 
 fn repo_opts(opts: &mut Options) {
@@ -537,7 +538,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag("", "no-compression", "Disable compression.");
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
 
-    opts.optflag("q", "quiet", "Suppress progress bars.");
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
 
     opts.optflag(
         "e",
@@ -1003,7 +1004,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
 
 fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
-    opts.optflag("q", "quiet", "Suppress progress bars.");
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
 
     repo_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
@@ -1112,6 +1113,34 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
+fn restore_removed(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
+
+    repo_opts(&mut opts);
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::negotiate_connection(&mut serve_in)?;
+    progress.set_message("acquiring repository lock...");
+    let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
+    client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
+
+    println!("{} item(s) restored", n_restored);
+
+    Ok(())
+}
+
 fn main() {
     crypto::init();
 
@@ -1137,6 +1166,7 @@ fn main() {
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
+        "restore-removed" => restore_removed(args),
         "version" | "--version" => {
             args[0] = "version".to_string();
             version_main(args)

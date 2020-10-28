@@ -64,6 +64,8 @@ pub enum LogOp {
     // Note: There is an asymmetry here in that we can delete many items with one log op.
     // This is because batch deleting is possible, but batch makes less sense.
     RemoveItems(Vec<Xid>),
+
+    RestoreRemoved,
 }
 
 pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
@@ -73,7 +75,7 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     )?;
     tx.execute(
         // No rowid so means we don't need a secondary index for itemid lookups.
-        "create table if not exists Items(ItemId PRIMARY KEY, Metadata) WITHOUT ROWID;",
+        "create table if not exists Items(ItemId PRIMARY KEY, OpId INTEGER NOT NULL, Metadata NOT NULL,  UNIQUE(OpId)) WITHOUT ROWID;",
         rusqlite::NO_PARAMS,
     )?;
     Ok(())
@@ -82,7 +84,7 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
 fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, failure::Error> {
     let serialized_op = serde_bare::to_vec(&md)?;
     if serialized_op.len() > MAX_METADATA_SIZE {
-        failure::bail!("itemset log item too big!");
+        failure::bail!("itemset log item metadata too big!");
     }
     Ok(serialized_op)
 }
@@ -93,16 +95,21 @@ pub fn add_item(
 ) -> Result<Xid, failure::Error> {
     let item_id = Xid::new();
     let serialized_md = checked_serialize_metadata(&md)?;
-    tx.execute(
-        "insert into Items(ItemId, Metadata) values(?, ?);",
-        rusqlite::params![&item_id, serialized_md],
-    )?;
     let op = LogOp::AddItem(md);
     let serialized_op = serde_bare::to_vec(&op)?;
+
     tx.execute(
         "insert into ItemOpLog(OpData, ItemId) values(?, ?);",
         rusqlite::params![serialized_op, item_id],
     )?;
+
+    let op_id = tx.last_insert_rowid();
+
+    tx.execute(
+        "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
+        rusqlite::params![&item_id, op_id, serialized_md],
+    )?;
+
     Ok(item_id)
 }
 
@@ -120,6 +127,47 @@ pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), f
     Ok(())
 }
 
+fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, failure::Error> {
+    let mut stmt = tx.prepare(
+        "select OpId, ItemId, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
+    )?;
+    let mut n_restored = 0;
+    let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+    loop {
+        match rows.next()? {
+            Some(row) => {
+                let op_id: i64 = row.get(0)?;
+                let item_id: Xid = row.get(1)?;
+                let op: Vec<u8> = row.get(2)?;
+                let op: LogOp = serde_bare::from_slice(&op)?;
+                match &op {
+                    LogOp::AddItem(md) => {
+                        n_restored += 1;
+                        tx.execute(
+                            "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
+                            rusqlite::params![&item_id, op_id, checked_serialize_metadata(&md)?],
+                        )?;
+                    }
+                    _ => (),
+                }
+            }
+            None => {
+                return Ok(n_restored);
+            }
+        }
+    }
+}
+
+pub fn restore_removed(tx: &rusqlite::Transaction) -> Result<u64, failure::Error> {
+    let op = LogOp::RestoreRemoved;
+    let serialized_op = serde_bare::to_vec(&op)?;
+    tx.execute(
+        "insert into ItemOpLog(OpData) values(?);",
+        rusqlite::params![serialized_op],
+    )?;
+    restore_removed_no_log_op(tx)
+}
+
 pub fn sync_ops(
     tx: &rusqlite::Transaction,
     op_id: i64,
@@ -127,16 +175,19 @@ pub fn sync_ops(
     op: &LogOp,
 ) -> Result<(), failure::Error> {
     let serialized_op = serde_bare::to_vec(&op)?;
-    match &op {
-        LogOp::AddItem(_) => {
+    match op {
+        LogOp::AddItem(md) => {
             if item_id.is_none() {
                 failure::bail!("corrupt op log");
             }
             let item_id = item_id.unwrap();
-            tx.execute("insert into Items(ItemId) values(?);", &[&item_id])?;
             tx.execute(
                 "insert into ItemOpLog(OpId, ItemId, OpData) values(?, ?, ?);",
                 rusqlite::params![op_id, &item_id, serialized_op],
+            )?;
+            tx.execute(
+                "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
+                rusqlite::params![&item_id, op_id, checked_serialize_metadata(&md)?],
             )?;
             Ok(())
         }
@@ -144,13 +195,24 @@ pub fn sync_ops(
             if item_id.is_some() {
                 failure::bail!("corrupt op log");
             }
+            tx.execute(
+                "insert into ItemOpLog(OpId, OpData) values(?, ?);",
+                rusqlite::params![op_id, serialized_op],
+            )?;
             for item_id in items {
                 tx.execute("delete from Items where ItemId = ?;", &[item_id])?;
+            }
+            Ok(())
+        }
+        LogOp::RestoreRemoved => {
+            if item_id.is_some() {
+                failure::bail!("corrupt op log");
             }
             tx.execute(
                 "insert into ItemOpLog(OpId, OpData) values(?, ?);",
                 rusqlite::params![op_id, serialized_op],
             )?;
+            restore_removed_no_log_op(tx)?;
             Ok(())
         }
     }
@@ -159,7 +221,7 @@ pub fn sync_ops(
 pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     // Remove everything not in the aggregated set.
     tx.execute(
-        "delete from ItemOpLog where (ItemId is null) or (ItemId not in (select ItemId from Items));",
+        "delete from ItemOpLog where OpId not in (select OpId from Items);",
         rusqlite::NO_PARAMS,
     )?;
     Ok(())
@@ -197,21 +259,15 @@ pub fn walk_items(
     tx: &rusqlite::Transaction,
     f: &mut dyn FnMut(i64, Xid, VersionedItemMetadata) -> Result<(), failure::Error>,
 ) -> Result<(), failure::Error> {
-    let mut stmt = tx.prepare(
-        "select OpId, ItemId, OpData from ItemOpLog where ItemId in (select ItemId from Items);",
-    )?;
+    let mut stmt = tx.prepare("select OpId, ItemId, Metadata from Items order by OpId asc;")?;
     let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
     loop {
         match rows.next()? {
             Some(row) => {
                 let op_id: i64 = row.get(0)?;
                 let item_id: Xid = row.get(1)?;
-                let op: Vec<u8> = row.get(2)?;
-                let op: LogOp = serde_bare::from_slice(&op)?;
-                let metadata: VersionedItemMetadata = match op {
-                    LogOp::AddItem(metadata) => metadata,
-                    _ => failure::bail!("itemset/item log is corrupt"),
-                };
+                let metadata: Vec<u8> = row.get(2)?;
+                let metadata: VersionedItemMetadata = serde_bare::from_slice(&metadata)?;
                 f(op_id, item_id, metadata)?;
             }
             None => {

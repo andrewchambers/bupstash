@@ -42,13 +42,13 @@ impl QueryCache {
             },
         ) {
             Ok(v) => {
-                if v != 0 {
+                if v != 1 {
                     failure::bail!("query cache at {:?} is from a different version of the software and must be removed manually", &p);
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute(
-                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 0);",
+                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 1);",
                     rusqlite::NO_PARAMS,
                 )?;
             }

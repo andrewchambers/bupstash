@@ -36,19 +36,22 @@ fn serve2(
 ) -> Result<(), failure::Error> {
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ClientInfo(info) => {
-            if info.protocol != "0" {
-                failure::bail!("Client/Server version mismatch, expected protocol version 0")
+            if info.protocol != "1" {
+                failure::bail!(
+                    "client/server version mismatch, expected protocol version 1, got version {}",
+                    info.protocol
+                )
             }
 
             let clock_skew = chrono::Utc::now().signed_duration_since(info.now);
-            const MAX_SKEW: i64 = 30;
-            if clock_skew > chrono::Duration::minutes(MAX_SKEW)
-                || clock_skew < chrono::Duration::minutes(-MAX_SKEW)
+            const MAX_SKEW_MINS: i64 = 15;
+            if clock_skew > chrono::Duration::minutes(MAX_SKEW_MINS)
+                || clock_skew < chrono::Duration::minutes(-MAX_SKEW_MINS)
             {
                 // This helps protect against inaccurate item timestamps, which protects users from unintentionally
                 // deleting important backups when deleting based on timestamp queries. Instead they will be notified
                 // of the clock mismatch as soon as we know about it.
-                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW);
+                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW_MINS);
             }
         }
         _ => failure::bail!("expected client info"),
@@ -103,6 +106,19 @@ fn serve2(
                             repo.remove_items(items)?;
                         }
                         write_packet(w, &Packet::RRmItems)?;
+                    }
+                    Packet::TRestoreRemoved => {
+                        if !cfg.allow_put || !cfg.allow_get {
+                            failure::bail!("server has disabled restore for this client (restore requires get and put permissions).")
+                        }
+                        write_packet(
+                            w,
+                            &Packet::Progress(Progress::SetMessage(
+                                "restoring removed items...".to_string(),
+                            )),
+                        )?;
+                        let n_restored = repo.restore_removed()?;
+                        write_packet(w, &Packet::RRestoreRemoved(RRestoreRemoved { n_restored }))?;
                     }
                     Packet::EndOfTransmission => return Ok(()),
                     _ => failure::bail!("protocol error, unexpected packet kind"),

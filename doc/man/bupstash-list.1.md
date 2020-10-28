@@ -65,7 +65,7 @@ the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   Set output format to one of the following 'human', 'jsonl'.
 
 * -q, --quiet:
-  Suppress progress bars (Progress bars are also suppressed when stderr
+  Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
 ## ENVIRONMENT
