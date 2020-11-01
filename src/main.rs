@@ -26,7 +26,7 @@ pub mod xtar;
 use failure::Fail;
 use getopts::{Matches, Options};
 use std::collections::BTreeMap;
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 
 fn die(s: String) -> ! {
     eprintln!("{}", s);
@@ -868,6 +868,118 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
+fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    repo_opts(&mut opts);
+    query_opts(&mut opts);
+    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let key = matches_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
+    let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
+        keys::Key::PrimaryKeyV1(k) => {
+            let hash_key_part_1 = k.hash_key_part_1.clone();
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
+            (hash_key_part_1, data_dctx, metadata_dctx)
+        }
+        _ => failure::bail!("provided key is not a decryption key"),
+    };
+
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
+    let (id, query) = matches_to_id_and_query(&matches)?;
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    client::negotiate_connection(&mut serve_in)?;
+    progress.set_message(&"acquiring repository lock...");
+
+    let id = match (id, query) {
+        (Some(id), _) => id,
+        (_, query) => {
+            let mut query_cache = matches_to_query_cache(&matches)?;
+
+            // Only sync the client if we have a non id query.
+            client::sync(
+                progress.clone(),
+                &mut query_cache,
+                &mut serve_out,
+                &mut serve_in,
+            )?;
+
+            let mut n_matches: u64 = 0;
+            let mut id = xid::Xid::default();
+
+            let mut on_match =
+                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                    n_matches += 1;
+                    id = item_id;
+
+                    if n_matches > 1 {
+                        failure::bail!(
+                            "the provided query matched {} items, need a single match",
+                            n_matches
+                        );
+                    }
+
+                    Ok(())
+                };
+
+            let mut tx = query_cache.transaction()?;
+            tx.list(
+                querycache::ListOptions {
+                    primary_key_id: Some(primary_key_id),
+                    metadata_dctx: Some(metadata_dctx.clone()),
+                    list_encrypted: matches.opt_present("query-encrypted"),
+                    utc_timestamps: matches.opt_present("utc-timestamps"),
+                    query: Some(query),
+                    now: chrono::Utc::now(),
+                },
+                &mut on_match,
+            )?;
+
+            id
+        }
+    };
+
+    let mut index = client::request_index(
+        client::RequestContext {
+            progress: progress.clone(),
+            primary_key_id,
+            hash_key_part_1,
+            data_dctx,
+            metadata_dctx,
+        },
+        id,
+        &mut serve_out,
+        &mut serve_in,
+    )?;
+
+    client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
+
+    // Due to how 'put' works, our tarballs are not ordered in a way that is pleasant by default.
+    index.sort_by(|a, b| match (a, b) {
+        (client::VersionedIndexEntry::V1(ref a), client::VersionedIndexEntry::V1(ref b)) => {
+            a.path.cmp(&b.path)
+        }
+    });
+    for item in index.iter() {
+        println!("{:?}", item);
+    }
+    std::io::stdout().flush()?;
+
+    Ok(())
+}
+
 fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
@@ -1161,6 +1273,7 @@ fn main() {
         "new-put-key" => new_send_key_main(args),
         "new-metadata-key" => new_metadata_key_main(args),
         "list" => list_main(args),
+        "list-contents" => list_contents_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
         "gc" => gc_main(args),

@@ -86,6 +86,12 @@ fn serve2(
                         }
                         send(&mut repo, req.id, w)?;
                     }
+                    Packet::TRequestIndex(req) => {
+                        if !cfg.allow_get {
+                            failure::bail!("server has disabled get for this client")
+                        }
+                        send_index(&mut repo, req.id, w)?;
+                    }
                     Packet::TGc(_) => {
                         if !cfg.allow_gc {
                             failure::bail!("server has disabled garbage collection for this client")
@@ -209,53 +215,83 @@ fn send(
         }
     };
 
-    let mut storage_engine = repo.storage_engine()?;
-
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             let mut tr = htree::TreeReader::new(
-                metadata.plain_text_metadata.tree_height,
-                &metadata.plain_text_metadata.address,
+                metadata.plain_text_metadata.data_tree.height,
+                &metadata.plain_text_metadata.data_tree.address,
             );
+            send_htree(repo, &mut tr, w)?;
+        }
+    }
 
-            // The idea is we fetch the next chunk while we are sending the current chunk.
-            // to mitigate some of the problems with latency when fetching from a slow storage engine.
+    Ok(())
+}
 
-            let (height, chunk_address) = tr.next_addr()?.unwrap();
-            let mut next = (
-                height,
-                chunk_address,
-                storage_engine.get_chunk_async(&chunk_address),
-            );
+fn send_index(
+    repo: &mut repository::Repo,
+    id: Xid,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    let metadata = match repo.lookup_item_by_id(&id)? {
+        Some(metadata) => {
+            write_packet(
+                w,
+                &Packet::RRequestIndex(RRequestIndex {
+                    metadata: Some(metadata.clone()),
+                }),
+            )?;
+            metadata
+        }
+        None => {
+            write_packet(w, &Packet::RRequestIndex(RRequestIndex { metadata: None }))?;
+            return Ok(());
+        }
+    };
 
-            loop {
-                let (height, chunk_address, pending_chunk) = next;
-                let chunk_data = pending_chunk.recv()??;
-                if height != 0 {
-                    tr.push_level(height - 1, chunk_data.clone())?;
-                }
+    match metadata {
+        itemset::VersionedItemMetadata::V1(metadata) => {
+            if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
+                let mut tr = htree::TreeReader::new(index_tree.height, &index_tree.address);
+                send_htree(repo, &mut tr, w)?;
+            }
+        }
+    }
 
-                match tr.next_addr()? {
-                    Some((height, chunk_address)) => {
-                        next = (
-                            height,
-                            chunk_address,
-                            storage_engine.get_chunk_async(&chunk_address),
-                        );
-                    }
-                    None => {
-                        write_packet(
-                            w,
-                            &Packet::Chunk(Chunk {
-                                address: chunk_address,
-                                data: chunk_data,
-                            }),
-                        )?;
-                        return Ok(());
-                    }
-                }
+    Ok(())
+}
 
-                // Write the chunk out while the async worker fetches the next one.
+fn send_htree(
+    repo: &mut repository::Repo,
+    tr: &mut htree::TreeReader,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    let mut storage_engine = repo.storage_engine()?;
+    // The idea is we fetch the next chunk while we are sending the current chunk.
+    // to mitigate some of the problems with latency when fetching from a slow storage engine.
+    let (height, chunk_address) = tr.next_addr()?.unwrap();
+    let mut next = (
+        height,
+        chunk_address,
+        storage_engine.get_chunk_async(&chunk_address),
+    );
+
+    loop {
+        let (height, chunk_address, pending_chunk) = next;
+        let chunk_data = pending_chunk.recv()??;
+        if height != 0 {
+            tr.push_level(height - 1, chunk_data.clone())?;
+        }
+
+        match tr.next_addr()? {
+            Some((height, chunk_address)) => {
+                next = (
+                    height,
+                    chunk_address,
+                    storage_engine.get_chunk_async(&chunk_address),
+                );
+            }
+            None => {
                 write_packet(
                     w,
                     &Packet::Chunk(Chunk {
@@ -263,8 +299,18 @@ fn send(
                         data: chunk_data,
                     }),
                 )?;
+                return Ok(());
             }
         }
+
+        // Write the chunk out while the async worker fetches the next one.
+        write_packet(
+            w,
+            &Packet::Chunk(Chunk {
+                address: chunk_address,
+                data: chunk_data,
+            }),
+        )?;
     }
 }
 

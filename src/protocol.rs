@@ -41,6 +41,16 @@ pub struct RRequestData {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct TRequestIndex {
+    pub id: Xid,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RRequestIndex {
+    pub metadata: Option<itemset::VersionedItemMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TGc {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -121,6 +131,8 @@ pub enum Packet {
     Abort(Abort),
     TRestoreRemoved,
     RRestoreRemoved(RRestoreRemoved),
+    TRequestIndex(TRequestIndex),
+    RRequestIndex(RRequestIndex),
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
@@ -155,6 +167,8 @@ const PACKET_KIND_PROGRESS: u8 = 21;
 const PACKET_KIND_ABORT: u8 = 22;
 const PACKET_KIND_T_RESTORE_REMOVED: u8 = 23;
 const PACKET_KIND_R_RESTORE_REMOVED: u8 = 24;
+const PACKET_KIND_T_REQUEST_INDEX: u8 = 25;
+const PACKET_KIND_R_REQUEST_INDEX: u8 = 26;
 
 // Backend storage protocol messages.
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
@@ -239,6 +253,8 @@ pub fn read_packet_raw(
         PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
         PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_REQUEST_INDEX => Packet::TRequestIndex(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_INDEX => Packet::RRequestIndex(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_GC => Packet::TGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_GC => Packet::RGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
@@ -339,6 +355,16 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
         Packet::RRequestData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_DATA, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::TRequestIndex(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_INDEX, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::RRequestIndex(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_REQUEST_INDEX, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TGc(ref v) => {

@@ -41,12 +41,12 @@ impl Source for HashMap<Address, Vec<u8>> {
     }
 }
 
-pub struct TreeWriter<'a> {
+pub struct TreeWriter {
     max_addr_chunk_size: usize,
-    sink: &'a mut dyn Sink,
     tree_blocks: Vec<Vec<u8>>,
     chunk_mask: u32,
     rollsums: Vec<rollsum::Rollsum>,
+    data_chunk_count: u64,
 }
 
 pub fn tree_block_address(data: &[u8]) -> Address {
@@ -55,36 +55,41 @@ pub fn tree_block_address(data: &[u8]) -> Address {
     Address { bytes: hs.finish() }
 }
 
-impl<'a> TreeWriter<'a> {
-    pub fn new(
-        sink: &'a mut dyn Sink,
-        max_addr_chunk_size: usize,
-        chunk_mask: u32,
-    ) -> TreeWriter<'a> {
+impl TreeWriter {
+    pub fn new(max_addr_chunk_size: usize, chunk_mask: u32) -> TreeWriter {
         assert!(max_addr_chunk_size >= MINIMUM_ADDR_CHUNK_SIZE);
         TreeWriter {
             chunk_mask,
             max_addr_chunk_size,
-            sink,
             tree_blocks: Vec::new(),
             rollsums: Vec::new(),
+            data_chunk_count: 0,
         }
     }
 
-    fn clear_level(&mut self, level: usize) -> Result<(), failure::Error> {
+    fn clear_level(&mut self, sink: &mut dyn Sink, level: usize) -> Result<(), failure::Error> {
         // Writing empty blocks the parent level is pointless.
         if !self.tree_blocks[level].is_empty() {
             let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
             std::mem::swap(&mut block, &mut self.tree_blocks[level]);
             let block_address = tree_block_address(&block);
-            self.sink.add_chunk(&block_address, block)?;
-            self.add_addr(level + 1, &block_address)?;
+            sink.add_chunk(&block_address, block)?;
+            self.add_addr(sink, level + 1, &block_address)?;
         }
         self.rollsums[level].reset();
         Ok(())
     }
 
-    pub fn add_addr(&mut self, level: usize, addr: &Address) -> Result<(), failure::Error> {
+    pub fn add_addr(
+        &mut self,
+        sink: &mut dyn Sink,
+        level: usize,
+        addr: &Address,
+    ) -> Result<(), failure::Error> {
+        if level == 0 {
+            self.data_chunk_count += 1;
+        }
+
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
             self.rollsums
@@ -105,20 +110,33 @@ impl<'a> TreeWriter<'a> {
                 self.tree_blocks[level].len() + ADDRESS_SZ > self.max_addr_chunk_size;
 
             if is_split_point || next_would_overflow_max_size {
-                self.clear_level(level)?;
+                self.clear_level(sink, level)?;
             }
         }
 
         Ok(())
     }
 
-    pub fn add(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), failure::Error> {
-        self.sink.add_chunk(addr, data)?;
-        self.add_addr(0, addr)?;
+    pub fn add(
+        &mut self,
+        sink: &mut dyn Sink,
+        addr: &Address,
+        data: Vec<u8>,
+    ) -> Result<(), failure::Error> {
+        sink.add_chunk(addr, data)?;
+        self.add_addr(sink, 0, addr)?;
         Ok(())
     }
 
-    fn finish_level(&mut self, level: usize) -> Result<(usize, Address), failure::Error> {
+    pub fn data_chunk_count(&self) -> u64 {
+        self.data_chunk_count
+    }
+
+    fn finish_level(
+        &mut self,
+        sink: &mut dyn Sink,
+        level: usize,
+    ) -> Result<(usize, Address), failure::Error> {
         if self.tree_blocks.len() - 1 == level && self.tree_blocks[level].len() == ADDRESS_SZ {
             // We are the top level, and we only ever got a single address written to us.
             // This block is actually the root address.
@@ -130,11 +148,11 @@ impl<'a> TreeWriter<'a> {
         }
         // The tree blocks must contain whole addresses.
         assert!((self.tree_blocks[level].len() % ADDRESS_SZ) == 0);
-        self.clear_level(level)?;
-        Ok(self.finish_level(level + 1)?)
+        self.clear_level(sink, level)?;
+        Ok(self.finish_level(sink, level + 1)?)
     }
 
-    pub fn finish(mut self) -> Result<(usize, Address), failure::Error> {
+    pub fn finish(mut self, sink: &mut dyn Sink) -> Result<(usize, Address), failure::Error> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
@@ -142,7 +160,7 @@ impl<'a> TreeWriter<'a> {
             self.tree_blocks.len() > 1
                 || ((self.tree_blocks.len() == 1) && self.tree_blocks[0].len() >= ADDRESS_SZ)
         );
-        Ok(self.finish_level(0)?)
+        Ok(self.finish_level(sink, 0)?)
     }
 }
 
@@ -218,10 +236,10 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
         // Split mask is almost never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
         let addr = Address::from_bytes(&[1; ADDRESS_SZ]);
-        tw.add(&addr, vec![1, 2, 3]).unwrap();
-        let (_, result) = tw.finish().unwrap();
+        tw.add(&mut chunks, &addr, vec![1, 2, 3]).unwrap();
+        let (_, result) = tw.finish(&mut chunks).unwrap();
         // root = chunk1
         assert_eq!(chunks.len(), 1);
         let addr_chunk = chunks.get_mut(&result).unwrap();
@@ -233,14 +251,14 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
         // Split mask is almost never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
 
-        tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
+        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
-        tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
+        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
             .unwrap();
 
-        let (_, result) = tw.finish().unwrap();
+        let (_, result) = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2]
@@ -255,16 +273,20 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
         // Split mask always is almost never successful.
-        let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
 
-        tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
+        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
-        tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
+        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
             .unwrap();
-        tw.add(&Address::from_bytes(&[3; ADDRESS_SZ]), vec![1, 2, 3])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[3; ADDRESS_SZ]),
+            vec![1, 2, 3],
+        )
+        .unwrap();
 
-        let (_, result) = tw.finish().unwrap();
+        let (_, result) = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0 .. chunk1]
@@ -280,14 +302,14 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Allow large chunks.
         // Split mask that is always successful.
-        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
+        let mut tw = TreeWriter::new(SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
 
-        tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
+        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
-        tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
+        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
             .unwrap();
 
-        let (_, result) = tw.finish().unwrap();
+        let (_, result) = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2 ]
@@ -302,16 +324,20 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Allow large chunks.
         // Split mask that is always successful.
-        let mut tw = TreeWriter::new(&mut chunks, SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
+        let mut tw = TreeWriter::new(SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
 
-        tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
+        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
-        tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
+        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
             .unwrap();
-        tw.add(&Address::from_bytes(&[3; ADDRESS_SZ]), vec![1, 2, 3])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[3; ADDRESS_SZ]),
+            vec![1, 2, 3],
+        )
+        .unwrap();
 
-        let (_, result) = tw.finish().unwrap();
+        let (_, result) = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0 .. chunk1]
@@ -331,15 +357,19 @@ mod tests {
         {
             // Chunks that can only fit two addresses.
             // Split mask is never successful.
-            let mut tw = TreeWriter::new(&mut chunks, MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
-            tw.add(&Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
+            let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+            tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
                 .unwrap();
-            tw.add(&Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
+            tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
                 .unwrap();
-            tw.add(&Address::from_bytes(&[3; ADDRESS_SZ]), vec![1, 2, 3])
-                .unwrap();
+            tw.add(
+                &mut chunks,
+                &Address::from_bytes(&[3; ADDRESS_SZ]),
+                vec![1, 2, 3],
+            )
+            .unwrap();
 
-            let result = tw.finish().unwrap();
+            let result = tw.finish(&mut chunks).unwrap();
             height = result.0;
             addr = result.1;
         }

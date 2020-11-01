@@ -8,10 +8,16 @@ pub const MAX_TAG_SET_SIZE: usize = 32 * 1024;
 pub const MAX_METADATA_SIZE: usize = MAX_TAG_SET_SIZE + 2048;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct HTreeMetadata {
+    pub height: usize,
+    pub address: Address,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct PlainTextItemMetadata {
     pub primary_key_id: Xid,
-    pub tree_height: usize,
-    pub address: Address,
+    pub data_tree: HTreeMetadata,
+    pub index_tree: Option<HTreeMetadata>,
 }
 
 impl PlainTextItemMetadata {

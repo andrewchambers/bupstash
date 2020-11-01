@@ -87,7 +87,7 @@ impl SendLog {
         )?;
 
         tx.execute(
-            "create table if not exists StatCache(Hash primary key, Addresses, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+            "create table if not exists StatCache(Hash primary key, Addresses, DirIndex, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -199,11 +199,12 @@ impl<'a> SendLogSession<'a> {
         Ok(hit)
     }
 
-    pub fn add_stat_addresses(
+    pub fn add_stat_cache_data(
         &self,
         hash: &[u8],
         size: u64,
         addresses: &[u8],
+        index: &[u8],
     ) -> Result<(), failure::Error> {
         if !self.tx_active {
             failure::bail!("no active transaction");
@@ -211,7 +212,7 @@ impl<'a> SendLogSession<'a> {
 
         // We update and not replace so we can keep an old item id if it exists.
         let mut stmt = self.log.conn.prepare_cached(
-            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, Size) Values($1, $2, $3, $4, $5) \
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, DirIndex, Size) Values($1, $2, $3, $4, $5, $6) \
             on conflict(Hash) do update set LatestSessionId = $2;"
         )?;
 
@@ -220,6 +221,7 @@ impl<'a> SendLogSession<'a> {
             self.session_id,
             hash,
             addresses,
+            index,
             size as i64
         ])?;
 
@@ -233,23 +235,23 @@ impl<'a> SendLogSession<'a> {
         //
         // We know the server has these addresses, but the higher level
         // stat cache already skips sending them.
-
         Ok(())
     }
 
-    pub fn cached_stat_addresses(
+    pub fn stat_cache_lookup(
         &self,
         hash: &[u8],
-    ) -> Result<Option<(u64, Vec<u8>)>, failure::Error> {
+    ) -> Result<Option<(u64, Vec<u8>, Vec<u8>)>, failure::Error> {
         let mut stmt = self
             .log
             .conn
-            .prepare_cached("select Size, Addresses from StatCache where Hash = ?;")?;
+            .prepare_cached("select Size, Addresses, DirIndex from StatCache where Hash = $1;")?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
             let sz: i64 = r.get(0)?;
             let addrs: Vec<u8> = r.get(1)?;
-            Ok((sz as u64, addrs))
+            let index: Vec<u8> = r.get(2)?;
+            Ok((sz as u64, addrs, index))
         }) {
             Ok(cached) => Ok(Some(cached)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -324,7 +326,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_address_commit() {
+    fn cache_commit() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
@@ -343,11 +345,11 @@ mod tests {
             let session = sendlog.session(gc_generation).unwrap();
 
             assert!(!session.cached_address(&addr).unwrap());
-            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(!session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
+            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.commit(&id).unwrap();
         }
         drop(sendlog);
@@ -359,7 +361,7 @@ mod tests {
             session.perform_cache_invalidations(false).unwrap();
             // gc_generation is the same, so we keep cache.
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
 
@@ -370,7 +372,7 @@ mod tests {
             session.perform_cache_invalidations(true).unwrap();
             // gc_generation is the same and we have the item id so we keep cache.
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
 
@@ -381,13 +383,13 @@ mod tests {
             session.perform_cache_invalidations(false).unwrap();
             // gc_generation differs, and we do not have the item id so we discard cache.
             assert!(!session.cached_address(&addr).unwrap());
-            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(!session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
     }
 
     #[test]
-    fn cache_address_checkpoint() {
+    fn cache_checkpoint() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
@@ -403,7 +405,7 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
+            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);
@@ -414,7 +416,7 @@ mod tests {
             session.perform_cache_invalidations(false).unwrap();
             // gc_generation is the same, so we keep cache.
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
 
@@ -424,7 +426,7 @@ mod tests {
             session.perform_cache_invalidations(true).unwrap();
             // gc_generation is the same so we keep cache.
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
 
@@ -434,13 +436,13 @@ mod tests {
             session.perform_cache_invalidations(false).unwrap();
             // gc_generation differs, so we discard cache.
             assert!(!session.cached_address(&addr).unwrap());
-            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(!session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
     }
 
     #[test]
-    fn cache_address_commit_then_checkpoint() {
+    fn cache_commit_then_checkpoint() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
             let mut d = PathBuf::from(tmp_dir.path());
@@ -458,7 +460,7 @@ mod tests {
         {
             let session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
+            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
             session.commit(&id).unwrap();
         }
         drop(sendlog);
@@ -468,7 +470,7 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_addresses(&[32; 0], 0, &[]).unwrap();
+            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);
@@ -486,13 +488,13 @@ mod tests {
         {
             let session = sendlog.session(gc_generation).unwrap();
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.perform_cache_invalidations(true).unwrap();
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.perform_cache_invalidations(false).unwrap();
             assert!(session.cached_address(&addr).unwrap());
-            assert!(session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
 
@@ -501,7 +503,7 @@ mod tests {
             let session = sendlog.session(Xid::new()).unwrap();
             session.perform_cache_invalidations(false).unwrap();
             assert!(!session.cached_address(&addr).unwrap());
-            assert!(!session.cached_stat_addresses(&[32; 0]).unwrap().is_some());
+            assert!(!session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
         }
         drop(sendlog);
     }

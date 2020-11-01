@@ -448,16 +448,26 @@ impl Repo {
                     "insert into Reachability(Address) values(?) on conflict do nothing;",
                 )?;
 
-                let addr = &metadata.plain_text_metadata.address;
                 // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
                 // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
-                let mut tr = htree::TreeReader::new(metadata.plain_text_metadata.tree_height, addr);
-                while let Some((height, addr)) = tr.next_addr()? {
-                    let rows_changed =
-                        add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
-                    if rows_changed != 0 && height != 0 {
-                        let data = storage_engine.get_chunk(&addr)?;
-                        tr.push_level(height - 1, data)?;
+
+                let data_tree = metadata.plain_text_metadata.data_tree;
+
+                let trees = if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
+                    vec![data_tree, index_tree]
+                } else {
+                    vec![data_tree]
+                };
+
+                for tree in trees {
+                    let mut tr = htree::TreeReader::new(tree.height, &tree.address);
+                    while let Some((height, addr)) = tr.next_addr()? {
+                        let rows_changed =
+                            add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
+                        if rows_changed != 0 && height != 0 {
+                            let data = storage_engine.get_chunk(&addr)?;
+                            tr.push_level(height - 1, data)?;
+                        }
                     }
                 }
                 Ok(())

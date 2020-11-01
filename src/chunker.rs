@@ -83,6 +83,10 @@ impl RollsumChunker {
         (n_added, None)
     }
 
+    pub fn buffered_count(&mut self) -> usize {
+        self.cur_vec.len()
+    }
+
     pub fn force_split(&mut self) -> Option<Vec<u8>> {
         self.rs.reset();
         let v = self.swap_vec();
