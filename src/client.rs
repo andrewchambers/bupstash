@@ -3,6 +3,7 @@ use super::chunker;
 use super::crypto;
 use super::fsutil;
 use super::htree;
+use super::index;
 use super::itemset;
 use super::protocol::*;
 use super::querycache;
@@ -12,7 +13,6 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use failure::Fail;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -104,36 +104,6 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
             }
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum VersionedIndexEntry {
-    V1(IndexEntry),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum IndexEntryKind {
-    Other,
-    Regular,
-    Symlink,
-    Char,
-    Block,
-    Directory,
-    Fifo,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct IndexEntry {
-    pub path: String,
-    pub kind: IndexEntryKind,
-    pub perms: serde_bare::Uint,
-    pub size: serde_bare::Uint,
-    pub data_chunk_idx: serde_bare::Uint,
-    pub data_chunk_content_idx: serde_bare::Uint,
-    pub data_chunk_end_idx: serde_bare::Uint,
-    pub data_chunk_offset: serde_bare::Uint,
-    pub data_chunk_content_offset: serde_bare::Uint,
-    pub data_chunk_end_offset: serde_bare::Uint,
 }
 
 pub struct SendContext {
@@ -554,14 +524,15 @@ fn send_dir(
                     tw.add_addr(sink, 0, &address)?;
                 }
 
-                let mut dir_index: Vec<VersionedIndexEntry> =
+                let mut dir_index: Vec<index::VersionedIndexEntry> =
                     serde_bare::from_slice(&cached_index).unwrap();
 
                 for index_entry in dir_index.iter_mut() {
                     match index_entry {
-                        VersionedIndexEntry::V1(ref mut index_entry) => {
+                        index::VersionedIndexEntry::V1(ref mut index_entry) => {
                             index_entry.data_chunk_idx.0 += dir_data_chunk_idx;
                             index_entry.data_chunk_content_idx.0 += dir_data_chunk_idx;
+                            index_entry.data_chunk_content_end_idx.0 += dir_data_chunk_idx;
                             index_entry.data_chunk_end_idx.0 += dir_data_chunk_idx;
                         }
                     }
@@ -590,7 +561,7 @@ fn send_dir(
                 };
 
                 let dir_data_chunk_idx = tw.data_chunk_count();
-                let mut dir_index: Vec<VersionedIndexEntry> =
+                let mut dir_index: Vec<index::VersionedIndexEntry> =
                     Vec::with_capacity(tar_dir_ents.len());
 
                 for (ent_path, tar_path, metadata, hdr_bytes) in tar_dir_ents.drain(..) {
@@ -610,6 +581,9 @@ fn send_dir(
 
                     let ent_data_chunk_content_idx = tw.data_chunk_count();
                     let ent_data_chunk_content_offset = chunker.buffered_count() as u64;
+
+                    let mut ent_data_chunk_content_end_idx = ent_data_chunk_content_idx;
+                    let mut ent_data_chunk_content_end_offset = ent_data_chunk_content_offset;
 
                     if metadata.is_file() {
                         let mut f = match std::fs::File::open(&ent_path) {
@@ -635,6 +609,9 @@ fn send_dir(
                             send_chunks(ctx, sink, chunker, tw, &mut f, Some(&mut on_chunk))?;
                         total_size += file_len as u64;
 
+                        ent_data_chunk_content_end_idx = tw.data_chunk_count();
+                        ent_data_chunk_content_end_offset = chunker.buffered_count() as u64;
+
                         /* Tar entries are rounded to 512 bytes */
                         let remaining = 512 - (file_len % 512);
                         if remaining < 512 {
@@ -657,35 +634,42 @@ fn send_dir(
                     let ent_data_chunk_end_idx = tw.data_chunk_count();
                     let ent_data_chunk_end_offset = chunker.buffered_count() as u64;
 
-                    let mut index_entry = IndexEntry {
+                    let mut index_entry = index::IndexEntry {
                         path: tar_path.to_string_lossy().to_string(),
                         kind: match metadata.mode() as libc::mode_t & libc::S_IFMT {
-                            libc::S_IFREG => IndexEntryKind::Regular,
-                            libc::S_IFLNK => IndexEntryKind::Symlink,
-                            libc::S_IFCHR => IndexEntryKind::Char,
-                            libc::S_IFBLK => IndexEntryKind::Block,
-                            libc::S_IFDIR => IndexEntryKind::Directory,
-                            libc::S_IFIFO => IndexEntryKind::Fifo,
-                            _ => IndexEntryKind::Other,
+                            libc::S_IFREG => index::IndexEntryKind::Regular,
+                            libc::S_IFLNK => index::IndexEntryKind::Symlink,
+                            libc::S_IFCHR => index::IndexEntryKind::Char,
+                            libc::S_IFBLK => index::IndexEntryKind::Block,
+                            libc::S_IFDIR => index::IndexEntryKind::Directory,
+                            libc::S_IFIFO => index::IndexEntryKind::Fifo,
+                            _ => index::IndexEntryKind::Other,
                         },
                         perms: serde_bare::Uint(metadata.permissions().mode() as u64),
                         size: serde_bare::Uint(metadata.size()),
                         data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
-                        data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
                         data_chunk_content_idx: serde_bare::Uint(
                             ent_data_chunk_content_idx - dir_data_chunk_idx,
                         ),
-                        data_chunk_content_offset: serde_bare::Uint(ent_data_chunk_content_offset),
+                        data_chunk_content_end_idx: serde_bare::Uint(
+                            ent_data_chunk_content_end_idx - dir_data_chunk_idx,
+                        ),
                         data_chunk_end_idx: serde_bare::Uint(
                             ent_data_chunk_end_idx - dir_data_chunk_idx,
+                        ),
+                        data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
+                        data_chunk_content_offset: serde_bare::Uint(ent_data_chunk_content_offset),
+                        data_chunk_content_end_offset: serde_bare::Uint(
+                            ent_data_chunk_content_end_offset,
                         ),
                         data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
                     };
 
-                    dir_index.push(VersionedIndexEntry::V1(index_entry.clone()));
+                    dir_index.push(index::VersionedIndexEntry::V1(index_entry.clone()));
 
                     index_entry.data_chunk_idx.0 += dir_data_chunk_idx;
                     index_entry.data_chunk_content_idx.0 += dir_data_chunk_idx;
+                    index_entry.data_chunk_content_end_idx.0 += dir_data_chunk_idx;
                     index_entry.data_chunk_end_idx.0 += dir_data_chunk_idx;
 
                     send_chunks(
@@ -694,7 +678,8 @@ fn send_dir(
                         idx_chunker,
                         idx_tw,
                         &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&VersionedIndexEntry::V1(index_entry)).unwrap(),
+                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_entry))
+                                .unwrap(),
                         ),
                         None,
                     )?;
@@ -740,7 +725,7 @@ fn send_dir(
     Ok(())
 }
 
-pub struct RequestContext {
+pub struct DataRequestContext {
     pub progress: indicatif::ProgressBar,
     pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
@@ -749,13 +734,24 @@ pub struct RequestContext {
 }
 
 pub fn request_data_stream(
-    mut ctx: RequestContext,
+    mut ctx: DataRequestContext,
     id: Xid,
+    pick: Option<index::PickMap>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    write_packet(w, &Packet::TRequestData(TRequestData { id }))?;
+    write_packet(
+        w,
+        &Packet::TRequestData(TRequestData {
+            id,
+            ranges: if let Some(ref pick) = pick {
+                Some(pick.data_chunk_ranges.clone())
+            } else {
+                None
+            },
+        }),
+    )?;
 
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestData(resp) => match resp.metadata {
@@ -786,7 +782,11 @@ pub fn request_data_stream(
                 &plain_text_metadata.data_tree.address,
             );
 
-            receive_htree(ctx, &hash_key, r, &mut tr, out)?;
+            if let Some(pick) = pick {
+                receive_partial_htree(ctx, &hash_key, r, &mut tr, pick, out)?;
+            } else {
+                receive_htree(ctx, &hash_key, r, &mut tr, out)?;
+            }
 
             out.flush()?;
             Ok(())
@@ -795,11 +795,11 @@ pub fn request_data_stream(
 }
 
 pub fn request_index(
-    mut ctx: RequestContext,
+    mut ctx: DataRequestContext,
     id: Xid,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<Vec<VersionedIndexEntry>, failure::Error> {
+) -> Result<Vec<index::VersionedIndexEntry>, failure::Error> {
     write_packet(w, &Packet::TRequestIndex(TRequestIndex { id }))?;
 
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -834,7 +834,7 @@ pub fn request_index(
             let mut index_data = std::io::Cursor::new(Vec::new());
             receive_htree(ctx, &hash_key, r, &mut tr, &mut index_data)?;
 
-            let mut index: Vec<VersionedIndexEntry> = Vec::new();
+            let mut index: Vec<index::VersionedIndexEntry> = Vec::new();
 
             let index_data_size = index_data.position();
             index_data.set_position(0);
@@ -851,7 +851,7 @@ pub fn request_index(
 }
 
 fn receive_htree(
-    mut ctx: RequestContext,
+    mut ctx: DataRequestContext,
     hash_key: &crypto::HashKey,
     r: &mut dyn std::io::Read,
     tr: &mut htree::TreeReader,
@@ -880,6 +880,88 @@ fn receive_htree(
             }
             tr.push_level(height - 1, data)?;
         }
+    }
+
+    out.flush()?;
+    Ok(())
+}
+
+fn receive_partial_htree(
+    mut ctx: DataRequestContext,
+    hash_key: &crypto::HashKey,
+    r: &mut dyn std::io::Read,
+    tr: &mut htree::TreeReader,
+    pick: index::PickMap,
+    out: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    let mut range_idx: usize = 0;
+    let mut current_data_chunk_idx: u64 = 0;
+    let mut pending_data_chunks = std::collections::VecDeque::new();
+
+    while let Some((height, addr)) = tr.next_addr()? {
+        let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::Chunk(chunk) => {
+                if addr != chunk.address {
+                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                }
+                chunk.data
+            }
+            _ => failure::bail!("protocol error, expected begin chunk packet"),
+        };
+
+        if height == 0 {
+            let data = ctx.data_dctx.decrypt_data(data)?;
+            if addr != crypto::keyed_content_address(&data, &hash_key) {
+                return Err(ClientError::CorruptOrTamperedDataError.into());
+            }
+
+            if let Some(chunk_idx) = pending_data_chunks.pop_back() {
+                match pick.incomplete_data_chunks.get(&chunk_idx) {
+                    Some(ranges) => {
+                        for range in ranges.iter() {
+                            out.write_all(
+                                &data[range.start..std::cmp::min(data.len(), range.end)],
+                            )?;
+                        }
+                    }
+                    None => out.write_all(&data)?,
+                }
+            }
+        } else {
+            if addr != htree::tree_block_address(&data) {
+                return Err(ClientError::CorruptOrTamperedDataError.into());
+            }
+
+            if height == 1 {
+                let mut filtered_data = Vec::with_capacity(data.len());
+
+                for addr_bytes in data.chunks(ADDRESS_SZ) {
+                    if let Some(current_range) = pick.data_chunk_ranges.get(range_idx) {
+                        if current_data_chunk_idx >= current_range.start_idx
+                            && current_data_chunk_idx <= current_range.end_idx
+                        {
+                            filtered_data.extend_from_slice(addr_bytes);
+                            pending_data_chunks.push_front(current_data_chunk_idx);
+                        }
+                        current_data_chunk_idx += 1;
+
+                        if current_data_chunk_idx > current_range.end_idx {
+                            range_idx += 1;
+                        }
+                    }
+                }
+
+                tr.push_level(height - 1, filtered_data)?;
+            } else if pick.data_chunk_ranges.get(range_idx).is_some() {
+                tr.push_level(height - 1, data)?;
+            }
+        }
+    }
+
+    if pick.is_subtar {
+        // The final entry in a tarball is two null files.
+        let buf = [0; 1024];
+        out.write_all(&buf[..])?;
     }
 
     out.flush()?;

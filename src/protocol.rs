@@ -1,4 +1,5 @@
 use super::address::*;
+use super::index;
 use super::itemset;
 use super::repository;
 use super::xid::*;
@@ -33,6 +34,7 @@ pub struct RBeginSend {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TRequestData {
     pub id: Xid,
+    pub ranges: Option<Vec<index::HTreeDataRange>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

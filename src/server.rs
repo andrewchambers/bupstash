@@ -1,4 +1,6 @@
+use super::address;
 use super::htree;
+use super::index;
 use super::itemset;
 use super::protocol::*;
 use super::repository;
@@ -84,7 +86,7 @@ fn serve2(
                         if !cfg.allow_get {
                             failure::bail!("server has disabled get for this client")
                         }
-                        send(&mut repo, req.id, w)?;
+                        send(&mut repo, req.id, req.ranges, w)?;
                     }
                     Packet::TRequestIndex(req) => {
                         if !cfg.allow_get {
@@ -197,6 +199,7 @@ fn recv(
 fn send(
     repo: &mut repository::Repo,
     id: Xid,
+    ranges: Option<Vec<index::HTreeDataRange>>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
@@ -221,7 +224,12 @@ fn send(
                 metadata.plain_text_metadata.data_tree.height,
                 &metadata.plain_text_metadata.data_tree.address,
             );
-            send_htree(repo, &mut tr, w)?;
+
+            if let Some(ranges) = ranges {
+                send_partial_htree(repo, &mut tr, ranges, w)?;
+            } else {
+                send_htree(repo, &mut tr, w)?;
+            }
         }
     }
 
@@ -280,6 +288,98 @@ fn send_htree(
         let (height, chunk_address, pending_chunk) = next;
         let chunk_data = pending_chunk.recv()??;
         if height != 0 {
+            tr.push_level(height - 1, chunk_data.clone())?;
+        }
+
+        match tr.next_addr()? {
+            Some((height, chunk_address)) => {
+                next = (
+                    height,
+                    chunk_address,
+                    storage_engine.get_chunk_async(&chunk_address),
+                );
+            }
+            None => {
+                write_packet(
+                    w,
+                    &Packet::Chunk(Chunk {
+                        address: chunk_address,
+                        data: chunk_data,
+                    }),
+                )?;
+                return Ok(());
+            }
+        }
+
+        // Write the chunk out while the async worker fetches the next one.
+        write_packet(
+            w,
+            &Packet::Chunk(Chunk {
+                address: chunk_address,
+                data: chunk_data,
+            }),
+        )?;
+    }
+}
+
+fn send_partial_htree(
+    repo: &mut repository::Repo,
+    tr: &mut htree::TreeReader,
+    ranges: Vec<index::HTreeDataRange>,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    // The ranges are sent from the client, first validate them.
+    for i in 0..ranges.len() {
+        let r = &ranges[i];
+        if r.start_idx > r.end_idx {
+            failure::bail!("malformed htree fetch range, start point after end");
+        }
+
+        if let Some(next) = ranges.get(i + 1) {
+            if next.start_idx == r.end_idx {
+                failure::bail!("malformed htree fetch range, not in minimal form");
+            } else if next.start_idx < r.end_idx {
+                failure::bail!("malformed htree fetch range, not in sorted order");
+            }
+        }
+    }
+
+    let mut storage_engine = repo.storage_engine()?;
+    // The idea is we fetch the next chunk while we are sending the current chunk.
+    // to mitigate some of the problems with latency when fetching from a slow storage engine.
+    let (height, chunk_address) = tr.next_addr()?.unwrap();
+    let mut next = (
+        height,
+        chunk_address,
+        storage_engine.get_chunk_async(&chunk_address),
+    );
+
+    let mut range_idx: usize = 0;
+    let mut current_data_chunk_idx: u64 = 0;
+
+    loop {
+        let (height, chunk_address, pending_chunk) = next;
+        let chunk_data = pending_chunk.recv()??;
+
+        if height == 1 {
+            let mut filtered_chunk_data = Vec::with_capacity(chunk_data.len());
+
+            for addr_bytes in chunk_data.chunks(address::ADDRESS_SZ) {
+                if let Some(current_range) = ranges.get(range_idx) {
+                    if current_data_chunk_idx >= current_range.start_idx
+                        && current_data_chunk_idx <= current_range.end_idx
+                    {
+                        filtered_chunk_data.extend_from_slice(addr_bytes);
+                    }
+                    current_data_chunk_idx += 1;
+                    if current_data_chunk_idx > current_range.end_idx {
+                        range_idx += 1;
+                    }
+                }
+            }
+
+            tr.push_level(height - 1, filtered_chunk_data)?;
+        } else if ranges.get(range_idx).is_some() {
             tr.push_level(height - 1, chunk_data.clone())?;
         }
 

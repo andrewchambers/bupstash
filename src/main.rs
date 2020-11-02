@@ -9,6 +9,7 @@ pub mod external_chunk_storage;
 pub mod fsutil;
 pub mod hex;
 pub mod htree;
+pub mod index;
 pub mod itemset;
 pub mod keys;
 pub mod pem;
@@ -772,6 +773,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     repo_opts(&mut opts);
     query_opts(&mut opts);
     opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
+    opts.optopt(
+        "",
+        "pick",
+        "Pick a single file or directory from an item.",
+        "PATH",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -848,8 +855,30 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     };
 
+    let pick = if matches.opt_present("pick") {
+        let content_index = client::request_index(
+            client::DataRequestContext {
+                progress: progress.clone(),
+                primary_key_id,
+                hash_key_part_1: hash_key_part_1.clone(),
+                data_dctx: data_dctx.clone(),
+                metadata_dctx: metadata_dctx.clone(),
+            },
+            id,
+            &mut serve_out,
+            &mut serve_in,
+        )?;
+
+        Some(index::pick(
+            &matches.opt_str("pick").unwrap(),
+            &content_index,
+        )?)
+    } else {
+        None
+    };
+
     client::request_data_stream(
-        client::RequestContext {
+        client::DataRequestContext {
             progress: progress.clone(),
             primary_key_id,
             hash_key_part_1,
@@ -857,10 +886,12 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             metadata_dctx,
         },
         id,
+        pick,
         &mut serve_out,
         &mut serve_in,
         &mut std::io::stdout(),
     )?;
+
     client::hangup(&mut serve_in)?;
 
     progress.finish_and_clear();
@@ -949,8 +980,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     };
 
-    let mut index = client::request_index(
-        client::RequestContext {
+    let mut content_index = client::request_index(
+        client::DataRequestContext {
             progress: progress.clone(),
             primary_key_id,
             hash_key_part_1,
@@ -967,12 +998,12 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
     progress.finish_and_clear();
 
     // Due to how 'put' works, our tarballs are not ordered in a way that is pleasant by default.
-    index.sort_by(|a, b| match (a, b) {
-        (client::VersionedIndexEntry::V1(ref a), client::VersionedIndexEntry::V1(ref b)) => {
+    content_index.sort_by(|a, b| match (a, b) {
+        (index::VersionedIndexEntry::V1(ref a), index::VersionedIndexEntry::V1(ref b)) => {
             a.path.cmp(&b.path)
         }
     });
-    for item in index.iter() {
+    for item in content_index.iter() {
         println!("{:?}", item);
     }
     std::io::stdout().flush()?;
