@@ -5,7 +5,7 @@ pub enum VersionedIndexEntry {
     V1(IndexEntry),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum IndexEntryKind {
     Other,
     Regular,
@@ -19,8 +19,7 @@ pub enum IndexEntryKind {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexEntry {
     pub path: String,
-    pub kind: IndexEntryKind,
-    pub perms: serde_bare::Uint,
+    pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub data_chunk_idx: serde_bare::Uint,
     pub data_chunk_content_idx: serde_bare::Uint,
@@ -30,6 +29,103 @@ pub struct IndexEntry {
     pub data_chunk_content_offset: serde_bare::Uint,
     pub data_chunk_content_end_offset: serde_bare::Uint,
     pub data_chunk_end_offset: serde_bare::Uint,
+}
+
+impl IndexEntry {
+    pub fn kind(&self) -> IndexEntryKind {
+        match self.mode.0 as libc::mode_t & libc::S_IFMT {
+            libc::S_IFREG => IndexEntryKind::Regular,
+            libc::S_IFLNK => IndexEntryKind::Symlink,
+            libc::S_IFCHR => IndexEntryKind::Char,
+            libc::S_IFBLK => IndexEntryKind::Block,
+            libc::S_IFDIR => IndexEntryKind::Directory,
+            libc::S_IFIFO => IndexEntryKind::Fifo,
+            _ => IndexEntryKind::Other,
+        }
+    }
+
+    pub fn display_mode(&self) -> String {
+        let mode = self.mode.0 as libc::mode_t;
+
+        let mut result = String::with_capacity(10);
+
+        result.push(match self.kind() {
+            IndexEntryKind::Other => '?',
+            IndexEntryKind::Regular => '-',
+            IndexEntryKind::Symlink => 'l',
+            IndexEntryKind::Char => 'c',
+            IndexEntryKind::Block => 'b',
+            IndexEntryKind::Directory => 'd',
+            IndexEntryKind::Fifo => 'p',
+        });
+        result.push(if (mode & libc::S_IRUSR) != 0 {
+            'r'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_IWUSR) != 0 {
+            'w'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_ISUID) != 0 {
+            if (mode & libc::S_IXUSR) != 0 {
+                's'
+            } else {
+                'S'
+            }
+        } else if (mode & libc::S_IXUSR) != 0 {
+            'x'
+        } else {
+            '-'
+        });
+
+        result.push(if (mode & libc::S_IRGRP) != 0 {
+            'r'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_IWGRP) != 0 {
+            'w'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_ISGID) != 0 {
+            if (mode & libc::S_IXGRP) != 0 {
+                's'
+            } else {
+                'S'
+            }
+        } else if (mode & libc::S_IXGRP) != 0 {
+            'x'
+        } else {
+            '-'
+        });
+
+        result.push(if (mode & libc::S_IROTH) != 0 {
+            'r'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_IWOTH) != 0 {
+            'w'
+        } else {
+            '-'
+        });
+        result.push(if (mode & libc::S_ISVTX) != 0 {
+            if (mode & libc::S_IXOTH) != 0 {
+                't'
+            } else {
+                'T'
+            }
+        } else if (mode & libc::S_IXOTH) != 0 {
+            'x'
+        } else {
+            '-'
+        });
+
+        result
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -55,7 +151,7 @@ pub fn pick(path: &str, index: &Vec<VersionedIndexEntry>) -> Result<PickMap, fai
             continue;
         }
 
-        match ent.kind {
+        match ent.kind() {
             IndexEntryKind::Directory => {
                 let prefix = if ent.path == "." {
                     "".to_string()
@@ -177,10 +273,10 @@ pub fn pick(path: &str, index: &Vec<VersionedIndexEntry>) -> Result<PickMap, fai
                     incomplete_data_chunks,
                 });
             }
-            _ => failure::bail!(
+            kind => failure::bail!(
                 "unable to pick {} - unsupported directory entry type: {:?}",
                 path,
-                ent.kind
+                kind
             ),
         }
     }

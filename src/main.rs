@@ -400,7 +400,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         "",
         "format",
         "Output format, valid values are 'human' or 'jsonl'.",
-        "PATH",
+        "FORMAT",
     );
     query_opts(&mut opts);
 
@@ -904,8 +904,23 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
     repo_opts(&mut opts);
     query_opts(&mut opts);
     opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
+    opts.optopt(
+        "",
+        "format",
+        "Output format, valid values are 'human' or 'jsonl'.",
+        "FORMAT",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
+
+    let list_format = match matches.opt_str("format") {
+        Some(f) => match &f[..] {
+            "jsonl" => ListFormat::Jsonl,
+            "human" => ListFormat::Human,
+            _ => failure::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+        },
+        None => ListFormat::Human,
+    };
 
     let key = matches_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
@@ -1003,9 +1018,33 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
             a.path.cmp(&b.path)
         }
     });
-    for item in content_index.iter() {
-        println!("{:?}", item);
+
+    match list_format {
+        ListFormat::Human => {
+            for item in content_index.iter() {
+                match item {
+                    index::VersionedIndexEntry::V1(item) => {
+                        println!("{} {} {}", item.display_mode(), item.size.0, item.path);
+                    }
+                }
+            }
+        }
+        ListFormat::Jsonl => {
+            for item in content_index.iter() {
+                match item {
+                    index::VersionedIndexEntry::V1(item) => {
+                        print!("{{");
+                        print!("\"mode\":{},", serde_json::to_string(&item.display_mode())?);
+                        print!("\"size\":{},", item.size.0);
+                        print!("\"path\":{}", serde_json::to_string(&item.path)?);
+                        print!("}}");
+                        println!();
+                    }
+                }
+            }
+        }
     }
+
     std::io::stdout().flush()?;
 
     Ok(())

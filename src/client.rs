@@ -636,17 +636,12 @@ fn send_dir(
 
                     let mut index_entry = index::IndexEntry {
                         path: tar_path.to_string_lossy().to_string(),
-                        kind: match metadata.mode() as libc::mode_t & libc::S_IFMT {
-                            libc::S_IFREG => index::IndexEntryKind::Regular,
-                            libc::S_IFLNK => index::IndexEntryKind::Symlink,
-                            libc::S_IFCHR => index::IndexEntryKind::Char,
-                            libc::S_IFBLK => index::IndexEntryKind::Block,
-                            libc::S_IFDIR => index::IndexEntryKind::Directory,
-                            libc::S_IFIFO => index::IndexEntryKind::Fifo,
-                            _ => index::IndexEntryKind::Other,
-                        },
-                        perms: serde_bare::Uint(metadata.permissions().mode() as u64),
-                        size: serde_bare::Uint(metadata.size()),
+                        mode: serde_bare::Uint(metadata.permissions().mode() as u64),
+                        size: serde_bare::Uint(if metadata.is_file() {
+                            metadata.size()
+                        } else {
+                            0
+                        }),
                         data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
                         data_chunk_content_idx: serde_bare::Uint(
                             ent_data_chunk_content_idx - dir_data_chunk_idx,
