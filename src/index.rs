@@ -176,8 +176,6 @@ pub fn pick(path: &str, index: &Vec<VersionedIndexEntry>) -> Result<PickMap, fai
                         continue;
                     }
 
-                    dbg!(&ent.path);
-
                     // Either coalesce the existing range or insert a new range.
                     if !data_chunk_ranges.is_empty()
                         && ((data_chunk_ranges.last().unwrap().end_idx == ent.data_chunk_idx.0)

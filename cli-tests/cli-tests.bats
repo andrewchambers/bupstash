@@ -424,3 +424,30 @@ _concurrent_modify_worker () {
   bupstash rm --allow-many --query-encrypted id='*'
   test 0 = "$(bupstash list --query-encrypted | wc -l)"
 }
+
+@test "pick and index" {
+  mkdir $SCRATCH/foo
+  echo foo > $SCRATCH/foo/foo.txt
+  echo bar > $SCRATCH/foo/bar.txt
+  echo baz > $SCRATCH/foo/baz.txt
+  mkdir $SCRATCH/foo/baz
+  echo foo > $SCRATCH/foo/baz/foo.txt
+  echo bar > $SCRATCH/foo/baz/bar.txt
+  echo baz > $SCRATCH/foo/baz/baz.txt
+
+  # Loop so we test cache code paths
+  for i in `seq 2`
+  do
+    id="$(bupstash put $SCRATCH/foo)"
+    test $(bupstash get --pick foo.txt id=$id) = foo
+    test $(bupstash get --pick bar.txt id=$id) = bar
+    test $(bupstash get --pick baz.txt id=$id) = baz
+    test $(bupstash get --pick baz/foo.txt id=$id) = foo
+    test $(bupstash get --pick baz/bar.txt id=$id) = bar
+    test $(bupstash get --pick baz/baz.txt id=$id) = baz
+    test $(bupstash get id=$id | tar -t | wc -l) = 8
+    test $(bupstash get --pick . id=$id | tar -t | wc -l) = 8
+    test $(bupstash get --pick baz id=$id | tar -t | wc -l) = 4
+    test $(bupstash list-contents  id=$id | wc -l) = 8
+  done
+}
