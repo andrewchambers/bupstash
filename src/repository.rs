@@ -25,6 +25,7 @@ pub enum RepoError {
     UnsupportedSchemaVersion,
 }
 
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
     DirStore,

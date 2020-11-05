@@ -9,8 +9,12 @@ use std::convert::TryInto;
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct ClientInfo {
-    pub protocol: String,
+pub struct TOpenRepository {
+    pub repository_protocol_version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct ROpenRepository {
     pub now: chrono::DateTime<chrono::Utc>,
 }
 
@@ -94,6 +98,7 @@ pub enum Progress {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Abort {
     pub message: String,
+    pub code: Option<serde_bare::Uint>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -106,9 +111,11 @@ pub struct StorageBeginGC {
     pub reachability_db_path: std::path::PathBuf,
 }
 
+#[non_exhaustive]
 #[derive(Debug, PartialEq)]
 pub enum Packet {
-    ClientInfo(ClientInfo),
+    TOpenRepository(TOpenRepository),
+    ROpenRepository(ROpenRepository),
     TInitRepository(Option<repository::StorageEngineSpec>),
     RInitRepository,
     TBeginSend(TBeginSend),
@@ -144,7 +151,8 @@ pub enum Packet {
     EndOfTransmission,
 }
 
-const PACKET_KIND_CLIENT_INFO: u8 = 0;
+const PACKET_KIND_T_OPEN_REPOSITORY: u8 = 0;
+const PACKET_KIND_R_OPEN_REPOSITORY: u8 = 27;
 const PACKET_KIND_T_INIT_REPOSITORY: u8 = 1;
 const PACKET_KIND_R_INIT_REPOSITORY: u8 = 2;
 const PACKET_KIND_T_BEGIN_SEND: u8 = 3;
@@ -194,7 +202,7 @@ pub fn read_packet(
     max_packet_size: usize,
 ) -> Result<Packet, failure::Error> {
     let pkt = read_packet_raw(r, max_packet_size)?;
-    if let Packet::Abort(Abort { message }) = pkt {
+    if let Packet::Abort(Abort { message, .. }) = pkt {
         return Err(failure::format_err!("remote error: {}", message));
     }
     Ok(pkt)
@@ -242,7 +250,8 @@ pub fn read_packet_raw(
 
     read_from_remote(r, &mut buf)?;
     let packet = match kind {
-        PACKET_KIND_CLIENT_INFO => Packet::ClientInfo(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_OPEN_REPOSITORY => Packet::TOpenRepository(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_OPEN_REPOSITORY => Packet::ROpenRepository(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_INIT_REPOSITORY => Packet::TInitRepository(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_INIT_REPOSITORY => Packet::RInitRepository,
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
@@ -275,7 +284,11 @@ pub fn read_packet_raw(
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
-        _ => return Err(failure::format_err!("protocol error, unknown packet kind")),
+        _ => {
+            return Err(failure::format_err!(
+                "protocol error, unknown packet kind sent by remote"
+            ))
+        }
     };
     Ok(packet)
 }
@@ -302,9 +315,14 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), fail
             w.write_all(&v.address.bytes)?;
             w.write_all(&v.data)?;
         }
-        Packet::ClientInfo(ref v) => {
+        Packet::TOpenRepository(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_CLIENT_INFO, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_T_OPEN_REPOSITORY, b.len().try_into()?)?;
+            w.write_all(&b)?;
+        }
+        Packet::ROpenRepository(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_OPEN_REPOSITORY, b.len().try_into()?)?;
             w.write_all(&b)?;
         }
         Packet::TInitRepository(ref v) => {

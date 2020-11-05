@@ -59,11 +59,13 @@ impl ItemMetadata {
     }
 }
 
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub enum VersionedItemMetadata {
     V1(ItemMetadata),
 }
 
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum LogOp {
     AddItem(VersionedItemMetadata),

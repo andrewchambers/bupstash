@@ -26,6 +26,7 @@ pub fn serve(
             w,
             &Packet::Abort(Abort {
                 message: format!("{}", err),
+                code: None,
             }),
         ),
     }
@@ -36,107 +37,105 @@ fn serve2(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::ClientInfo(info) => {
-            if info.protocol != "1" {
-                failure::bail!(
-                    "client/server version mismatch, expected protocol version 1, got version {}",
-                    info.protocol
-                )
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::TOpenRepository(req) => {
+                if req.repository_protocol_version != "1" {
+                    failure::bail!(
+                        "server does not support bupstash protocol version {}",
+                        req.repository_protocol_version
+                    )
+                }
+
+                let mut repo = repository::Repo::open(&cfg.repo_path)?;
+
+                write_packet(
+                    w,
+                    &Packet::ROpenRepository(ROpenRepository {
+                        now: chrono::Utc::now(),
+                    }),
+                )?;
+
+                return serve_repository(cfg, &mut repo, r, w);
             }
 
-            let clock_skew = chrono::Utc::now().signed_duration_since(info.now);
-            const MAX_SKEW_MINS: i64 = 15;
-            if clock_skew > chrono::Duration::minutes(MAX_SKEW_MINS)
-                || clock_skew < chrono::Duration::minutes(-MAX_SKEW_MINS)
-            {
-                // This helps protect against inaccurate item timestamps, which protects users from unintentionally
-                // deleting important backups when deleting based on timestamp queries. Instead they will be notified
-                // of the clock mismatch as soon as we know about it.
-                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW_MINS);
+            Packet::TInitRepository(engine) => {
+                if !cfg.allow_init {
+                    failure::bail!("server has disabled init for this client")
+                }
+                repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
+                write_packet(w, &Packet::RInitRepository)?;
             }
+
+            Packet::EndOfTransmission => return Ok(()),
+            _ => failure::bail!("expected client info"),
         }
-        _ => failure::bail!("expected client info"),
     }
+}
 
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::TInitRepository(engine) => {
-            if !cfg.allow_init {
-                failure::bail!("server has disabled init for this client")
+fn serve_repository(
+    cfg: ServerConfig,
+    repo: &mut repository::Repo,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<(), failure::Error> {
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::TInitRepository(_) => {
+                failure::bail!(
+                    "protocol error, repository initialization must be the first request"
+                );
             }
-            repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
-            write_packet(w, &Packet::RInitRepository)?;
-        }
-        mut current_packet => {
-            let mut repo = repository::Repo::open(&cfg.repo_path)?;
-            loop {
-                match current_packet {
-                    Packet::TInitRepository(_) => {
-                        failure::bail!(
-                            "protocol error, repository initialization must be the first request"
-                        );
-                    }
-                    Packet::TBeginSend(begin) => {
-                        if !cfg.allow_put {
-                            failure::bail!("server has disabled put for this client")
-                        }
-                        recv(&mut repo, begin, r, w)?;
-                    }
-                    Packet::TRequestData(req) => {
-                        if !cfg.allow_get {
-                            failure::bail!("server has disabled get for this client")
-                        }
-                        send(&mut repo, req.id, req.ranges, w)?;
-                    }
-                    Packet::TRequestIndex(req) => {
-                        if !cfg.allow_get {
-                            failure::bail!("server has disabled get for this client")
-                        }
-                        send_index(&mut repo, req.id, w)?;
-                    }
-                    Packet::TGc(_) => {
-                        if !cfg.allow_gc {
-                            failure::bail!("server has disabled garbage collection for this client")
-                        }
-                        gc(&mut repo, w)?;
-                    }
-                    Packet::TRequestItemSync(req) => {
-                        if !cfg.allow_get && !cfg.allow_remove {
-                            failure::bail!("server has disabled query and search for this client")
-                        }
-                        item_sync(&mut repo, req.after, req.gc_generation, w)?;
-                    }
-                    Packet::TRmItems(items) => {
-                        if !cfg.allow_remove {
-                            failure::bail!("server has disabled remove for this client")
-                        }
-                        if !items.is_empty() {
-                            repo.remove_items(items)?;
-                        }
-                        write_packet(w, &Packet::RRmItems)?;
-                    }
-                    Packet::TRestoreRemoved => {
-                        if !cfg.allow_put || !cfg.allow_get {
-                            failure::bail!("server has disabled restore for this client (restore requires get and put permissions).")
-                        }
-                        write_packet(
-                            w,
-                            &Packet::Progress(Progress::SetMessage(
-                                "restoring removed items...".to_string(),
-                            )),
-                        )?;
-                        let n_restored = repo.restore_removed()?;
-                        write_packet(w, &Packet::RRestoreRemoved(RRestoreRemoved { n_restored }))?;
-                    }
-                    Packet::EndOfTransmission => return Ok(()),
-                    _ => failure::bail!("protocol error, unexpected packet kind"),
-                };
-                current_packet = read_packet(r, DEFAULT_MAX_PACKET_SIZE)?;
+            Packet::TBeginSend(begin) => {
+                if !cfg.allow_put {
+                    failure::bail!("server has disabled put for this client")
+                }
+                recv(repo, begin, r, w)?;
             }
-        }
-    };
-
-    Ok(())
+            Packet::TRequestData(req) => {
+                if !cfg.allow_get {
+                    failure::bail!("server has disabled get for this client")
+                }
+                send(repo, req.id, req.ranges, w)?;
+            }
+            Packet::TRequestIndex(req) => {
+                if !cfg.allow_get {
+                    failure::bail!("server has disabled get for this client")
+                }
+                send_index(repo, req.id, w)?;
+            }
+            Packet::TGc(_) => {
+                if !cfg.allow_gc {
+                    failure::bail!("server has disabled garbage collection for this client")
+                }
+                gc(repo, w)?;
+            }
+            Packet::TRequestItemSync(req) => {
+                if !cfg.allow_get && !cfg.allow_remove {
+                    failure::bail!("server has disabled query and search for this client")
+                }
+                item_sync(repo, req.after, req.gc_generation, w)?;
+            }
+            Packet::TRmItems(items) => {
+                if !cfg.allow_remove {
+                    failure::bail!("server has disabled remove for this client")
+                }
+                if !items.is_empty() {
+                    repo.remove_items(items)?;
+                }
+                write_packet(w, &Packet::RRmItems)?;
+            }
+            Packet::TRestoreRemoved => {
+                if !cfg.allow_put || !cfg.allow_get {
+                    failure::bail!("server has disabled restore for this client (restore requires get and put permissions).")
+                }
+                let n_restored = repo.restore_removed()?;
+                write_packet(w, &Packet::RRestoreRemoved(RRestoreRemoved { n_restored }))?;
+            }
+            Packet::EndOfTransmission => return Ok(()),
+            _ => failure::bail!("protocol error, unexpected packet kind"),
+        };
+    }
 }
 
 fn recv(

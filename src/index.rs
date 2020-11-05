@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+#[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VersionedIndexEntry {
     V1(IndexEntry),

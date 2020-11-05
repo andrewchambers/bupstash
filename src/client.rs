@@ -25,14 +25,33 @@ pub enum ClientError {
     CorruptOrTamperedDataError,
 }
 
-pub fn negotiate_connection(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+pub fn open_repository(
+    w: &mut dyn std::io::Write,
+    r: &mut dyn std::io::Read,
+) -> Result<(), failure::Error> {
     write_packet(
         w,
-        &Packet::ClientInfo(ClientInfo {
-            protocol: "1".to_string(),
-            now: chrono::Utc::now(),
+        &Packet::TOpenRepository(TOpenRepository {
+            repository_protocol_version: "1".to_string(),
         }),
     )?;
+
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::ROpenRepository(resp) => {
+            let clock_skew = chrono::Utc::now().signed_duration_since(resp.now);
+            const MAX_SKEW_MINS: i64 = 15;
+            if clock_skew > chrono::Duration::minutes(MAX_SKEW_MINS)
+                || clock_skew < chrono::Duration::minutes(-MAX_SKEW_MINS)
+            {
+                // This helps protect against inaccurate item timestamps, which protects users from unintentionally
+                // deleting important backups when deleting based on timestamp queries. Instead they will be notified
+                // of the clock mismatch as soon as we know about it.
+                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW_MINS);
+            }
+        }
+        _ => failure::bail!("protocol error, expected begin ack packet"),
+    }
+
     Ok(())
 }
 
@@ -968,18 +987,13 @@ pub fn restore_removed(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<u64, failure::Error> {
+    progress.set_message("restoring items...");
+
     write_packet(w, &Packet::TRestoreRemoved)?;
-    loop {
-        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Progress(Progress::SetMessage(msg)) => {
-                progress.set_message(&msg);
-            }
-            Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => return Ok(n_restored),
-            _ => failure::bail!(
-                "protocol error, expected restore packet response or progress packet",
-            ),
-        };
-    }
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => return Ok(n_restored),
+        _ => failure::bail!("protocol error, expected restore packet response or progress packet",),
+    };
 }
 
 pub fn gc(
@@ -987,6 +1001,7 @@ pub fn gc(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<repository::GCStats, failure::Error> {
+    progress.set_message("collecting garbage...");
     write_packet(w, &Packet::TGc(TGc {}))?;
 
     loop {
@@ -1010,6 +1025,8 @@ pub fn sync(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
+    progress.set_message("syncing remote items...");
+
     let mut tx = query_cache.transaction()?;
 
     let after = tx.last_log_op()?;
@@ -1027,9 +1044,6 @@ pub fn sync(
         Packet::RRequestItemSync(ack) => ack.gc_generation,
         _ => failure::bail!("protocol error, expected items packet"),
     };
-
-    // At this point we know we have the remote lock, update message.
-    progress.set_message("syncing remote items...");
 
     tx.start_sync(gc_generation)?;
 
@@ -1057,22 +1071,6 @@ pub fn remove(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    // If the user is watching, we want to set the progress
-    // bar as late as possible so we don't obscure the
-    // 'acquiring repository lock...' message. Here we just
-    // send an empty RmItems, so that when the server responds
-    // we know the repository locks are held and we can
-    // start deleting items in batches.
-    // One extra round trip in exchange for a far better user debugging experience,
-    // but only when we know they are watching.
-    if !progress.is_hidden() {
-        write_packet(w, &Packet::TRmItems(vec![]))?;
-        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::RRmItems => {}
-            _ => failure::bail!("protocol error, expected RRmItems"),
-        }
-    }
-
     progress.set_message("removing items...");
 
     for chunked_ids in ids.chunks(4096) {
