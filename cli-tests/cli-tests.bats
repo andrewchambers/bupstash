@@ -106,10 +106,10 @@ teardown () {
 
 _concurrent_send_test_worker () {
   set -e
-  for i in $(seq 10)
+  for i in $(seq 50)
   do
     id="$(bupstash put -e --no-send-log :: echo $i)"
-    test "$i" = "$(bupstash get --query-cache ./cache$i id=$id)"
+    test "$i" = "$(bupstash get id=$id)"
   done
 }
 
@@ -118,8 +118,15 @@ _concurrent_send_test_worker () {
   do
     _concurrent_send_test_worker &
   done
+  for i in $(seq 5)
+  do
+    bupstash list > /dev/null
+    bupstash gc > /dev/null
+  done
   wait
-  test 100 = $(bupstash list | wc -l)
+  count=$(bupstash list | wc -l)
+  echo "count is $count"
+  test 500 = $count
 }
 
 @test "simple search and listing" {

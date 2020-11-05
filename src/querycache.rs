@@ -26,7 +26,7 @@ impl QueryCache {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
 
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         tx.execute(
             "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
@@ -87,7 +87,9 @@ impl QueryCache {
     }
 
     pub fn transaction(&mut self) -> Result<QueryCacheTx, failure::Error> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         Ok(QueryCacheTx { tx })
     }
 }

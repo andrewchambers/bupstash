@@ -28,11 +28,13 @@ pub enum ClientError {
 pub fn open_repository(
     w: &mut dyn std::io::Write,
     r: &mut dyn std::io::Read,
+    lock_hint: LockHint,
 ) -> Result<(), failure::Error> {
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
             repository_protocol_version: "1".to_string(),
+            lock_hint,
         }),
     )?;
 
@@ -991,9 +993,9 @@ pub fn restore_removed(
 
     write_packet(w, &Packet::TRestoreRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => return Ok(n_restored),
+        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored),
         _ => failure::bail!("protocol error, expected restore packet response or progress packet",),
-    };
+    }
 }
 
 pub fn gc(
@@ -1012,7 +1014,6 @@ pub fn gc(
             Packet::Progress(Progress::SetMessage(msg)) => {
                 progress.set_message(&msg);
             }
-            Packet::Progress(_) => (), /* Reserved unused. */
             Packet::RGc(rgc) => return Ok(rgc.stats),
             _ => failure::bail!("protocol error, expected gc packet or progress packe."),
         };

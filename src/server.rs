@@ -49,6 +49,12 @@ fn serve2(
 
                 let mut repo = repository::Repo::open(&cfg.repo_path)?;
 
+                match req.lock_hint {
+                    LockHint::Read => repo.alter_lock_mode(repository::LockMode::None)?,
+                    LockHint::Write => repo.alter_lock_mode(repository::LockMode::Write)?,
+                    LockHint::Gc => repo.alter_lock_mode(repository::LockMode::Write)?,
+                }
+
                 write_packet(
                     w,
                     &Packet::ROpenRepository(ROpenRepository {
@@ -90,36 +96,42 @@ fn serve_repository(
                 if !cfg.allow_put {
                     failure::bail!("server has disabled put for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::Write)?;
                 recv(repo, begin, r, w)?;
             }
             Packet::TRequestData(req) => {
                 if !cfg.allow_get {
                     failure::bail!("server has disabled get for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::None)?;
                 send(repo, req.id, req.ranges, w)?;
             }
             Packet::TRequestIndex(req) => {
                 if !cfg.allow_get {
                     failure::bail!("server has disabled get for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::None)?;
                 send_index(repo, req.id, w)?;
             }
             Packet::TGc(_) => {
                 if !cfg.allow_gc {
                     failure::bail!("server has disabled garbage collection for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::Write)?;
                 gc(repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
                 if !cfg.allow_get && !cfg.allow_remove {
                     failure::bail!("server has disabled query and search for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::None)?;
                 item_sync(repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
                 if !cfg.allow_remove {
                     failure::bail!("server has disabled remove for this client")
                 }
+                repo.alter_lock_mode(repository::LockMode::Write)?;
                 if !items.is_empty() {
                     repo.remove_items(items)?;
                 }
@@ -129,6 +141,7 @@ fn serve_repository(
                 if !cfg.allow_put || !cfg.allow_get {
                     failure::bail!("server has disabled restore for this client (restore requires get and put permissions).")
                 }
+                repo.alter_lock_mode(repository::LockMode::Write)?;
                 let n_restored = repo.restore_removed()?;
                 write_packet(w, &Packet::RRestoreRemoved(RRestoreRemoved { n_restored }))?;
             }
@@ -168,23 +181,8 @@ fn recv(
                 write_packet(w, &Packet::RSendSync)?;
             }
             Packet::TAddItem(add_item) => {
-                /*
-                  We explicitly check the gc_generation again matches what it was
-                  when we started, this is not strictly needed with our current locking
-                  rules, but it easy to imagine a situation with flock failing on a network
-                  file system that uses leases. Essentially gc_generation is a fence token
-                  preventing gc and upload in parallel in the case exclusive locking failed.
-
-                  Since the protocol supports this fencing, we could potentially add optimisitc concurrency
-                  in the future with looser locking semantics.
-                */
-                if add_item.gc_generation != repo.gc_generation()? {
-                    failure::bail!("gc generation changed during send, aborting");
-                }
-
                 store_engine.sync()?;
-
-                let item_id = repo.add_item(add_item.item)?;
+                let item_id = repo.add_item(add_item.gc_generation, add_item.item)?;
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
             }
@@ -328,24 +326,26 @@ fn send_partial_htree(
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
     // The ranges are sent from the client, first validate them.
-    for i in 0..ranges.len() {
-        let r = &ranges[i];
+    for (i, r) in ranges.iter().enumerate() {
         if r.start_idx > r.end_idx {
             failure::bail!("malformed htree fetch range, start point after end");
         }
 
-        if let Some(next) = ranges.get(i + 1) {
-            if next.start_idx == r.end_idx {
-                failure::bail!("malformed htree fetch range, not in minimal form");
-            } else if next.start_idx < r.end_idx {
-                failure::bail!("malformed htree fetch range, not in sorted order");
+        match ranges.get(i + 1) {
+            Some(next) if next.start_idx == r.end_idx => {
+                failure::bail!("malformed htree fetch range, not in minimal form")
             }
+            Some(next) if next.start_idx < r.end_idx => {
+                failure::bail!("malformed htree fetch range, not in sorted order")
+            }
+            _ => (),
         }
     }
 
+    // Mostly the same as the less complicated send_htree function, but we filter out unwanted chunks and exit early.
+
     let mut storage_engine = repo.storage_engine()?;
-    // The idea is we fetch the next chunk while we are sending the current chunk.
-    // to mitigate some of the problems with latency when fetching from a slow storage engine.
+
     let (height, chunk_address) = tr.next_addr()?.unwrap();
     let mut next = (
         height,
@@ -402,7 +402,6 @@ fn send_partial_htree(
             }
         }
 
-        // Write the chunk out while the async worker fetches the next one.
         write_packet(
             w,
             &Packet::Chunk(Chunk {
@@ -431,34 +430,22 @@ fn item_sync(
     request_gc_generation: Option<Xid>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
-    let current_generation = repo.gc_generation()?;
-
-    let after = match request_gc_generation {
-        Some(request_gc_generation) if request_gc_generation == current_generation => after,
-        _ => -1,
-    };
-
-    write_packet(
-        w,
-        &Packet::RRequestItemSync(RRequestItemSync {
-            gc_generation: current_generation,
-        }),
-    )?;
-
-    let mut logops = Vec::new();
-
-    repo.walk_log(after, &mut |op_id, item_id, op| {
-        logops.push((op_id, item_id, op));
-        if logops.len() >= 64 {
-            let mut v = Vec::new();
-            std::mem::swap(&mut v, &mut logops);
-            write_packet(w, &Packet::SyncLogOps(v))?;
+    repo.item_sync(after, request_gc_generation, &mut |event| match event {
+        repository::ItemSyncEvent::Start(gc_generation) => {
+            write_packet(
+                w,
+                &Packet::RRequestItemSync(RRequestItemSync { gc_generation }),
+            )?;
+            Ok(())
         }
-        Ok(())
+        repository::ItemSyncEvent::LogOps(ops) => {
+            write_packet(w, &Packet::SyncLogOps(ops))?;
+            Ok(())
+        }
+        repository::ItemSyncEvent::End => {
+            write_packet(w, &Packet::SyncLogOps(vec![]))?;
+            Ok(())
+        }
     })?;
-    if !logops.is_empty() {
-        write_packet(w, &Packet::SyncLogOps(logops))?;
-    }
-    write_packet(w, &Packet::SyncLogOps(vec![]))?;
     Ok(())
 }

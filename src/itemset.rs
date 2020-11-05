@@ -148,15 +148,12 @@ fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, failure:
                 let item_id: Xid = row.get(1)?;
                 let op: Vec<u8> = row.get(2)?;
                 let op: LogOp = serde_bare::from_slice(&op)?;
-                match &op {
-                    LogOp::AddItem(md) => {
-                        n_restored += 1;
-                        tx.execute(
-                            "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
-                            rusqlite::params![&item_id, op_id, checked_serialize_metadata(&md)?],
-                        )?;
-                    }
-                    _ => (),
+                if let LogOp::AddItem(md) = op {
+                    n_restored += 1;
+                    tx.execute(
+                        "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
+                        rusqlite::params![&item_id, op_id, checked_serialize_metadata(&md)?],
+                    )?;
                 }
             }
             None => {

@@ -104,7 +104,7 @@ impl SendLog {
     pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, failure::Error> {
         // We manually control the sqlite3 transaction so we are able
         // to issue checkpoints and commit part way through a send operation.
-        self.conn.execute("begin;", rusqlite::NO_PARAMS)?;
+        self.conn.execute("begin immediate;", rusqlite::NO_PARAMS)?;
 
         Ok(SendLogSession {
             gc_generation,

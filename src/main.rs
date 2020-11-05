@@ -461,7 +461,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
@@ -750,7 +750,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     };
 
     progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -804,7 +804,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -944,7 +944,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1095,7 +1095,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
         progress.set_message(&"acquiring repository lock...");
-        client::open_repository(&mut serve_in, &mut serve_out)?;
+        client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
     } else {
@@ -1103,7 +1103,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
         let mut serve_out = serve_proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.stdin.as_mut().unwrap();
         progress.set_message(&"acquiring repository lock...");
-        client::open_repository(&mut serve_in, &mut serve_out)?;
+        client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
 
         let ids: Vec<xid::Xid> = match matches_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
@@ -1200,7 +1200,7 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Gc)?;
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
 
@@ -1218,6 +1218,34 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     if let Some(bytes_remaining) = stats.bytes_remaining {
         println!("{} bytes remaining", bytes_remaining);
     }
+    Ok(())
+}
+
+fn restore_removed(args: Vec<String>) -> Result<(), failure::Error> {
+    let mut opts = default_cli_opts();
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
+
+    repo_opts(&mut opts);
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
+    let mut serve_proc = matches_to_serve_process(&matches)?;
+    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+
+    progress.set_message(&"acquiring repository lock...");
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
+    let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
+    client::hangup(&mut serve_in)?;
+
+    progress.finish_and_clear();
+
+    println!("{} item(s) restored", n_restored);
+
     Ok(())
 }
 
@@ -1290,34 +1318,6 @@ fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
         &mut std::io::stdin().lock(),
         &mut std::io::stdout().lock(),
     )?;
-
-    Ok(())
-}
-
-fn restore_removed(args: Vec<String>) -> Result<(), failure::Error> {
-    let mut opts = default_cli_opts();
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
-
-    repo_opts(&mut opts);
-    let matches = parse_cli_opts(opts, &args[..]);
-
-    let progress = matches_to_progress_bar(
-        &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
-
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-
-    progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out)?;
-    let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
-    client::hangup(&mut serve_in)?;
-
-    progress.finish_and_clear();
-
-    println!("{} item(s) restored", n_restored);
 
     Ok(())
 }

@@ -9,7 +9,15 @@ use std::convert::TryInto;
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum LockHint {
+    Read,
+    Write,
+    Gc,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TOpenRepository {
+    pub lock_hint: LockHint,
     pub repository_protocol_version: String,
 }
 
@@ -91,8 +99,6 @@ pub struct AddItem {
 pub enum Progress {
     Notice(String),
     SetMessage(String),
-    ProgressRange((u64, u64)),
-    ProgressCounter(u64),
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

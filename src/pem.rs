@@ -89,14 +89,14 @@ pub struct Pem {
 
 impl Pem {
     fn new_from_captures(caps: Captures) -> Result<Pem> {
-        fn as_utf8<'a>(bytes: &'a [u8]) -> Result<&'a str> {
+        fn as_utf8(bytes: &[u8]) -> Result<&str> {
             Ok(str::from_utf8(bytes).map_err(PemError::NotUtf8)?)
         }
 
         // Verify that the begin section exists
         let tag = as_utf8(
             caps.name("begin")
-                .ok_or_else(|| PemError::MissingBeginTag)?
+                .ok_or(PemError::MissingBeginTag)?
                 .as_bytes(),
         )?;
         if tag.is_empty() {
@@ -104,11 +104,7 @@ impl Pem {
         }
 
         // as well as the end section
-        let tag_end = as_utf8(
-            caps.name("end")
-                .ok_or_else(|| PemError::MissingEndTag)?
-                .as_bytes(),
-        )?;
+        let tag_end = as_utf8(caps.name("end").ok_or(PemError::MissingEndTag)?.as_bytes())?;
         if tag_end.is_empty() {
             return Err(PemError::MissingEndTag);
         }
@@ -119,11 +115,7 @@ impl Pem {
         }
 
         // If they did, then we can grab the data section
-        let raw_data = as_utf8(
-            caps.name("data")
-                .ok_or_else(|| PemError::MissingData)?
-                .as_bytes(),
-        )?;
+        let raw_data = as_utf8(caps.name("data").ok_or(PemError::MissingData)?.as_bytes())?;
 
         // We need to get rid of newlines for base64::decode
         // As base64 requires an AsRef<[u8]>, this must involve a copy
@@ -188,7 +180,7 @@ impl Pem {
 pub fn parse<B: AsRef<[u8]>>(input: B) -> Result<Pem> {
     ASCII_ARMOR
         .captures(&input.as_ref())
-        .ok_or_else(|| PemError::MalformedFraming)
+        .ok_or(PemError::MalformedFraming)
         .and_then(Pem::new_from_captures)
 }
 

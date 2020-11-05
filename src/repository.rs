@@ -36,9 +36,10 @@ pub enum StorageEngineSpec {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum LockMode {
-    Shared,
+    None,
+    Write,
     Exclusive,
 }
 
@@ -55,6 +56,12 @@ pub struct Repo {
     conn: rusqlite::Connection,
     _repo_lock_mode: LockMode,
     _repo_lock: Option<fsutil::FileLock>,
+}
+
+pub enum ItemSyncEvent {
+    Start(Xid),
+    LogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
+    End,
 }
 
 impl Repo {
@@ -214,8 +221,6 @@ impl Repo {
             failure::bail!("no repository at {}", repo_path.to_string_lossy());
         }
 
-        let repo_lock = fsutil::FileLock::get_shared(&Repo::repo_lock_path(&repo_path))?;
-
         let conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
 
         let v: String = conn.query_row(
@@ -227,11 +232,11 @@ impl Repo {
             return Err(RepoError::UnsupportedSchemaVersion.into());
         }
 
-        let r = Repo {
+        let mut r = Repo {
             conn,
             repo_path: fs::canonicalize(&repo_path)?,
-            _repo_lock_mode: LockMode::Shared,
-            _repo_lock: Some(repo_lock),
+            _repo_lock_mode: LockMode::None,
+            _repo_lock: None,
         };
 
         r.handle_gc_dirty()?;
@@ -239,7 +244,7 @@ impl Repo {
         Ok(r)
     }
 
-    fn handle_gc_dirty(&self) -> Result<(), failure::Error> {
+    fn handle_gc_dirty(&mut self) -> Result<(), failure::Error> {
         // The gc_dirty flag gets set when a garbage collection exits without
         // proper cleanup. For external storage engines we handle this by applying a delay to any repository
         // actions to ensure the external engine has had time to finish any operations (especially object deletions)
@@ -271,39 +276,51 @@ impl Repo {
         )?;
 
         if gc_dirty {
-            match self.storage_engine_spec()? {
+            // Don't reset gc-dirty unless we have the write lock.
+            self.alter_lock_mode(LockMode::Write)?;
+
+            let storage_spec = self.storage_engine_spec()?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+            match storage_spec {
                 StorageEngineSpec::ExternalStore {
                     quiescent_period_ms,
                     ..
                 } => {
                     if let Some(quiescent_period_ms) = quiescent_period_ms {
-                        eprintln!("repository garbage collection was cancelled, recovering...");
                         std::thread::sleep(std::time::Duration::from_millis(quiescent_period_ms));
                     }
                 }
                 StorageEngineSpec::DirStore { .. } => (),
             }
-            self.conn.execute(
+            tx.execute(
                 "update RepositoryMeta set Value = ? where key = 'gc-dirty';",
                 rusqlite::params![false],
             )?;
+
+            tx.commit()?;
         }
 
         Ok(())
     }
 
-    pub fn alter_lock_mode(&mut self, repo_lock_mode: LockMode) -> Result<(), failure::Error> {
-        self._repo_lock = None;
-        self._repo_lock_mode = repo_lock_mode.clone();
+    pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), failure::Error> {
         // On error we should perhaps put a poison value.
-        self._repo_lock = match repo_lock_mode {
-            LockMode::Shared => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
-                &self.repo_path,
-            ))?),
-            LockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(&Repo::repo_lock_path(
-                &self.repo_path,
-            ))?),
-        };
+        if self._repo_lock_mode != lock_mode {
+            self._repo_lock_mode = lock_mode.clone();
+            self._repo_lock = None;
+            self._repo_lock = match lock_mode {
+                LockMode::None => None,
+                LockMode::Write => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
+                    &self.repo_path,
+                ))?),
+                LockMode::Exclusive => Some(fsutil::FileLock::get_exclusive(
+                    &Repo::repo_lock_path(&self.repo_path),
+                )?),
+            };
+        }
         Ok(())
     }
 
@@ -355,16 +372,39 @@ impl Repo {
 
     pub fn add_item(
         &mut self,
+        gc_generation: Xid,
         item: itemset::VersionedItemMetadata,
     ) -> Result<Xid, failure::Error> {
-        let tx = self.conn.transaction()?;
+        match self._repo_lock_mode {
+            LockMode::None => panic!("BUG: write lock not held when adding item"),
+            LockMode::Write | LockMode::Exclusive => (),
+        }
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        let current_gc_generation = tx.query_row(
+            "select Value from RepositoryMeta where Key='gc-generation';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
+        if gc_generation != current_gc_generation {
+            failure::bail!("gc generation changed during send, aborting");
+        }
+
         let id = itemset::add_item(&tx, item)?;
         tx.commit()?;
         Ok(id)
     }
 
     pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), failure::Error> {
-        let tx = self.conn.transaction()?;
+        self.alter_lock_mode(LockMode::Write)?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         itemset::remove_items(&tx, items)?;
         tx.commit()?;
         Ok(())
@@ -383,17 +423,56 @@ impl Repo {
         itemset::has_item_with_id(&tx, id)
     }
 
-    pub fn walk_log(
+    pub fn item_sync(
         &mut self,
         after: i64,
-        f: &mut dyn FnMut(i64, Option<Xid>, itemset::LogOp) -> Result<(), failure::Error>,
+        start_gc_generation: Option<Xid>,
+        on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), failure::Error>,
     ) -> Result<(), failure::Error> {
         let tx = self.conn.transaction()?;
-        itemset::walk_log(&tx, after, f)
+
+        let current_gc_generation = tx.query_row(
+            "select Value from RepositoryMeta where Key='gc-generation';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
+        let after = match start_gc_generation {
+            Some(start_gc_generation) if start_gc_generation == current_gc_generation => after,
+            _ => -1,
+        };
+
+        on_sync_event(ItemSyncEvent::Start(current_gc_generation))?;
+
+        let mut logops = Vec::new();
+
+        itemset::walk_log(&tx, after, &mut |op_id, item_id, op| {
+            logops.push((op_id, item_id, op));
+            if logops.len() >= 64 {
+                let mut v = Vec::new();
+                std::mem::swap(&mut v, &mut logops);
+                on_sync_event(ItemSyncEvent::LogOps(v))?;
+            }
+            Ok(())
+        })?;
+
+        if !logops.is_empty() {
+            on_sync_event(ItemSyncEvent::LogOps(logops))?;
+        }
+
+        on_sync_event(ItemSyncEvent::End)?;
+
+        tx.commit()?;
+
+        Ok(())
     }
 
     pub fn restore_removed(&mut self) -> Result<u64, failure::Error> {
-        let tx = self.conn.transaction()?;
+        self.alter_lock_mode(LockMode::Write)?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let n_restored = itemset::restore_removed(&tx)?;
         if n_restored > 0 {
             tx.commit()?;
@@ -420,7 +499,7 @@ impl Repo {
             }
         }
         // Once we have removed temporary files, we can go back to a shared lock.
-        self.alter_lock_mode(LockMode::Shared)?;
+        self.alter_lock_mode(LockMode::Write)?;
 
         let reachability_db_path = Repo::random_tmp_reachability_db_path(&self.repo_path);
         let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
@@ -499,7 +578,9 @@ impl Repo {
         )?;
 
         {
-            let tx = self.conn.transaction()?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
             update_progress_msg("finalizing reachable data...".to_string())?;
             // Will skip items that we already processed when we did not hold

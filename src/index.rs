@@ -141,12 +141,9 @@ pub struct PickMap {
     pub incomplete_data_chunks: std::collections::HashMap<u64, rangemap::RangeSet<usize>>,
 }
 
-pub fn pick(path: &str, index: &Vec<VersionedIndexEntry>) -> Result<PickMap, failure::Error> {
+pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failure::Error> {
     for i in 0..index.len() {
-        let ent = &index[i];
-        let ent = match ent {
-            VersionedIndexEntry::V1(ref ent) => ent,
-        };
+        let VersionedIndexEntry::V1(ent) = &index[i];
 
         if ent.path != path {
             continue;
@@ -166,12 +163,7 @@ pub fn pick(path: &str, index: &Vec<VersionedIndexEntry>) -> Result<PickMap, fai
                     rangemap::RangeSet<usize>,
                 > = std::collections::HashMap::new();
 
-                for j in i..index.len() {
-                    let ent = &index[j];
-                    let ent = match ent {
-                        VersionedIndexEntry::V1(ref ent) => ent,
-                    };
-
+                for (j, VersionedIndexEntry::V1(ref ent)) in index.iter().enumerate().skip(i) {
                     // Match the directory and its children.
                     if !(j == i || ent.path.starts_with(&prefix)) {
                         continue;
