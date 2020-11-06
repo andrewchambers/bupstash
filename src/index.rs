@@ -22,6 +22,9 @@ pub struct IndexEntry {
     pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
+    pub tar_size: serde_bare::Uint,
+    pub ctime: serde_bare::Uint,
+    pub ctime_nsec: serde_bare::Uint,
     pub data_chunk_idx: serde_bare::Uint,
     pub data_chunk_content_idx: serde_bare::Uint,
     pub data_chunk_content_end_idx: serde_bare::Uint,
@@ -137,6 +140,7 @@ pub struct HTreeDataRange {
 
 pub struct PickMap {
     pub is_subtar: bool,
+    pub size: u64,
     pub data_chunk_ranges: Vec<HTreeDataRange>,
     pub incomplete_data_chunks: std::collections::HashMap<u64, rangemap::RangeSet<usize>>,
 }
@@ -157,6 +161,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
                     format!("{}/", ent.path)
                 };
 
+                let mut size = 0;
                 let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
                 let mut incomplete_data_chunks: std::collections::HashMap<
                     u64,
@@ -168,6 +173,8 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
                     if !(j == i || ent.path.starts_with(&prefix)) {
                         continue;
                     }
+
+                    size += ent.tar_size.0;
 
                     // Either coalesce the existing range or insert a new range.
                     if !data_chunk_ranges.is_empty()
@@ -227,6 +234,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
 
                 return Ok(PickMap {
                     is_subtar: true,
+                    size,
                     data_chunk_ranges,
                     incomplete_data_chunks,
                 });
@@ -257,6 +265,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
 
                 return Ok(PickMap {
                     is_subtar: false,
+                    size: ent.size.0,
                     data_chunk_ranges: vec![HTreeDataRange {
                         start_idx: ent.data_chunk_content_idx.0,
                         end_idx: ent.data_chunk_content_end_idx.0,

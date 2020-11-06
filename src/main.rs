@@ -1018,12 +1018,52 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
         }
     });
 
+    let utc_timestamps = matches.opt_present("utc-timestamps");
+
     match list_format {
         ListFormat::Human => {
+            let mut max_size_digits = 0;
             for item in content_index.iter() {
                 match item {
                     index::VersionedIndexEntry::V1(item) => {
-                        println!("{} {} {}", item.display_mode(), item.size.0, item.path);
+                        max_size_digits =
+                            std::cmp::max(item.size.0.to_string().len(), max_size_digits)
+                    }
+                }
+            }
+
+            for item in content_index.iter() {
+                match item {
+                    index::VersionedIndexEntry::V1(item) => {
+                        let ts = chrono::NaiveDateTime::from_timestamp(
+                            item.ctime.0 as i64,
+                            item.ctime_nsec.0 as u32,
+                        );
+                        let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
+
+                        let tsfmt = "%Y/%m/%d %T";
+
+                        let ts = if utc_timestamps {
+                            ts.format(tsfmt).to_string()
+                        } else {
+                            chrono::DateTime::<chrono::Local>::from(ts)
+                                .format(tsfmt)
+                                .to_string()
+                        };
+
+                        let size = format!("{}", item.size.0);
+                        let size_padding: String = std::iter::repeat(' ')
+                            .take(max_size_digits - size.len())
+                            .collect();
+
+                        println!(
+                            "{} {}{} {} {}",
+                            item.display_mode(),
+                            size,
+                            size_padding,
+                            ts,
+                            item.path,
+                        );
                     }
                 }
             }
@@ -1033,9 +1073,14 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
                 match item {
                     index::VersionedIndexEntry::V1(item) => {
                         print!("{{");
-                        print!("\"mode\":{},", serde_json::to_string(&item.display_mode())?);
+                        print!("\"mode\":{},", serde_json::to_string(&item.mode.0)?);
                         print!("\"size\":{},", item.size.0);
-                        print!("\"path\":{}", serde_json::to_string(&item.path)?);
+                        print!("\"path\":{},", serde_json::to_string(&item.path)?);
+                        print!("\"ctime\":{},", serde_json::to_string(&item.ctime.0)?);
+                        print!(
+                            "\"ctime_nsec\":{}",
+                            serde_json::to_string(&item.ctime_nsec.0)?
+                        );
                         print!("}}");
                         println!();
                     }

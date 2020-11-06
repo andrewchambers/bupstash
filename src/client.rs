@@ -16,6 +16,7 @@ use failure::Fail;
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 
@@ -477,15 +478,18 @@ fn send_dir(
                 )));
             }
             let tar_path = ".".into();
-            let tar_hdr_bytes = match xtar::dirent_to_tarheader(&metadata, &path, &tar_path) {
+            let tar_header_bytes = match xtar::dirent_to_tarheader(&metadata, &path, &tar_path) {
                 Ok(hdr) => hdr,
                 Err(err) if likely_smear_error(&err) => {
                     return Err(SendDirError::FilesystemModified)
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
-            hash_state.update(&tar_hdr_bytes);
-            tar_dir_ents.push((path.clone(), tar_path, metadata, tar_hdr_bytes));
+
+            hash_state.update(&metadata.ctime().to_le_bytes()[..]);
+            hash_state.update(&metadata.ctime_nsec().to_le_bytes()[..]);
+            hash_state.update(&tar_header_bytes);
+            tar_dir_ents.push((path.clone(), tar_path, metadata, tar_header_bytes));
         }
 
         'collect_dir_ents: for entry in dir_ents {
@@ -505,7 +509,8 @@ fn send_dir(
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
             let tar_path = ent_path.strip_prefix(&path).unwrap().to_path_buf();
-            let tar_hdr_bytes = match xtar::dirent_to_tarheader(&metadata, &ent_path, &tar_path) {
+            let tar_header_bytes = match xtar::dirent_to_tarheader(&metadata, &ent_path, &tar_path)
+            {
                 Ok(hdr) => hdr,
                 Err(err) if likely_smear_error(&err) => {
                     return Err(SendDirError::FilesystemModified)
@@ -517,8 +522,10 @@ fn send_dir(
                 work_list.push_back(ent_path.clone());
             }
 
-            hash_state.update(&tar_hdr_bytes);
-            tar_dir_ents.push((ent_path, tar_path, metadata, tar_hdr_bytes));
+            hash_state.update(&metadata.ctime().to_le_bytes()[..]);
+            hash_state.update(&metadata.ctime_nsec().to_le_bytes()[..]);
+            hash_state.update(&tar_header_bytes);
+            tar_dir_ents.push((ent_path, tar_path, metadata, tar_header_bytes));
         }
 
         let hash = hash_state.finish();
@@ -585,9 +592,10 @@ fn send_dir(
                 let mut dir_index: Vec<index::VersionedIndexEntry> =
                     Vec::with_capacity(tar_dir_ents.len());
 
-                for (ent_path, tar_path, metadata, hdr_bytes) in tar_dir_ents.drain(..) {
+                for (ent_path, tar_path, metadata, header_bytes) in tar_dir_ents.drain(..) {
                     ctx.progress.set_message(&ent_path.to_string_lossy());
 
+                    let mut tar_ent_size = header_bytes.len() as u64;
                     let ent_data_chunk_idx = tw.data_chunk_count();
                     let ent_data_chunk_offset = chunker.buffered_count() as u64;
 
@@ -596,7 +604,7 @@ fn send_dir(
                         sink,
                         chunker,
                         tw,
-                        &mut std::io::Cursor::new(hdr_bytes),
+                        &mut std::io::Cursor::new(header_bytes),
                         Some(&mut on_chunk),
                     )? as u64;
 
@@ -607,7 +615,11 @@ fn send_dir(
                     let mut ent_data_chunk_content_end_offset = ent_data_chunk_content_offset;
 
                     if metadata.is_file() {
-                        let mut f = match std::fs::File::open(&ent_path) {
+                        let mut f = match std::fs::OpenOptions::new()
+                            .read(true)
+                            .custom_flags(libc::O_NOATIME)
+                            .open(&ent_path)
+                        {
                             Ok(f) => f,
                             Err(err) if likely_smear_error(&err) => {
                                 return Err(SendDirError::FilesystemModified)
@@ -628,6 +640,8 @@ fn send_dir(
 
                         let file_len =
                             send_chunks(ctx, sink, chunker, tw, &mut f, Some(&mut on_chunk))?;
+
+                        tar_ent_size += file_len as u64;
                         total_size += file_len as u64;
 
                         ent_data_chunk_content_end_idx = tw.data_chunk_count();
@@ -636,6 +650,7 @@ fn send_dir(
                         /* Tar entries are rounded to 512 bytes */
                         let remaining = 512 - (file_len % 512);
                         if remaining < 512 {
+                            tar_ent_size += remaining as u64;
                             let buf = [0; 512];
                             total_size += send_chunks(
                                 ctx,
@@ -663,6 +678,9 @@ fn send_dir(
                         } else {
                             0
                         }),
+                        tar_size: serde_bare::Uint(tar_ent_size as u64),
+                        ctime: serde_bare::Uint(metadata.ctime() as u64),
+                        ctime_nsec: serde_bare::Uint(metadata.ctime_nsec() as u64),
                         data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
                         data_chunk_content_idx: serde_bare::Uint(
                             ent_data_chunk_content_idx - dir_data_chunk_idx,
@@ -910,6 +928,7 @@ fn receive_partial_htree(
     pick: index::PickMap,
     out: &mut dyn std::io::Write,
 ) -> Result<(), failure::Error> {
+    let mut n_written: u64 = 0;
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
     let mut pending_data_chunks = std::collections::VecDeque::new();
@@ -935,12 +954,15 @@ fn receive_partial_htree(
                 match pick.incomplete_data_chunks.get(&chunk_idx) {
                     Some(ranges) => {
                         for range in ranges.iter() {
-                            out.write_all(
-                                &data[range.start..std::cmp::min(data.len(), range.end)],
-                            )?;
+                            let data = &data[range.start..std::cmp::min(data.len(), range.end)];
+                            n_written += data.len() as u64;
+                            out.write_all(data)?;
                         }
                     }
-                    None => out.write_all(&data)?,
+                    None => {
+                        n_written += data.len() as u64;
+                        out.write_all(&data)?;
+                    }
                 }
             }
         } else {
@@ -974,6 +996,8 @@ fn receive_partial_htree(
         }
     }
 
+    debug_assert!(n_written == pick.size);
+
     if pick.is_subtar {
         // The final entry in a tarball is two null files.
         let buf = [0; 1024];
@@ -993,7 +1017,7 @@ pub fn restore_removed(
 
     write_packet(w, &Packet::TRestoreRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored),
+        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored.0),
         _ => failure::bail!("protocol error, expected restore packet response or progress packet",),
     }
 }

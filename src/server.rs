@@ -143,7 +143,12 @@ fn serve_repository(
                 }
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 let n_restored = repo.restore_removed()?;
-                write_packet(w, &Packet::RRestoreRemoved(RRestoreRemoved { n_restored }))?;
+                write_packet(
+                    w,
+                    &Packet::RRestoreRemoved(RRestoreRemoved {
+                        n_restored: serde_bare::Uint(n_restored),
+                    }),
+                )?;
             }
             Packet::EndOfTransmission => return Ok(()),
             _ => failure::bail!("protocol error, unexpected packet kind"),
