@@ -46,12 +46,14 @@ $ bupstash list
 Create a 'backups' user on your server.
 
 In an your sshd config file in your server add the line:
+
 ```
 Match User backups
     ForceCommand "/bin/bupstash-put-force-command.sh"
 ```
 
 Create /bin/bupstash-put-force-command.sh on your server:
+
 ```
 $ echo 'exec bupstash serve --allow-put /home/backups/bupstash-backups' > bupstash-put-force-command.sh
 $ sudo cp bupstash-put-force-command.sh /bin/bupstash-put-force-command.sh
