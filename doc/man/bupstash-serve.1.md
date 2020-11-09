@@ -62,6 +62,7 @@ $ sudo chmod +x /bin/bupstash-put-force-command.sh
 ```
 
 Now any client with ssh access to the 'backups' user will only be able to add new backups to one repository:
+
 ```
 export BUPSTASH_REPOSITORY="ssh://backups@$SERVER"
 $ bupstash put ./data
