@@ -1,8 +1,8 @@
 # Getting started
 
-bupstash is an easy to use tool for making encrypted space efficient backups. Bupstash
-is special because it is open source, and stores all data AND metadata in an encrypted
-AND deduplicated format.
+bupstash is tool for making encrypted space efficient backups and storing data. Bupstash
+is special because it is open source, and stores all data any metadata in an encrypted
+and deduplicated format.
 
 Typical users of bupstash are people familiar with the command line, such as software developers,
 system administrators and other technical users.

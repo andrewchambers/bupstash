@@ -146,7 +146,7 @@ $ bupstash gc
 
 ### Offline decryption keys
 ```
-# Create a primary key, a put only key, and a metadata (list/rm only) key.
+# Create a key, a put only key, and a metadata (list/rm only) key.
 $ bupstash new-key -o backups.key
 $ bupstash new-put-key -k backups.key -o backups-put.key
 $ bupstash new-metadata-key -k backups.key -o backups-metadata.key
@@ -173,4 +173,4 @@ $ bupstash get -k backups.key id=14ebd2073b258b1f55c5bbc889c49db4 | tar -C ./res
 
 ## SEE ALSO
 
-bupstash-repository(7), bupstash-protocol(7), bupstash-keyfiles(7)
+bupstash-repository(7), bupstash-keyfiles(7)

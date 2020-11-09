@@ -61,7 +61,7 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "list" => include_str!("../doc/cli/list.txt"),
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
-        "rm"|"remove" => include_str!("../doc/cli/rm.txt"),
+        "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),

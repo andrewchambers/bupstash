@@ -18,10 +18,11 @@ Files:
 ```
 repo/
 ├── bupstash.sqlite3
+├── tmp
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
 │   └── ...
-├── gc.lock
+├── repo.lock
 └── storage-engine.json
 ```
 
@@ -96,6 +97,10 @@ readable without a master key or metadata key.
 
 The `Items` table is an aggregated view of current items which have not be marked for removal.
 
+### tmp directory
+
+Temporary space for files used by bupstash, they are automatically deleted by bupstash-gc(1).
+
 ### data directory
 
 This directory contains a set of encrypted and deduplicated data chunks.
@@ -104,12 +109,12 @@ if two chunks are added to the repository with the same hmac, they only need to 
 
 This directory is not used when the repository is configured for storage engines other than "Dir" storage.
 
-### gc.lock
+### repo.lock
 
 A lockfile allowing concurrent repository access.
 
-This lock is held exclusively during garbage collection, and held in a shared way during
-all other operations.
+This lock is held exclusively during garbage collection, and held in a shared way during operations that
+write to the database.
 
 ### storage-engine.json
 
@@ -119,7 +124,7 @@ in external or alternative storage formats.
 ## The hash tree structure
 
 Bupstash stores arbitrary streams of data in the repository by splitting the stream into chunks,
-hmac addressing the chunks, then compressing and encrypting the chunks with the a public key portion of a master key.
+hmac addressing the chunks, then compressing and encrypting the chunks with the public key portion of a bupstash key.
 Each chunk is then stored in the data directory in a file named after the hmac hash of the contents.
 As we generate a sequence of chunks with a corresponding hmac addresses,
 we can build a tree structure out of these addresses. Leaf nodes of the tree are simply the encrypted data. 
