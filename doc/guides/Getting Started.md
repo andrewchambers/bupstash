@@ -1,8 +1,8 @@
 # Getting started
 
-bupstash is tool for making encrypted space efficient backups and storing data. Bupstash
-is special because it is open source, and stores all data any metadata in an encrypted
-and deduplicated format.
+bupstash is an easy to use tool for making encrypted space efficient backups.
+It is special because it is open source, and stores all data AND metadata in an encrypted
+AND deduplicated format.
 
 Typical users of bupstash are people familiar with the command line, such as software developers,
 system administrators and other technical users.
@@ -15,8 +15,9 @@ Everything in this guide is also covered in our introduction to bupstash video (
 
 ### Precompiled version 
 
-Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download for 
-a build for your platform. Simply extract the archive and add the single bupstash binary to your PATH.
+Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download a
+build for for your platform. Simply extract the archive and add the single bupstash binary to
+your PATH.
 
 ### Via rust and cargo
 
@@ -35,7 +36,7 @@ $ cp ./target/release/bupstash $INSTALL_DIR
 
 ## Initializing your repository
 
-First we must initialize a repository to save data into, for that we use the `bupstash init` command.
+First we must initialize a repository to save data into.  We do this with the `bupstash init` command.
 
 Initializing a local repository:
 ```
@@ -50,8 +51,8 @@ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
 $ bupstash init
 ```
 
-As a side note, because bupstash accepts some commonly typed options from environment variables, you can
-add them to your .bashrc or other equivalent file to avoid retyping them.
+As a side note, you can avoid some retyping by setting certain environment variables (e.g.
+BUPSTASH_REPOSITORY) in your .bashrc or other equivalent file.
 
 ## Generating an encryption key
 
@@ -160,7 +161,7 @@ We can remove snapshots via the same query language and the `bupstash rm` comman
 $ bupstash rm older-than 90d and name=backup.tar and host=my-server
 ```
 
-Removing a snapshot does not immediately reclaim disk space, to do that you must run the 
+Removing a snapshot does not immediately reclaim disk space.  To do that, you must run the 
 garbage collector.
 
 ```
@@ -170,7 +171,7 @@ $ bupstash gc
 ## Secure offline keys
 
 In a high security setting, we do not want our decryption keys stored online where they could 
-inadvertantly be leaked. To support this bupstash has the notion of put keys and metadata keys.
+inadvertantly be leaked. To support this, bupstash has the notion of "put keys" and "metadata keys".
 
 Generating and using these keys is simple:
 
@@ -186,7 +187,7 @@ $ bupstash put --key ./put-backups.key ./data.txt
 $ bupstash list --key ./metadata-backups.key
 ```
 
-With the important difference that these keys cannot decrypt the contents of the snapshots.
+An important difference is that these keys cannot decrypt the contents of the snapshots.
 Only the original primary key is able to decrypt these snapshots.
 
 ```
@@ -206,6 +207,6 @@ but continue to make and administer our backups using the put key and metadata k
 Neither the storage server, nor the devices uploading new snapshots 
 have access to your existing snapshots.
 
-Note that we recommend creating a new put key for every backup client if you have a shared bupstash
+Note that we recommend creating a new put key for each backup client if you have a shared bupstash
 repository.
 
