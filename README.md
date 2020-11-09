@@ -34,8 +34,8 @@ using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 # Guides and documentation
 
-Check the [quickstart guide](https://bupstash.io/doc/guides/Getting%20Started.html) for an introductory tutorial.
-Check the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
+- Visit the [quickstart guide](https://bupstash.io/doc/guides/Getting%20Started.html) for an introductory tutorial.
+- Visit the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
 
 # Typical usage
 
