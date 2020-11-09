@@ -31,6 +31,12 @@ Some key features:
 While all efforts are made to keep bupstash bug free, we currently recommend
 using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
+
+# Guides and documentation
+
+Check the [quickstart guide](https://bupstash.io/doc/guides/Getting%20Started.html) for an introductory tutorial.
+Check the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
+
 # Typical usage
 
 Initialize a new bupstash repository via ssh.
@@ -50,13 +56,6 @@ Save a directory as a tarball snapshot.
 $ bupstash put hostname="$(hostname)" ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 ```
-
-Save a file, with arbitrary tag/value tags.
-```
-$ bupstash put mytag=myvalue ./some-file.txt
-bcb8684e6bf5cb453e77486decf61685
-```
-
 Save the output of a command, checking for errors.
 ```
 $ bupstash put --exec name=database.sql pgdump mydatabase
@@ -101,6 +100,17 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
+# Test suites
+
+Install bash automated test framework and run the following to run both the unit tests, and cli integration test suite.
+
+```
+$ cargo test
+$ cargo build --release
+$ export PATH=`pwd`/target/release:$PATH
+$ bats ./cli-tests
+```
+
 ## Precompiled releases
 
 Head to the [releases page](https://github.com/andrewchambers/bupstash/releases) and download for 
@@ -108,12 +118,5 @@ a build for your platform. Simply extract the archive and add the single bupstas
 
 Currently we only precompile for linux (help wanted for more platforms).
 
-
-# Guides and documentation
-
-Check the [Quickstart guide](./doc/guides/Quick Start.md) for an introductory tutorial.
-
-
-Check the [Man pages](./doc/man) for more comprehensive documentation.
 
 
