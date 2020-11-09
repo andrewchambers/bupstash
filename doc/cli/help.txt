@@ -21,7 +21,10 @@ put
   Put a new item into a repository.
 
 list
-  List items in a repository
+  List items in a repository.
+
+list-contents
+  List contents of a directory snapshot.
 
 get
   Get data from a repository.

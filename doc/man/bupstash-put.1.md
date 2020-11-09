@@ -5,14 +5,14 @@ bupstash-put(1)
 
 Put a new entry into a bupstash repository.
 
-`bupstash put [OPTIONS] [TAG=VAL...] FILE`
-`bupstash put [OPTIONS] [TAG=VAL...] DIR`
-`bupstash put --exec [OPTIONS] [TAG=VAL...] CMD`
+`bupstash put [OPTIONS] [TAG=VAL...] FILE`<br>
+`bupstash put [OPTIONS] [TAG=VAL...] DIR`<br>
+`bupstash put --exec [OPTIONS] [TAG=VAL...] COMMAND`<br>
 
 ## DESCRIPTION
 
 `bupstash put` encrypts a file, directory, or command output and stores it in a bupstash repository
-such that only the primary key can decrypt it.
+such that only the decryption key can decrypt it.
 
 For files, the data is saved directly, for directories, the data
 is converted to a tar archive, and for commands the command is executed, and
@@ -33,7 +33,7 @@ The special marker argument `::` may be used to force the end of tag parsing, bu
 
 ## USAGE NOTES
 
-### Using a send log
+### Incremental backups
 
 When sending data, `bupstash` records metadata about what was sent in the previous
 'put' operation in a file known as the send log. 
@@ -161,9 +161,8 @@ deduplicating repeated files.
 ```
 # Snapshot a directory.
 $ ID="$(bupstash put ./data)"
-
-# Fetch the contents of a snapshot and list contents with tar -t
-$ bupstash get id="$ID" | tar -tf -
+# List snapshot contents.
+$ bupstash list-contents id="$ID"
 ```
 
 ### Snapshot the output of a command
@@ -188,9 +187,9 @@ $ bupstash put ./files
 - Combine `bupstash serve --allow-put` with ssh force commands to create restricted ssh keys that can
   only add new backups but not list or remove old ones.
 
-- The differences between piping `tar` command output into `bupstash put`, and using `bupstash put` directly
+- The difference between piping `tar` command output into `bupstash put`, and using `bupstash put` directly
   on a directory, is the latter is able to use a send log and avoid reading files that has already
-  been sent to the server.
+  been sent to the server, and is able to create a snapshot listing for use with bupstash-list-contents(1).
 
 ## SEE ALSO
 

@@ -13,8 +13,10 @@ Run one of the following `bupstash` subcommands.
 `bupstash new-metadata-key ...`<br>
 `bupstash put ...`<br>
 `bupstash list ...`<br>
+`bupstash list-contents ...`<br>
 `bupstash get ...`<br>
 `bupstash rm ...`<br>
+`bupstash restore-removed ...`<br>
 `bupstash gc ...`<br>
 `bupstash serve ...`<br>
 `bupstash help ...`<br>
@@ -23,21 +25,21 @@ Run one of the following `bupstash` subcommands.
 ## DESCRIPTION
 
 ```bupstash``` is a tool for storing (and retrieving)
-arbitrary data in an encrypted bupstash-repostory(7).
+files and data in an encrypted bupstash-repostory(7).
 
 Some notable features of ```bupstash``` include:
 
 * Automatic deduplication of stored data.
 * Client side encryption of data.
-* A simple and powerful query language.
+* Incremental file uploads.
+* A tag based query language.
 * Optional role based encryption and decryption key separation.
-* Easy setup, all you need is bupstash and optionally ssh.
+* Remote repositories over ssh ssh.
 * Optional, per ssh key access repository controls.
 * A multi layered approach to security.
 
 The ```bupstash``` tool itself is divided into subcommands
 that each have their own documentation.
-
 
 ## SUBCOMMANDS
 
@@ -55,58 +57,94 @@ that each have their own documentation.
   Fetch data from the bupstash repository matching a query.
 * bupstash-list(1):
   List repository items matching a given query.
+* bupstash-list-contents(1):
+  List directory snapshot contents.
 * bupstash-rm(1):
   Remove repository items matching a given query.
+* bupstash-restore-removed(1):
+  Restore accidentally removed items.
 * bupstash-gc(1):
   Reclaim diskspace in a repository.
 * bupstash-serve(1):
   Serve a repository over stdin/stdout using the bupstash-protocol(7).
 
-## EXAMPLE
+## EXAMPLES
 
-### Typical usage
+
+### Initialize a repository and create keys
+```
+$ bupstash init -r ssh://$SERVER/home/me/backups
+$ bupstash new-key -o backups.key
+```
+
+### Tell bupstash to use our repository and key by default
 
 ```
-# Initialize a repository and create keys.
-$ ssh $SERVER bupstash init /home/me/backups
-$ bupstash new-key -o backups.key
-
-# Tell bupstash about our repository and keys.
 $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
 $ export BUPSTASH_KEY=backups.key
+```
 
-# Save a directory as a tarball snapshot.
+### Directory snapshots
+
+```
 $ bupstash put hostname=$(hostname) ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 
-# Save a file, with arbitrary tag/value tags.
-$ bupstash put mytag=myvalue ./some-file.txt
-bcb8684e6bf5cb453e77486decf61685
-
-# Save the output of a command, checking for errors.
-$ bupstash put --exec name=database.sql pgdump mydatabase
-14ebd2073b258b1f55c5bbc889c49db4
-
-# List items matching a query.
-$ bupstash list name=*.txt and hostname=$(hostname)
-id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020-07-27 11:26:16"
-
-# Get an item matching a query.
-$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
-some data.
-
-# Remove items matching a query.
-$ bupstash rm name=some-data.txt
-
-# Remove everything.
-$ bupstash rm --allow-many id=*
-
-# Run the garbage collector to reclaim disk space.
-$ bupstash gc
-
+$ bupstash list-contents id=ebb66f3baa5d432e9f9a28934888a23d
+drwxr-xr-x 0      2020/11/05 10:42:48 .
+-rw-r--r-- 1778   2020/07/12 17:13:42 data.txt
 ```
 
-### Using an offline decryption key
+### List items matching a query
+
+```
+$ bupstash list hostname=$(hostname)
+id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="my-server" timestamp="2020-07-27 11:26:16"
+...
+```
+
+### Incremental uploads
+
+```
+$ bupstash put --send-log /var/backup.sendlog ./some-data
+ebb66f3baa5d432e9f9a28934888a23d
+
+# Second backup is much faster when it reads the send log.
+$ bupstash put --send-log /var/backup.sendlog ./some-data
+ebb66f3baa5d432e9f9a28934888a23d
+```
+
+### Capture and save command output
+
+```
+# Checks for errors before saving new item.
+$ bupstash put --exec name=database.sql pgdump mydatabase
+14ebd2073b258b1f55c5bbc889c49db4
+```
+
+### Get an item matching a query
+```
+$ bupstash get id=bcb8684e6bf5cb453e77486decf61685
+some data.
+```
+
+### Remove items matching a query.
+```
+$ bupstash rm name=some-data.txt
+```
+
+### Wipe a repository
+
+```
+$ bupstash rm --allow-many id=*
+```
+
+### Reclaim disk space
+```
+$ bupstash gc
+```
+
+### Offline decryption keys
 ```
 # Create a primary key, a put only key, and a metadata (list/rm only) key.
 $ bupstash new-key -o backups.key
@@ -118,7 +156,7 @@ $ bupstash new-metadata-key -k backups.key -o backups-metadata.key
 # Remove primary key
 $ shred backups.key
 
-$ bupstash put -k backups-put.key :: ./data
+$ bupstash put -k backups-put.key ./data
 14ebd2073b258b1f55c5bbc889c49db4
 
 ... When you need to list or remove backups, you may use the metadata key ...

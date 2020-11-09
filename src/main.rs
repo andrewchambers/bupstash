@@ -59,8 +59,9 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
         "new-metadata-key" => include_str!("../doc/cli/new-metadata-key.txt"),
         "put" => include_str!("../doc/cli/put.txt"),
         "list" => include_str!("../doc/cli/list.txt"),
+        "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
-        "rm" => include_str!("../doc/cli/rm.txt"),
+        "rm"|"remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
@@ -96,7 +97,7 @@ fn query_opts(opts: &mut Options) {
     opts.optflag(
         "",
         "utc-timestamps",
-        "Do not convert the generated 'timestamp' tags to local time (as is done by default).",
+        "Display and search against timestamps in utc time instead of local time.",
     );
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 }
@@ -775,7 +776,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optopt(
         "",
         "pick",
-        "Pick a single file or directory from an item.",
+        "Pick a single file or directory from a directory snapshot.",
         "PATH",
     );
 

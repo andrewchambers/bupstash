@@ -41,6 +41,10 @@ The path to the put-cache file, defaults to one of the following, in order, prov
 the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
 `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
+As a special case, a query that consists only of a fully specified id (e.g. `id=$FULL_ID`) will not require use 
+of the query cache, instead the query can be passed directly to the server. This means
+it is always more efficient to fully specify an id when running any command that expects a query.
+
 ## OPTIONS
 
 * -r, --repository REPO:
@@ -67,6 +71,9 @@ the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
 * -q, --quiet:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
+
+* --utc-timestamps:
+  Display and search against timestamps in utc time instead of local time.
 
 ## ENVIRONMENT
 
@@ -97,15 +104,6 @@ the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
 $ bupstash list name=backup.tar and timestamp=2020/07/* 
 id="aa87fdbc72241f363568bbb888c0834e" name="backup.tar" timestamp="2020-07-24 15:25:00"
 id="d271ec0b989cfc20e10d01380115747e" name="backup.tar" timestamp="2020-07-29 15:25:24"
-...
-```
-
-### List the repository contents as json, one entry per line
-
-```
-$ bupstash list -k ./metadata.key --format=jsonl
-{"id":"aa87fdbc72241f363568bbb888c0834e", "name":"backup.tar", "timestamp":"2020-07-24 15:25:00"}
-{"id":"ec782aa9e449a6bae3c915c7ee4dafe6", "name":"backup.tar", "timestamp":"2020-07-29 15:25:24"}
 ...
 ```
 

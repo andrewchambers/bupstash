@@ -20,7 +20,6 @@ The garbage collector only relies on unencrypted metadata, so does not need
 access to decryption keys to operate, and can thus be run on a storage server
 without access to any keys.
 
-
 ## OPTIONS
 
 * -r, --repository REPO:

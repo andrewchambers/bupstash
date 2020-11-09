@@ -3,13 +3,13 @@ bupstash-new-key(1)
 
 ## SYNOPSIS
 
-Generate a new bupstash primary key.
+Generate a new bupstash key.
 
 `bupstash new-key -o KEY`
 
 ## DESCRIPTION
 
-`bupstash new-key` creates a new bupstash primary key capable of both
+`bupstash new-key` creates a new bupstash key capable of both
 reading and writing repository entries.
 
 The generated key will be marked readable only for the creating user.

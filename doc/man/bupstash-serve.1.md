@@ -33,22 +33,33 @@ to create
 
 ## EXAMPLES
 
-Using BUPSTASH_REPOSITORY_COMMAND:
+
+### Using BUPSTASH_REPOSITORY_COMMAND
 
 ```
 $ export BUPSTASH_REPOSITORY_COMMAND="ssh $SERVER bupstash serve /data/repository"
 $ bupstash list
 ```
 
-Using ssh force commands:
+### Setup SSH access controls
 
-In an your sshd config file in your server...
+Create a 'backups' user on your server.
+
+In an your sshd config file in your server add the line:
 ```
 Match User backups
-    ForceCommand "bupstash serve --allow-put /home/backups/bupstash-backups"
+    ForceCommand "/bin/bupstash-put-force-command.sh"
 ```
 
-Now the client is only authorized to create new backups:
+Create /bin/bupstash-put-force-command.sh on your server:
+```
+$ echo 'exec bupstash serve --allow-put /home/backups/bupstash-backups' > bupstash-put-force-command.sh
+$ sudo cp bupstash-put-force-command.sh /bin/bupstash-put-force-command.sh
+$ sudo chown root:root /bin/bupstash-put-force-command.sh
+$ sudo chmod +x /bin/bupstash-put-force-command.sh
+```
+
+Now any client with ssh access to the 'backups' user will only be able to add new backups to one repository:
 ```
 export BUPSTASH_REPOSITORY="ssh://backups@$SERVER"
 $ bupstash put ./data
@@ -57,6 +68,8 @@ $ bupstash list
 server has disabled query and search for this client
 ```
 
+Logging into the server via other means will have full access to the backups repository. Different 
+permissions can be configured using similar concepts along side different ssh configurations and keys.
 
 ## SEE ALSO
 

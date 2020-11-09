@@ -7,5 +7,5 @@ language.
 
 Examples:
   $ bupstash list
-  $ bupstash list id=1b89*
-  $ bupstash list --format=jsonl name=*.tar or name=*.sql
+  $ bupstash list id="1b89*"
+  $ bupstash list --format=jsonl name="*.tar" or name="*.sql"

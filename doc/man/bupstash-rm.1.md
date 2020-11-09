@@ -71,6 +71,9 @@ more information on the query cache.
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
+* --utc-timestamps:
+  Display and search against timestamps in utc time instead of local time.
+
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:

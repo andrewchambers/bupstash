@@ -47,29 +47,30 @@ $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/backups/bupstash-backups
 $ bupstash init
 ```
 
-## STORAGE SPECS
+## JSON STORAGE SPECS
 
 Each storage specification consists of a type designator and a set
 of type specific parameters.
 
 ### Dir storage
 
-The "Dir" storage engine stores encrypted data in a directory relative
-to the repository.
-
-Parameters:
-
-- dir_path: The path to the data directory
+Dir storage is an alias for `--storage dir` and is generally not needed.
 
 Example:
 
 ```
-$ bupstash init --storage dir
+$ bupstash init --storage '{"Dir" : {}}''
 ```
 
 ### External storage
 
-Coming soon.
+The external storage engine stores data via an external socket, documentation is pending for interface stabilization.
+
+Example:
+
+```
+$ bupstash init --storage '{"External" : {"socket_path" : "/plugin/socket.sock", "path" : "plugin-specific-path"}}''
+```
 
 ## SEE ALSO
 

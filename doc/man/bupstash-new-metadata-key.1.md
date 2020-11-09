@@ -3,9 +3,9 @@ bupstash-new-metadata-key(1)
 
 ## SYNOPSIS
 
-Generate a new bupstash metadata key derived from a primary key.
+Generate a new bupstash metadata key derived from a bupstash key.
 
-`bupstash new-metadata-key -k PRIMARY_KEY -o METADATA_KEY`
+`bupstash new-metadata-key -k KEY -o METADATA_KEY`
 
 ## DESCRIPTION
 
@@ -26,7 +26,7 @@ primary key.
 ## OPTIONS
 
 * -k, --key PATH:
-  Primary key to derive the new put-key from.
+  Key to derive the new put-key from.
 * -o, --output PATH:
   Path to where the put-key will be written.
 
@@ -36,7 +36,7 @@ primary key.
 ```
 $ bupstash new-key -o ./backups.key
 $ bupstash new-metadata-key -o ./backups-put.key
-$ bupstash put -k ./backups.key :: ./data
+$ bupstash put -k ./backups.key ./data
 $ bupstash list -k ./backups-metadata.key
 ```
 

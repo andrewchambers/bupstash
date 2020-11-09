@@ -28,7 +28,6 @@ $ bupstash list name=="*.tar"
 Age based matching:
 
 ```
-
 $ bupstash list newer-than "1 month"
 $ bupstash list older-than 2d
 $ bupstash list older-than 1y
@@ -52,7 +51,6 @@ Precedence grouping:
 $ bupstash list [hostname=server1 or hostname=server2] and date=2020-* 
 ...
 ```
-
 
 Quote using your shell's builtin quoting:
 
@@ -80,9 +78,6 @@ A duration is a concatenation of time spans, where each time span is an integer 
 
 Supported suffixes:
 
-- nsec, ns -- nanoseconds
-- usec, us -- microseconds
-- msec, ms -- milliseconds
 - seconds, second, sec, s
 - minutes, minute, min, m
 - hours, hour, hr, h

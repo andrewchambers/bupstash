@@ -8,3 +8,5 @@ Examples:
   $ bupstash get id=8f701cc8c03e1fe23598e95e7b87cb1c > out.tar
   $ bupstash get id=1b89* > out.data
   $ bupstash get name=foo.tar | tar -xvf -
+  $ bupstash get --pick dir/my-file.txt id=$id
+  $ bupstash get --pick sub-dir id=$id | tar -xvf -

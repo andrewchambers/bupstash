@@ -9,7 +9,7 @@ Overview of the bupstash key format.
 
 Bupstash key files are PEM encoded with one of the following tags:
 
-- BUPSTASH PRIMARY KEY
+- BUPSTASH KEY
 - BUPSTASH METADATA KEY
 - BUPSTASH PUT KEY
 

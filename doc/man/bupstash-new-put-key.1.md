@@ -3,9 +3,9 @@ bupstash-new-put-key(1)
 
 ## SYNOPSIS
 
-Generate a new bupstash put-key derived from a primary key.
+Generate a new bupstash put-key derived from a bupstash key.
 
-`bupstash new-put-key -k PRIMARY_KEY -o PUT_KEY`
+`bupstash new-put-key -k KEY -o PUT_KEY`
 
 ## DESCRIPTION
 
@@ -18,11 +18,11 @@ of backups.
 
 The generated key will be marked readable only for the creating user.
 
-If a put-key is lost, the primary key will still be able to decrypt
+If a put-key is lost, the original key will still be able to decrypt
 any data saved with this put key.
 
 Each put-key has its own 'deduplication space' with a repository, meaning
-multiple put-keys do not deduplicate data sent by eachother put-key.
+multiple put-keys do not deduplicate data sent by other keys.
 This is done for enhanced security, as it prevents an attacker with access
 to a put key from corrupting uploads made by other keys.
 

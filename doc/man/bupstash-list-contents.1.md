@@ -1,28 +1,45 @@
-bupstash-get(1) 
-===============
+bupstash-list-contents(1) 
+=========================
 
 ## SYNOPSIS
 
-Get data from a bupstash repository.
+List repositorn.
 
-`bupstash get [OPTIONS] QUERY... `
+`bupstash list-contents [OPTIONS] QUERY... `
 
 ## DESCRIPTION
 
-`bupstash get` fetches and decrypts data stored in a bupstash repository, sending
-it to stdout.
+`bupstash list-contents` lists the contents of the item matching the given query.
 
-The item that is fetched is chosen based on a simple query against the 
-tags specified when saving data with `bupstash put`.
+Items created by using `bupstash put` on a directory will have an associated index, other items
+are not listable.
+
+## OUTPUT FORMATS
+
+### Human
+
+When `--format` is set to `human` Outputs aligned rows consisting of:
+
+```
+PERMS SIZE YYYY/MM/DD HH:MM:SS PATH...
+```
+
+The included date is the time of the last change to a given file as reported by the
+operating system at the time of the snapshot.
+
+### Jsonl
+
+The output format consists of a series of json encoded liness. The output json object is not stable
+yet so is not docuemented here.
 
 ## QUERY LANGUAGE
 
 The bupstash query language is shared by many commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1) and others.
-For full documentation on the query language, see bupstash-query-language(7).
+For full documentation on the query language, see bupstash-query-language(7). 
 
 ## Query caching
 
-The get command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The list-contents command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
@@ -35,8 +52,8 @@ more information on the query cache.
   Primary key used to decrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
-* --pick PATH:
-  Fetch an individual file or sub-directory from a tarball, as shown in `list-contents`.
+* --format FORMAT:
+  Set output format to one of the following 'human', 'jsonl'.
 
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
@@ -73,23 +90,16 @@ more information on the query cache.
 
 ## EXAMPLES
 
-### Get an item with a specific id 
+### Get an item with a specific id from the repository
 
 ```
 $ bupstash get id=14ebd2073b258b1f55c5bbc889c49db4 > ./data.file
 ```
 
-### Get an item by name and timestamp
+### Get an item by name and timestamp from the repository
 
 ```
 $ bupstash get name=backup.tar and timestamp=2020/19/* > ./restore.tar
-```
-
-### Get a file or sub-tar from a directory snapshot
-
-```
-$ bupstash get --pick=/path/to/file.txt id=$id
-$ bupstash get --pick=/path/to/dir id=$id | tar ...
 ```
 
 ### Get a tarball
