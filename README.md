@@ -65,7 +65,7 @@ $ bupstash put --exec name=database.sql pgdump mydatabase
 List items matching a query.
 ```
 $ bupstash list name="backup.tar" and hostname="server-1"
-id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="black" timestamp="2020/07/27 11:26:16"
+id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="server-1" timestamp="2020/07/27 11:26:16"
 ```
 
 Get an item matching a query.
