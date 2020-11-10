@@ -1,7 +1,6 @@
 # Password Protected Keys
 
-Bupstash allows users to fetch the key to via arbitrary commands via the environment variable
-BUPSTASH_KEY_COMMAND, here we will configure bupstash to invoke gpg on a password protected a key file.
+Bupstash allows users to fetch the key to use via arbitrary commands by setting the BUPSTASH_KEY_COMMAND environment variable. In this guide we will configure bupstash to decrypt a password protected a key file with gpg.
 
 First create a key:
 
