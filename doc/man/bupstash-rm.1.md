@@ -20,15 +20,17 @@ for item deletion, even without access to the data decryption key.
 
 ## QUERY LANGUAGE
 
-The bupstash query language is shared by commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1).
+For full documentation on the query language, see bupstash-query-language(7).
 
 ### Remove query examples
 ```
-$ id=$(bupstash put  :: ./some-data)
+$ id=$(bupstash put ./some-data)
 
 $ bupstash rm id=$id
 
-$ bupstash rm name=backups.tar and date="2020/06/*"
+$ bupstash rm name=backups.tar
+
+$ bupstash rm --allow-many name='*.tar' and older-than 30d
 
 $ bupstash rm --allow-many id="*"
 ```

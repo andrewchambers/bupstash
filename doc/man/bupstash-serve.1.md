@@ -23,11 +23,11 @@ to create
 * --allow-init:
   Allow the client to initialize new repositories.
 * --allow-put:
-  Allow client to put more entries into the repository.
+  Allow client to put more items into the repository.
 * --allow-get:
   Allow client to list and retrieve data from the repository.
 * --allow-remove:
-  Allow client to list and remove repository entries.
+  Allow client to list and remove repository items.
 * --allow-gc:
   Allow client to run the repository garbage collector.
 

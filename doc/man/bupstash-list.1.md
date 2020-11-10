@@ -19,7 +19,6 @@ for item queries, even without access to the data decryption key.
 
 ## QUERY LANGUAGE
 
-The bupstash query language is shared by commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1).
 For full documentation on the query language, see bupstash-query-language(7).
 
 ### List query examples:
@@ -44,6 +43,24 @@ the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
 As a special case, a query that consists only of a fully specified id (e.g. `id=$FULL_ID`) will not require use 
 of the query cache, instead the query can be passed directly to the server. This means
 it is always more efficient to fully specify an id when running any command that expects a query.
+
+
+## OUTPUT FORMATS
+
+### Human
+
+When `--format` is set to `human`, `bupstash list` outputs rows consisting of:
+
+```
+KEY=VALUE KEY=VALUE KEY=VALUE ....
+```
+
+Where each key and value corresponds to a tag that may be searched against.
+
+### Jsonl
+
+When `--format` is set to `jsonl`, `bupstash list` outputs one json object per line.
+The output json object format is pending stabilization so is not documented.
 
 ## OPTIONS
 

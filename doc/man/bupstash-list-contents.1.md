@@ -18,7 +18,7 @@ are not listable.
 
 ### Human
 
-When `--format` is set to `human` Outputs aligned rows consisting of:
+When `--format` is set to `human`, `bupstash list-contents` outputs aligned rows consisting of:
 
 ```
 PERMS SIZE YYYY/MM/DD HH:MM:SS PATH...
@@ -29,15 +29,14 @@ operating system at the time of the snapshot.
 
 ### Jsonl
 
-The output format consists of a series of json encoded liness. The output json object is not stable
-yet so is not docuemented here.
+When `--format` is set to `jsonl`, `bupstash list-contents` outputs one json object per line.
+The output json object format is pending stabilization so is not documented.
 
 ## QUERY LANGUAGE
 
-The bupstash query language is shared by many commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1) and others.
-For full documentation on the query language, see bupstash-query-language(7). 
+For full documentation on the query language, see bupstash-query-language(7).
 
-## Query caching
+## QUERY CACHING
 
 The list-contents command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.

@@ -17,7 +17,6 @@ tags specified when saving data with `bupstash put`.
 
 ## QUERY LANGUAGE
 
-The bupstash query language is shared by many commands such as bupstash-get(1), bupstash-list(1) and bupstash-rm(1) and others.
 For full documentation on the query language, see bupstash-query-language(7).
 
 ## QUERY CACHING
