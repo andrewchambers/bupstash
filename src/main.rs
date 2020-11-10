@@ -553,7 +553,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     );
     opts.optflag(
         "",
-        "no-stat-cache",
+        "no-stat-caching",
         "Do not use stat caching to skip sending directories to the server.",
     );
     opts.optflag(
