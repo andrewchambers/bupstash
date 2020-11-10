@@ -64,7 +64,7 @@ $ bupstash init --storage '{"Dir" : {}}''
 
 ### External storage
 
-The external storage engine stores data via an external socket, documentation is pending for interface stabilization.
+The external storage engine stores data via an external socket, documentation is pending interface stabilization.
 
 Example:
 

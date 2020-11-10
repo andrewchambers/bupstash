@@ -5,44 +5,19 @@ one of the subcommands below.
 
 Subcommands:
 
-init
-  Initialize a bupstash repository.
-
-new-key
-  Create a key used for reading and writing encrypted data.
-
-new-put-key
-  Create a put key used for writing encrypted data.
-
-new-metadata-key
-  Create a metadata key used for searching and listing.
-
-put
-  Put a new item into a repository.
-
-list
-  List items in a repository.
-
-list-contents
-  List contents of a directory snapshot.
-
-get
-  Get data from a repository.
-
-rm
-  Remove items from a repository.
-
-restore-removed
-  Restore removed items that have not been garbage collected.
-
-gc
-  Delete unreferenced data and clear space from a repository.
-
-version
-  Print the version and exit.
-
-help
-  Print this message.
+  init              Initialize a bupstash repository.
+  new-key           Create a new key capable of all operations.
+  new-put-key       Derive a put key only capable of writing data.
+  new-metadata-key  Derive a metadata key for search and listing.
+  put               Put a new item into a repository.
+  list              List items in a repository.
+  list-contents     List contents of a directory snapshot.
+  get               Get data from a repository.
+  rm/remove         Remove items from a repository.
+  restore-removed   Restore items pending garbage collection.
+  gc                Delete unreferenced data and free space.
+  version           Print the version and exit.
+  help              Print this message.
 
 
 For subcommand specific help, run 'bupstash CMD --help'.

@@ -64,7 +64,7 @@ pub enum Key {
 
 fn pem_tag(k: &Key) -> &str {
     match k {
-        Key::PrimaryKeyV1(_) => "BUPSTASH PRIMARY KEY",
+        Key::PrimaryKeyV1(_) => "BUPSTASH KEY",
         Key::PutKeyV1(_) => "BUPSTASH PUT KEY",
         Key::MetadataKeyV1(_) => "BUPSTASH METADATA KEY",
     }

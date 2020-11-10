@@ -25,13 +25,13 @@ For full documentation on the query language, see bupstash-query-language(7).
 ### List query examples:
 
 ```
-$ bupstash list name=*.tar
+$ bupstash list name='*.tar'
 ...
-$ bupstash list timestamp=2020/*
+$ bupstash list timestamp='2020*'
 ...
 ```
 
-## Query caching
+## QUERY CACHING
 
 Because all data is stored encrypted on the server, item metadata must first be synchronized to the local machine,
 and then decrypted on the client side to run a query. The file containing the synced and encrypted metadata

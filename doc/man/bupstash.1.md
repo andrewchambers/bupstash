@@ -87,7 +87,7 @@ $ export BUPSTASH_KEY=backups.key
 ### Directory snapshots
 
 ```
-$ bupstash put hostname=$(hostname) ./some-data
+$ bupstash put ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 
 $ bupstash list-contents id=ebb66f3baa5d432e9f9a28934888a23d

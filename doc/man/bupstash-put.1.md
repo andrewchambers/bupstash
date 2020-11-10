@@ -132,7 +132,7 @@ Default tags can be overidden manually by simply specifying them.
   to fetch the key from arbitrary locations such as the network or other secret storage.
 
 * BUPSTASH_SEND_LOG:
-  Path to the send log, overridden by --send-log. See the section 'Using a send log'
+  Path to the send log, overridden by --send-log. See the section 'Incremental backups'
   for a description of how to use send logging for efficient incremental uploads.
 
 * BUPSTASH_CHECKPOINT_BYTES:
