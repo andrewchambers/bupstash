@@ -1,15 +1,13 @@
 # Getting started
 
 bupstash is an easy to use tool for making encrypted space efficient backups.
-It is special because it is open source, and stores all data AND metadata in an encrypted
-AND deduplicated format.
+It is special because it is open source, and stores all data and metadata in an encrypted
+and deduplicated format.
 
 Typical users of bupstash are people familiar with the command line, such as software developers,
 system administrators and other technical users.
 
-
 This guide covers installation and basic usage of bupstash.
-Everything in this guide is also covered in our introduction to bupstash video (TODO).
 
 ## Install bupstash
 
@@ -31,7 +29,14 @@ Install `libsodium-dev` and `pkg-config` for your platform, and run:
 $ git clone https://github.com/andrewchambers/bupstash
 $ cd bupstash
 $ cargo build --release
-$ cp ./target/release/bupstash $INSTALL_DIR
+$ cp ./target/release/bupstash "$INSTALL_DIR"
+```
+
+or simply:
+
+```
+$ cargo install bupstash
+$ cp "$HOME/.cargo/bin/bupstash" "$INSTALL_DIR"
 ```
 
 ## Initializing your repository
@@ -40,7 +45,7 @@ First we must initialize a repository to save data into.  We do this with the `b
 
 Initializing a local repository:
 ```
-export BUPSTASH_REPOSITORY=$(pwd)/bupstash-repo
+export BUPSTASH_REPOSITORY="$(pwd)/bupstash-repo"
 $ bupstash init
 ```
 
@@ -96,7 +101,14 @@ $ bupstash put ./my-dir
 ...
 ```
 
-Finally, we can save the output of commands:
+Directories are automatically converted to tarballs, which can be extracted with the tar command:
+
+```
+$ mkdir restored
+$ bupstash get name=my-dir.tar | tar -C ./restored -xvf -
+```
+
+We can also save the output of commands:
 
 ```
 $ echo hello | bupstash put -
@@ -128,11 +140,12 @@ We can do more sophisticated queries when we list:
 ```
 $ bupstash list timestamp="2020/*"
 ...
-$ bupstash list name=backup.tar and newer-than 7d
+$ bupstash list name=backup.tar and older-than 7d
+$ bupstash list newer-than 1h
 ...
 ```
 
-For a full description of the query language see the query language manual pages.
+For a full description of the query language see the query language manual page.
 
 ## Snapshot tags
 
@@ -143,19 +156,29 @@ $ bupstash put mykey=value ./my-important-files
 $ bupstash list mykey=value
 ```
 
-## Fetching snapshots
+## Listing and fetching snapshots
 
-Once we have snapshots, we can fetch them again with `bupstash get` using arbitrary
-queries.
+Once we have directory snapshots, we can list the contents using bupstash `list-contents`:
 
 ```
-$ id=$(bupstash put ./dir)
-$ bupstash get id=$id | tar -xvf -
+$ bupstash list-contents id=$id
+drwxr-xr-x 0 2020/10/30 13:32:04 .
+-rw-r--r-- 9 2020/10/30 13:32:04 data.txt
+...
+```
+
+We can also extract individual directories, subdirectories, or the whole snapshot.
+
+```
+$ bupstash get --pick data.txt id=$id
+my data!
+$ bupstash get --pick subdir id=$id | tar -C ./subdir-restore -xvf -
+$ bupstash get id=$id | tar -C ./restore -xvf -
 ```
 
 ## Removing snapshots
 
-We can remove snapshots via the same query language and the `bupstash rm` command.
+We can remove snapshots via the same query language and the `bupstash rm` command:
 
 ```
 $ bupstash rm older-than 90d and name=backup.tar and host=my-server
@@ -167,46 +190,3 @@ garbage collector.
 ```
 $ bupstash gc
 ```
-
-## Secure offline keys
-
-In a high security setting, we do not want our decryption keys stored online where they could 
-inadvertantly be leaked. To support this, bupstash has the notion of "put keys" and "metadata keys".
-
-Generating and using these keys is simple:
-
-```
-$ bupstash new-put-key -k ./backups.key -o put-backups.key
-$ bupstash new-metadata-key -k ./backups.key -o metadata-backups.key
-```
-
-Using these keys is the same as before:
-
-```
-$ bupstash put --key ./put-backups.key ./data.txt
-$ bupstash list --key ./metadata-backups.key
-```
-
-An important difference is that these keys cannot decrypt the contents of the snapshots.
-Only the original primary key is able to decrypt these snapshots.
-
-```
-$ bupstash get --key ./put-backups.key id=$id 
-bupstash get: provided key is not a decryption key
-
-$ bupstash get --key ./metadata-backups.key id=$id
-bupstash get: provided key is not a decryption key
-
-$ bupstash get --key ./backups.key id=$id
-data...
-```
-
-We can now put the primary key into secure offline storage for use in case of emergency,
-but continue to make and administer our backups using the put key and metadata key.
-
-Neither the storage server, nor the devices uploading new snapshots 
-have access to your existing snapshots.
-
-Note that we recommend creating a new put key for each backup client if you have a shared bupstash
-repository.
-

@@ -92,29 +92,9 @@ more information on the query cache.
 ### Get an item with a specific id from the repository
 
 ```
-$ bupstash get id=14ebd2073b258b1f55c5bbc889c49db4 > ./data.file
-```
-
-### Get an item by name and timestamp from the repository
-
-```
-$ bupstash get name=backup.tar and timestamp=2020/19/* > ./restore.tar
-```
-
-### Get a tarball
-
-The builtin directory put creates a tarball from a directory, so to extract 
-it we use tar.
-
-```
-# Snapshot a directory.
-$ id=$(bupstash put ./data)
-
-$ mkdir restore
-$ cd restore 
-
-# Fetch the contents of a snapshot and extract the contents with tar
-$ bupstash get id=$id | tar -xvf -
+$ bupstash list-contents id="14eb*"
+drwxr-xr-x 0     2020/10/30 13:32:04 .
+-rw-r--r-- 1967  2020/10/30 13:32:04 data.txt
 ```
 
 ## SEE ALSO

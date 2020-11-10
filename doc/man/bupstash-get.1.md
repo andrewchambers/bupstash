@@ -100,11 +100,9 @@ it we use tar.
 # Snapshot a directory.
 $ id=$(bupstash put ./data)
 
-$ mkdir restore
-$ cd restore 
-
 # Fetch the contents of a snapshot and extract the contents with tar
-$ bupstash get id=$id | tar -xvf -
+$ mkdir restore
+$ bupstash get id=$id | tar -C ./restore -xvf -
 ```
 
 ## SEE ALSO
