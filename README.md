@@ -1,5 +1,7 @@
 # bupstash
 
+[![Gitter](https://badges.gitter.im/bupstash/community.svg)](https://gitter.im/bupstash/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+
 bupstash is a secure data store for uses ranging from business critical data archiving,
 to small scale personal data collections. 
 
@@ -32,10 +34,12 @@ While all efforts are made to keep bupstash bug free, we currently recommend
 using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 
-# Guides and documentation
+# Guides, documentation and support
 
+- Visit the [project website](https://bupstash.io).
 - Visit the [quickstart guide](https://bupstash.io/doc/guides/Getting%20Started.html) for an introductory tutorial.
 - Visit the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
+- Visit the [community chat](https://gitter.im/bupstash/community?utm_source=share-link&utm_medium=link&utm_campaign=share-link) to ask questions.
 
 # Typical usage
 
