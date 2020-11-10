@@ -191,7 +191,12 @@ fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::E
                         }
                         let bin = args.remove(0);
 
-                        match std::process::Command::new(bin).args(args).output() {
+                        match std::process::Command::new(bin)
+                            .args(args)
+                            .stderr(std::process::Stdio::inherit())
+                            .stdin(std::process::Stdio::inherit())
+                            .output()
+                        {
                             Ok(key_data) => Ok(Some(keys::Key::from_slice(&key_data.stdout)?)),
                             Err(e) => failure::bail!("error running BUPSTASH_KEY_COMMAND: {}", e),
                         }
