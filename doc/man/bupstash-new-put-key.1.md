@@ -39,7 +39,7 @@ to a put key from corrupting uploads made by other keys.
 ```
 $ bupstash new-key -o ./backups.key
 $ bupstash new-put-key -o ./backups-put.key
-$ bupstash put -k ./backups-put.key :: ./data
+$ bupstash put -k ./backups-put.key ./data
 ```
 
 ## SEE ALSO
