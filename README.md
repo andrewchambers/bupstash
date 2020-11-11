@@ -38,6 +38,7 @@ using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 - Visit the [project website](https://bupstash.io).
 - Visit the [quickstart guide](https://bupstash.io/doc/guides/Getting%20Started.html) for an introductory tutorial.
+- Visit the [filesystem backups guide](https://bupstash.io/doc/guides/Filesystem%20Backups.html) for examples of making backups.
 - Visit the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
 - Visit the [community chat](https://gitter.im/bupstash/community?utm_source=share-link&utm_medium=link&utm_campaign=share-link) to ask questions.
 
