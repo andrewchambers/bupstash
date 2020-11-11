@@ -38,9 +38,11 @@ Now to restore files or sub directories we can use `bupstash get`:
 ```
 $ bupstash list name=home-backup.tar
 ...
-$ bupstash get id=$backupid | tar -C restore ...
-$ bupstash get --pick some/sub-dir id=$backupid | tar -C restore ...
-$ bupstash get --pick some/file.txt id=$backupid > file.txt
+id="aa87fdbc72241f363568bbb888c0834e" name="backup.tar" timestamp="2020-07-24 15:25:00"
+...
+$ bupstash get id="aa8*" | tar -C restore ...
+$ bupstash get --pick some/sub-dir id="aa8*" | tar -C restore ...
+$ bupstash get --pick some/file.txt id="aa8*" > file.txt
 ```
 
 Some points to consider about this snapshot method:
@@ -139,5 +141,5 @@ $ sudo sh ./backup.sh
 Restoration of the backup is done via the `btrfs receive` command:
 
 ```
-$ bupstash get id=$backupid | sudo btrfs receive  ./restore
+$ bupstash get name=backup.btrfs | sudo btrfs receive  ./restore
 ```
