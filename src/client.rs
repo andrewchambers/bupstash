@@ -210,6 +210,11 @@ pub fn send(
 
         match data {
             DataSource::Subprocess(args) => {
+                let quoted_args: Vec<String> =
+                    args.iter().map(|x| shlex::quote(x).to_string()).collect();
+                ctx.progress
+                    .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
+
                 let mut child = std::process::Command::new(args[0].clone())
                     .args(&args[1..])
                     .stdin(std::process::Stdio::null())
@@ -221,11 +226,6 @@ pub fn send(
                 if !status.success() {
                     failure::bail!("child failed with status {}", status.code().unwrap());
                 }
-
-                let quoted_args: Vec<String> =
-                    args.iter().map(|x| shlex::quote(x).to_string()).collect();
-                ctx.progress
-                    .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
             }
             DataSource::Readable {
                 description,
