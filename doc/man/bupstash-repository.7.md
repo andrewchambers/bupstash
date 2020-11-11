@@ -58,37 +58,36 @@ of the following format:
 
 
 ```
-// Rust type notation.
 
-enum LogOp {
-  AddItem(VersionedItemMetadata),
-  RemoveItems(Vec<Xid>),
+type Xid data<16>;
+type Address data<32>;
+
+type LogOp  (AddItem | RemoveItems);
+  
+type AddItem {
+  metadata: VersionedItemMetadata 
 }
 
-enum VersionedItemMetadata {
-  V1(ItemMetadata),
+type RemoveItems {
+  items: []Xid
 }
 
-struct ItemMetadata {
-  plain_text_metadata: PlainTextItemMetadata,
-  encrypted_metadata: Vec<u8>,
-}
+type VersionedItemMetadata = (V1VersionedItemMetadata | ...)
 
-struct PlainTextItemMetadata {
+type V1VersionedItemMetadata {
   primary_key_id: Xid,
   tree_height: usize,
   address: Address,
+  encryped_metadata: data
 }
 
-struct EncryptedItemMetadata {
-  plain_text_hash: [u8; 32],
+struct V1EncryptedItemMetadata {
+  plain_text_hash: data<32>
   send_key_id: Xid,
-  hash_key_part_2: [u8; 16],
+  hash_key_part_2: data<32>,
   timestamp: String,
-  tags: Map<String, String>,
+  tags: Map[String]String,
 }
-
-
 
 ```
 
@@ -184,7 +183,7 @@ based on the item metadata and the hash tree height.
 ### Encrypted data chunk
 
 These chunks form the roots of our hash trees, they contain encrypted data. They contain
-a key exchange packet, with enough information for the master key to derive the ephemeral key.
+a key exchange packet, with enough information for the master key to derive the session key.
 
 ```
 KEY_EXCHANGE_PACKET1_BYTES[PACKET1_SZ] || ENCRYPTED_BYTES[...]

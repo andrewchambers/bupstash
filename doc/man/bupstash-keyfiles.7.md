@@ -17,8 +17,8 @@ The binary data after decoding the PEM data consists of [bare](https://baremessa
 
 
 Binary encoding of keys:
-```
 
+```
 type PrimaryKey {
   id: Data<16>,
   hash_key_part_1: Data<16>,
