@@ -51,11 +51,11 @@ Some points to consider about this snapshot method:
   like out web browser cache, at the expense of less complete backups. You can specify --exclude more than once to
   skip more than one directory or file.
 
-- The use of an explicit `--send-log` option ensures bupstash will be able to perform incremental backups efficiently. Bupstash
-  incremental backups work best when you use a different send log for each different backup operation.
+- Bupstash incremental backups work best when the send log file used was last used for a snapshot of the same or similar input data.
+  Manually specifying a send log path with --send-log ensures subsequent similar snapshots use the same send log, often dramatically increasing efficiency.
 
-- This method of backup is simple, but does not account for files being modified during upload. If a file were to be written to while a backup was taking 
-  place,  The simplest way to to think about this problem, is files will be changing while the backup is uploading, so you might capture different directories at different points in time.
+- This method of backup is simple, but does not account for files being modified during upload. The simplest way to to think about this problem, is files will be changing while 
+  the backup is uploading, so you might capture different directories at different points in time.
 
 - In this command we are also using a 'put' key (see the offline keys guide) so that backups cannot be decrypted even if someone was to steal your external drive.
 
@@ -63,7 +63,7 @@ Some points to consider about this snapshot method:
 ## Btrfs directory snapshots
 
 If you are running linux with btrfs, (or any other operating system + filesystem that supports snapshots), you can
-use this to get good snapshots with no 'time smear'.
+use this to get stable snapshots that won't be modified during upload.
 
 
 Create the file backup.sh:

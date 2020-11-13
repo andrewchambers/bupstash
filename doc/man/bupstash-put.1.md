@@ -3,7 +3,7 @@ bupstash-put(1)
 
 ## SYNOPSIS
 
-Put a new entry into a bupstash repository.
+Put data into a bupstash repository.
 
 `bupstash put [OPTIONS] [TAG=VAL...] FILE`<br>
 `bupstash put [OPTIONS] [TAG=VAL...] DIR`<br>
