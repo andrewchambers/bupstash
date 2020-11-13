@@ -559,7 +559,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     opts.optflag(
         "",
         "no-send-log",
-        "Disable logging of previously sent data, implies --no-stat-cache.",
+        "Disable logging of previously sent data, implies --no-stat-caching.",
     );
     opts.optopt(
         "",
@@ -613,7 +613,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
         crypto::DataCompression::Zstd
     };
 
-    let use_stat_cache = !matches.opt_present("no-stat-cache");
+    let use_stat_cache = !matches.opt_present("no-stat-caching");
 
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {

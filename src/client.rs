@@ -1028,8 +1028,8 @@ pub fn gc(
     w: &mut dyn std::io::Write,
 ) -> Result<repository::GCStats, failure::Error> {
     progress.set_message("collecting garbage...");
-    write_packet(w, &Packet::TGc(TGc {}))?;
 
+    write_packet(w, &Packet::TGc(TGc {}))?;
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Progress(Progress::Notice(msg)) => {
