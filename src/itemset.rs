@@ -49,11 +49,11 @@ impl ItemMetadata {
     pub fn decrypt_metadata(
         &self,
         dctx: &mut crypto::DecryptionContext,
-    ) -> Result<EncryptedItemMetadata, failure::Error> {
+    ) -> Result<EncryptedItemMetadata, anyhow::Error> {
         let data = dctx.decrypt_data(self.encrypted_metadata.clone())?;
         let emd: EncryptedItemMetadata = serde_bare::from_slice(&data)?;
         if self.plain_text_metadata.hash() != emd.plain_text_hash {
-            failure::bail!("item metadata is corrupt or tampered with");
+            anyhow::bail!("item metadata is corrupt or tampered with");
         }
         Ok(emd)
     }
@@ -76,7 +76,7 @@ pub enum LogOp {
     RestoreRemoved,
 }
 
-pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
+pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), anyhow::Error> {
     tx.execute(
         "create table if not exists ItemOpLog(OpId INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
         rusqlite::NO_PARAMS,
@@ -89,10 +89,10 @@ pub fn init_tables(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, failure::Error> {
+fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, anyhow::Error> {
     let serialized_op = serde_bare::to_vec(&md)?;
     if serialized_op.len() > MAX_METADATA_SIZE {
-        failure::bail!("itemset log item metadata too big!");
+        anyhow::bail!("itemset log item metadata too big!");
     }
     Ok(serialized_op)
 }
@@ -100,7 +100,7 @@ fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, fai
 pub fn add_item(
     tx: &rusqlite::Transaction,
     md: VersionedItemMetadata,
-) -> Result<Xid, failure::Error> {
+) -> Result<Xid, anyhow::Error> {
     let item_id = Xid::new();
     let serialized_md = checked_serialize_metadata(&md)?;
     let op = LogOp::AddItem(md);
@@ -121,7 +121,7 @@ pub fn add_item(
     Ok(item_id)
 }
 
-pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), failure::Error> {
+pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), anyhow::Error> {
     let mut existed = Vec::new();
     for item_id in items.iter() {
         let n_deleted = tx.execute("delete from Items where ItemId = ?;", &[item_id])?;
@@ -135,7 +135,7 @@ pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), f
     Ok(())
 }
 
-fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, failure::Error> {
+fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, anyhow::Error> {
     let mut stmt = tx.prepare(
         "select OpId, ItemId, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
     )?;
@@ -163,7 +163,7 @@ fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, failure:
     }
 }
 
-pub fn restore_removed(tx: &rusqlite::Transaction) -> Result<u64, failure::Error> {
+pub fn restore_removed(tx: &rusqlite::Transaction) -> Result<u64, anyhow::Error> {
     let op = LogOp::RestoreRemoved;
     let serialized_op = serde_bare::to_vec(&op)?;
     tx.execute(
@@ -178,12 +178,12 @@ pub fn sync_ops(
     op_id: i64,
     item_id: Option<Xid>,
     op: &LogOp,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let serialized_op = serde_bare::to_vec(&op)?;
     match op {
         LogOp::AddItem(md) => {
             if item_id.is_none() {
-                failure::bail!("corrupt op log");
+                anyhow::bail!("corrupt op log");
             }
             let item_id = item_id.unwrap();
             tx.execute(
@@ -198,7 +198,7 @@ pub fn sync_ops(
         }
         LogOp::RemoveItems(items) => {
             if item_id.is_some() {
-                failure::bail!("corrupt op log");
+                anyhow::bail!("corrupt op log");
             }
             tx.execute(
                 "insert into ItemOpLog(OpId, OpData) values(?, ?);",
@@ -211,7 +211,7 @@ pub fn sync_ops(
         }
         LogOp::RestoreRemoved => {
             if item_id.is_some() {
-                failure::bail!("corrupt op log");
+                anyhow::bail!("corrupt op log");
             }
             tx.execute(
                 "insert into ItemOpLog(OpId, OpData) values(?, ?);",
@@ -223,7 +223,7 @@ pub fn sync_ops(
     }
 }
 
-pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
+pub fn compact(tx: &rusqlite::Transaction) -> Result<(), anyhow::Error> {
     // Remove everything not in the aggregated set.
     tx.execute(
         "delete from ItemOpLog where OpId not in (select OpId from Items);",
@@ -232,7 +232,7 @@ pub fn compact(tx: &rusqlite::Transaction) -> Result<(), failure::Error> {
     Ok(())
 }
 
-pub fn has_item_with_id(tx: &rusqlite::Transaction, id: &Xid) -> Result<bool, failure::Error> {
+pub fn has_item_with_id(tx: &rusqlite::Transaction, id: &Xid) -> Result<bool, anyhow::Error> {
     match tx.query_row("select 1 from ItemOpLog where ItemId = ?;", &[id], |_row| {
         Ok(true)
     }) {
@@ -245,7 +245,7 @@ pub fn has_item_with_id(tx: &rusqlite::Transaction, id: &Xid) -> Result<bool, fa
 pub fn lookup_item_by_id(
     tx: &rusqlite::Transaction,
     id: &Xid,
-) -> Result<Option<VersionedItemMetadata>, failure::Error> {
+) -> Result<Option<VersionedItemMetadata>, anyhow::Error> {
     match tx.query_row(
         "select Metadata from Items where ItemId = ?;",
         &[id],
@@ -262,8 +262,8 @@ pub fn lookup_item_by_id(
 
 pub fn walk_items(
     tx: &rusqlite::Transaction,
-    f: &mut dyn FnMut(i64, Xid, VersionedItemMetadata) -> Result<(), failure::Error>,
-) -> Result<(), failure::Error> {
+    f: &mut dyn FnMut(i64, Xid, VersionedItemMetadata) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
     let mut stmt = tx.prepare("select OpId, ItemId, Metadata from Items order by OpId asc;")?;
     let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
     loop {
@@ -285,8 +285,8 @@ pub fn walk_items(
 pub fn walk_log(
     tx: &rusqlite::Transaction,
     after_op: i64,
-    f: &mut dyn FnMut(i64, Option<Xid>, LogOp) -> Result<(), failure::Error>,
-) -> Result<(), failure::Error> {
+    f: &mut dyn FnMut(i64, Option<Xid>, LogOp) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
     let mut stmt =
         tx.prepare("select OpId, ItemId, OpData from ItemOpLog where OpId > ? order by OpId asc;")?;
     let mut rows = stmt.query(&[after_op])?;

@@ -241,9 +241,9 @@ fn zstd_compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
     }
 }
 
-fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
+fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
     if data.is_empty() {
-        failure::bail!("data chunk was too small, missing footer");
+        anyhow::bail!("data chunk was too small, missing footer");
     }
 
     let data = match data[data.len() - 1] {
@@ -254,7 +254,7 @@ fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
         footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
             data.pop();
             if data.len() < 4 {
-                failure::bail!("data footer missing decompressed size");
+                anyhow::bail!("data footer missing decompressed size");
             }
             let data_len = data.len();
             let decompressed_sz = ((data[data_len - 1] as u32) << 24)
@@ -264,7 +264,7 @@ fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
             data.truncate(data.len() - 4);
             zstd::block::decompress(&data, decompressed_sz as usize)?
         }
-        _ => failure::bail!("unknown footer type type"),
+        _ => anyhow::bail!("unknown footer type type"),
     };
     Ok(data)
 }
@@ -338,9 +338,9 @@ impl DecryptionContext {
         }
     }
 
-    pub fn decrypt_data(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, failure::Error> {
+    pub fn decrypt_data(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
         if ct.len() < BOX_PUBLICKEYBYTES + BOX_NONCEBYTES + BOX_MACBYTES {
-            failure::bail!("data corrupt (too small)");
+            anyhow::bail!("data corrupt (too small)");
         }
 
         {
@@ -363,7 +363,7 @@ impl DecryptionContext {
             &ct[..ct.len() - BOX_PUBLICKEYBYTES],
             &self.ephemeral_bk,
         ) {
-            failure::bail!("data corrupt");
+            anyhow::bail!("data corrupt");
         }
 
         decompress_chunk(pt)

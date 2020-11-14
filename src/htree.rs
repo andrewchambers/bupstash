@@ -1,38 +1,37 @@
 use super::address::*;
 use super::crypto;
 use super::rollsum;
-use failure::Fail;
 
 pub const MINIMUM_ADDR_CHUNK_SIZE: usize = 2 * ADDRESS_SZ;
 pub const SENSIBLE_ADDR_MAX_CHUNK_SIZE: usize = 30000 * ADDRESS_SZ;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum HTreeError {
-    #[fail(display = "corrupt or tampered data")]
+    #[error("corrupt or tampered data")]
     CorruptOrTamperedDataError,
-    #[fail(display = "missing data")]
+    #[error("missing data")]
     DataMissing,
 }
 
 pub trait Sink {
-    fn add_chunk(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), failure::Error>;
+    fn add_chunk(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), anyhow::Error>;
 }
 
 pub trait Source {
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error>;
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error>;
 }
 
 use std::collections::HashMap;
 
 impl Sink for HashMap<Address, Vec<u8>> {
-    fn add_chunk(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), failure::Error> {
+    fn add_chunk(&mut self, addr: &Address, data: Vec<u8>) -> Result<(), anyhow::Error> {
         self.insert(*addr, data);
         Ok(())
     }
 }
 
 impl Source for HashMap<Address, Vec<u8>> {
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, failure::Error> {
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
         if let Some(v) = self.get(addr) {
             Ok(v.clone())
         } else {
@@ -67,7 +66,7 @@ impl TreeWriter {
         }
     }
 
-    fn clear_level(&mut self, sink: &mut dyn Sink, level: usize) -> Result<(), failure::Error> {
+    fn clear_level(&mut self, sink: &mut dyn Sink, level: usize) -> Result<(), anyhow::Error> {
         // Writing empty blocks the parent level is pointless.
         if !self.tree_blocks[level].is_empty() {
             let mut block = Vec::with_capacity(MINIMUM_ADDR_CHUNK_SIZE);
@@ -85,7 +84,7 @@ impl TreeWriter {
         sink: &mut dyn Sink,
         level: usize,
         addr: &Address,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         if level == 0 {
             self.data_chunk_count += 1;
         }
@@ -122,7 +121,7 @@ impl TreeWriter {
         sink: &mut dyn Sink,
         addr: &Address,
         data: Vec<u8>,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         sink.add_chunk(addr, data)?;
         self.add_addr(sink, 0, addr)?;
         Ok(())
@@ -136,7 +135,7 @@ impl TreeWriter {
         &mut self,
         sink: &mut dyn Sink,
         level: usize,
-    ) -> Result<(usize, Address), failure::Error> {
+    ) -> Result<(usize, Address), anyhow::Error> {
         if self.tree_blocks.len() - 1 == level && self.tree_blocks[level].len() == ADDRESS_SZ {
             // We are the top level, and we only ever got a single address written to us.
             // This block is actually the root address.
@@ -152,7 +151,7 @@ impl TreeWriter {
         Ok(self.finish_level(sink, level + 1)?)
     }
 
-    pub fn finish(mut self, sink: &mut dyn Sink) -> Result<(usize, Address), failure::Error> {
+    pub fn finish(mut self, sink: &mut dyn Sink) -> Result<(usize, Address), anyhow::Error> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
@@ -191,14 +190,14 @@ impl TreeReader {
         self.read_offsets.pop();
     }
 
-    pub fn push_level(&mut self, level: usize, data: Vec<u8>) -> Result<(), failure::Error> {
+    pub fn push_level(&mut self, level: usize, data: Vec<u8>) -> Result<(), anyhow::Error> {
         self.read_offsets.push(0);
         self.tree_heights.push(level);
         self.tree_blocks.push(data);
         Ok(())
     }
 
-    pub fn next_addr(&mut self) -> Result<Option<(usize, Address)>, failure::Error> {
+    pub fn next_addr(&mut self) -> Result<Option<(usize, Address)>, anyhow::Error> {
         loop {
             if self.tree_blocks.is_empty() {
                 return Ok(None);

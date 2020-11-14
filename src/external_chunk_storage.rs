@@ -10,7 +10,7 @@ enum ReadWorkerMsg {
     GetChunk(
         (
             Address,
-            crossbeam_channel::Sender<Result<Vec<u8>, failure::Error>>,
+            crossbeam_channel::Sender<Result<Vec<u8>, anyhow::Error>>,
         ),
     ),
     Exit,
@@ -18,7 +18,7 @@ enum ReadWorkerMsg {
 
 enum WriteWorkerMsg {
     AddChunk((Address, Vec<u8>)),
-    Barrier(crossbeam_channel::Sender<Option<failure::Error>>),
+    Barrier(crossbeam_channel::Sender<Option<anyhow::Error>>),
     Exit,
 }
 
@@ -38,7 +38,7 @@ pub struct ExternalStorage {
     write_worker_rx: crossbeam_channel::Receiver<WriteWorkerMsg>,
 }
 
-fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStream, failure::Error> {
+fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStream, anyhow::Error> {
     let mut sock = UnixStream::connect(socket_path)?;
     protocol::write_packet(
         &mut sock,
@@ -51,7 +51,7 @@ fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStrea
 }
 
 impl ExternalStorage {
-    fn add_write_worker_thread(&mut self) -> Result<(), failure::Error> {
+    fn add_write_worker_thread(&mut self) -> Result<(), anyhow::Error> {
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
         let had_io_error = self.had_io_error.clone();
         let write_worker_rx = self.write_worker_rx.clone();
@@ -59,7 +59,7 @@ impl ExternalStorage {
         macro_rules! worker_bail {
             ($err:expr) => {{
                 had_io_error.store(true, Ordering::SeqCst);
-                let mut write_err: failure::Error = $err.into();
+                let mut write_err: anyhow::Error = $err.into();
                 loop {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk(_)) => (),
@@ -70,7 +70,7 @@ impl ExternalStorage {
                             return;
                         }
                     }
-                    write_err = failure::format_err!("io error");
+                    write_err = anyhow::format_err!("io error");
                 }
             }};
         }
@@ -103,7 +103,7 @@ impl ExternalStorage {
                             Ok(()) => (),
                             Err(err) => {
                                 let _ = rendezvous_tx.send(Some(err));
-                                worker_bail!(failure::format_err!("io error"));
+                                worker_bail!(anyhow::format_err!("io error"));
                             }
                         }
                         match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
@@ -111,12 +111,12 @@ impl ExternalStorage {
                                 let _ = rendezvous_tx.send(None);
                             }
                             Ok(_) => {
-                                let _ = rendezvous_tx.send(Some(failure::format_err!("bug")));
-                                worker_bail!(failure::format_err!("io error"));
+                                let _ = rendezvous_tx.send(Some(anyhow::format_err!("bug")));
+                                worker_bail!(anyhow::format_err!("io error"));
                             }
                             Err(err) => {
                                 let _ = rendezvous_tx.send(Some(err));
-                                worker_bail!(failure::format_err!("io error"));
+                                worker_bail!(anyhow::format_err!("io error"));
                             }
                         }
                     }
@@ -131,7 +131,7 @@ impl ExternalStorage {
         Ok(())
     }
 
-    fn add_read_worker_thread(&mut self) -> Result<(), failure::Error> {
+    fn add_read_worker_thread(&mut self) -> Result<(), anyhow::Error> {
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
         let read_worker_rx = self.read_worker_rx.clone();
 
@@ -152,7 +152,7 @@ impl ExternalStorage {
                                 let _ = result_tx.send(Ok(data));
                             }
                             Ok(_) => {
-                                let _ = result_tx.send(Err(failure::format_err!(
+                                let _ = result_tx.send(Err(anyhow::format_err!(
                                     "storage engine protocol error"
                                 )));
                             }
@@ -186,7 +186,7 @@ impl ExternalStorage {
         }
     }
 
-    fn scaling_read_worker_dispatch(&mut self, msg: ReadWorkerMsg) -> Result<(), failure::Error> {
+    fn scaling_read_worker_dispatch(&mut self, msg: ReadWorkerMsg) -> Result<(), anyhow::Error> {
         // Should this be configurable?
         const MAX_READ_WORKERS: usize = 10;
 
@@ -204,7 +204,7 @@ impl ExternalStorage {
         }
     }
 
-    fn scaling_write_worker_dispatch(&mut self, msg: WriteWorkerMsg) -> Result<(), failure::Error> {
+    fn scaling_write_worker_dispatch(&mut self, msg: WriteWorkerMsg) -> Result<(), anyhow::Error> {
         const MAX_WRITE_WORKERS: usize = 1;
 
         if self.write_worker_handles.len() < MAX_WRITE_WORKERS {
@@ -221,7 +221,7 @@ impl ExternalStorage {
         }
     }
 
-    fn sync_write_workers(&mut self) -> Result<(), failure::Error> {
+    fn sync_write_workers(&mut self) -> Result<(), anyhow::Error> {
         let mut rendezvous = Vec::with_capacity(self.write_worker_handles.len());
 
         for _i in 0..self.write_worker_handles.len() {
@@ -232,7 +232,7 @@ impl ExternalStorage {
                 .unwrap();
         }
 
-        let mut result: Result<(), failure::Error> = Ok(());
+        let mut result: Result<(), anyhow::Error> = Ok(());
         for c in rendezvous.iter() {
             if let Some(err) = c.recv().unwrap() {
                 if result.is_ok() {
@@ -243,10 +243,10 @@ impl ExternalStorage {
         result
     }
 
-    fn check_write_worker_io_errors(&mut self) -> Result<(), failure::Error> {
+    fn check_write_worker_io_errors(&mut self) -> Result<(), anyhow::Error> {
         if self.had_io_error.load(Ordering::SeqCst) {
             match self.sync_write_workers() {
-                Ok(()) => Err(failure::format_err!("io error")),
+                Ok(()) => Err(anyhow::format_err!("io error")),
                 Err(err) => Err(err),
             }
         } else {
@@ -254,7 +254,7 @@ impl ExternalStorage {
         }
     }
 
-    pub fn new(socket_path: &std::path::Path, path: &str) -> Result<Self, failure::Error> {
+    pub fn new(socket_path: &std::path::Path, path: &str) -> Result<Self, anyhow::Error> {
         let read_worker_handles = Vec::new();
         let write_worker_handles = Vec::new();
         let had_io_error = Arc::new(AtomicBool::new(false));
@@ -283,7 +283,7 @@ impl Drop for ExternalStorage {
 }
 
 impl Engine for ExternalStorage {
-    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
         self.check_write_worker_io_errors()?;
         self.scaling_write_worker_dispatch(WriteWorkerMsg::AddChunk((*addr, buf)))?;
         Ok(())
@@ -292,7 +292,7 @@ impl Engine for ExternalStorage {
     fn get_chunk_async(
         &mut self,
         addr: &Address,
-    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, failure::Error>> {
+    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, anyhow::Error>> {
         let (tx, rx) = crossbeam_channel::bounded(1);
         match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
             Ok(()) => rx,
@@ -304,7 +304,7 @@ impl Engine for ExternalStorage {
         }
     }
 
-    fn sync(&mut self) -> Result<(), failure::Error> {
+    fn sync(&mut self) -> Result<(), anyhow::Error> {
         self.sync_write_workers()
     }
 
@@ -312,7 +312,7 @@ impl Engine for ExternalStorage {
         &mut self,
         reachability_db_path: &std::path::Path,
         _reachability_db: &mut rusqlite::Connection,
-    ) -> Result<repository::GCStats, failure::Error> {
+    ) -> Result<repository::GCStats, anyhow::Error> {
         self.stop_workers();
 
         let mut sock = socket_connect(&self.socket_path, &self.path)?;
@@ -331,7 +331,7 @@ impl Engine for ExternalStorage {
                     let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
                     return Ok(stats);
                 }
-                Ok(_) => failure::bail!("unexpected packet response"),
+                Ok(_) => anyhow::bail!("unexpected packet response"),
                 Err(err) => return Err(err),
             }
         }

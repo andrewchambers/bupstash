@@ -1,10 +1,8 @@
-use failure::Fail;
-
-#[derive(Debug, PartialEq, Fail)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum HexError {
-    #[fail(display = "invalid character in hex input")]
+    #[error("invalid character in hex input")]
     InvalidCharacter,
-    #[fail(display = "hex padding required")]
+    #[error("hex padding required")]
     PaddingRequired,
 }
 

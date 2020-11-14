@@ -1,10 +1,9 @@
 use super::xid::*;
-use failure::Fail;
 use std::collections::BTreeMap;
 
-#[derive(Eq, PartialEq, Debug, Fail)]
+#[derive(Eq, PartialEq, Debug, thiserror::Error)]
 pub enum ParseError {
-    #[fail(display = "syntax error, {}", msg)]
+    #[error("syntax error, {msg}")]
     SyntaxError {
         query: String,
         msg: String,

@@ -16,11 +16,12 @@ incremental = false
 
 [dependencies]
 
+anyhow = "1.0"
+thiserror = "1.0"
 crossbeam-channel = "0.4"
 libc = "0.2"
 rusqlite = { version = "0.23", features = ["bundled"] }
 getopts = "0.2"
-failure = "0.1"
 fs2 = "0.4.3"
 codemap = "0.1"
 codemap-diagnostic = "0.1"

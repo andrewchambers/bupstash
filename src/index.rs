@@ -145,7 +145,7 @@ pub struct PickMap {
     pub incomplete_data_chunks: std::collections::HashMap<u64, rangemap::RangeSet<usize>>,
 }
 
-pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failure::Error> {
+pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow::Error> {
     for i in 0..index.len() {
         let VersionedIndexEntry::V1(ent) = &index[i];
 
@@ -273,7 +273,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
                     incomplete_data_chunks,
                 });
             }
-            kind => failure::bail!(
+            kind => anyhow::bail!(
                 "unable to pick {} - unsupported directory entry type: {:?}",
                 path,
                 kind
@@ -281,5 +281,5 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, failur
         }
     }
 
-    failure::bail!("{} not found in content index", path)
+    anyhow::bail!("{} not found in content index", path)
 }

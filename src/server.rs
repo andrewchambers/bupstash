@@ -19,7 +19,7 @@ pub fn serve(
     cfg: ServerConfig,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     match serve2(cfg, r, w) {
         Ok(()) => Ok(()),
         Err(err) => write_packet(
@@ -36,12 +36,12 @@ fn serve2(
     cfg: ServerConfig,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
                 if req.repository_protocol_version != "1" {
-                    failure::bail!(
+                    anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.repository_protocol_version
                     )
@@ -67,14 +67,14 @@ fn serve2(
 
             Packet::TInitRepository(engine) => {
                 if !cfg.allow_init {
-                    failure::bail!("server has disabled init for this client")
+                    anyhow::bail!("server has disabled init for this client")
                 }
                 repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
                 write_packet(w, &Packet::RInitRepository)?;
             }
 
             Packet::EndOfTransmission => return Ok(()),
-            _ => failure::bail!("expected client info"),
+            _ => anyhow::bail!("expected client info"),
         }
     }
 }
@@ -84,52 +84,52 @@ fn serve_repository(
     repo: &mut repository::Repo,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TInitRepository(_) => {
-                failure::bail!(
+                anyhow::bail!(
                     "protocol error, repository initialization must be the first request"
                 );
             }
             Packet::TBeginSend(begin) => {
                 if !cfg.allow_put {
-                    failure::bail!("server has disabled put for this client")
+                    anyhow::bail!("server has disabled put for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 recv(repo, begin, r, w)?;
             }
             Packet::TRequestData(req) => {
                 if !cfg.allow_get {
-                    failure::bail!("server has disabled get for this client")
+                    anyhow::bail!("server has disabled get for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::None)?;
                 send(repo, req.id, req.ranges, w)?;
             }
             Packet::TRequestIndex(req) => {
                 if !cfg.allow_get {
-                    failure::bail!("server has disabled get for this client")
+                    anyhow::bail!("server has disabled get for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::None)?;
                 send_index(repo, req.id, w)?;
             }
             Packet::TGc(_) => {
                 if !cfg.allow_gc {
-                    failure::bail!("server has disabled garbage collection for this client")
+                    anyhow::bail!("server has disabled garbage collection for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 gc(repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
                 if !cfg.allow_get && !cfg.allow_remove {
-                    failure::bail!("server has disabled query and search for this client")
+                    anyhow::bail!("server has disabled query and search for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::None)?;
                 item_sync(repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
                 if !cfg.allow_remove {
-                    failure::bail!("server has disabled remove for this client")
+                    anyhow::bail!("server has disabled remove for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 if !items.is_empty() {
@@ -139,7 +139,7 @@ fn serve_repository(
             }
             Packet::TRestoreRemoved => {
                 if !cfg.allow_put || !cfg.allow_get {
-                    failure::bail!("server has disabled restore for this client (restore requires get and put permissions).")
+                    anyhow::bail!("server has disabled restore for this client (restore requires get and put permissions).")
                 }
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 let n_restored = repo.restore_removed()?;
@@ -151,7 +151,7 @@ fn serve_repository(
                 )?;
             }
             Packet::EndOfTransmission => return Ok(()),
-            _ => failure::bail!("protocol error, unexpected packet kind"),
+            _ => anyhow::bail!("protocol error, unexpected packet kind"),
         };
     }
 }
@@ -161,7 +161,7 @@ fn recv(
     begin: TBeginSend,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     write_packet(
         w,
         &Packet::RBeginSend(RBeginSend {
@@ -191,7 +191,7 @@ fn recv(
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
             }
-            _ => failure::bail!("protocol error, unexpected packet"),
+            _ => anyhow::bail!("protocol error, unexpected packet"),
         }
     }
 
@@ -203,7 +203,7 @@ fn send(
     id: Xid,
     ranges: Option<Vec<index::HTreeDataRange>>,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
         Some(metadata) => {
             write_packet(
@@ -242,7 +242,7 @@ fn send_index(
     repo: &mut repository::Repo,
     id: Xid,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
         Some(metadata) => {
             write_packet(
@@ -275,7 +275,7 @@ fn send_htree(
     repo: &mut repository::Repo,
     tr: &mut htree::TreeReader,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let mut storage_engine = repo.storage_engine()?;
     // The idea is we fetch the next chunk while we are sending the current chunk.
     // to mitigate some of the problems with latency when fetching from a slow storage engine.
@@ -329,19 +329,19 @@ fn send_partial_htree(
     tr: &mut htree::TreeReader,
     ranges: Vec<index::HTreeDataRange>,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     // The ranges are sent from the client, first validate them.
     for (i, r) in ranges.iter().enumerate() {
         if r.start_idx > r.end_idx {
-            failure::bail!("malformed htree fetch range, start point after end");
+            anyhow::bail!("malformed htree fetch range, start point after end");
         }
 
         match ranges.get(i + 1) {
             Some(next) if next.start_idx == r.end_idx => {
-                failure::bail!("malformed htree fetch range, not in minimal form")
+                anyhow::bail!("malformed htree fetch range, not in minimal form")
             }
             Some(next) if next.start_idx < r.end_idx => {
-                failure::bail!("malformed htree fetch range, not in sorted order")
+                anyhow::bail!("malformed htree fetch range, not in sorted order")
             }
             _ => (),
         }
@@ -417,7 +417,7 @@ fn send_partial_htree(
     }
 }
 
-fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
     let mut update_progress_msg = |msg| {
         write_packet(w, &Packet::Progress(Progress::SetMessage(msg)))?;
         Ok(())
@@ -434,7 +434,7 @@ fn item_sync(
     after: i64,
     request_gc_generation: Option<Xid>,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     repo.item_sync(after, request_gc_generation, &mut |event| match event {
         repository::ItemSyncEvent::Start(gc_generation) => {
             write_packet(

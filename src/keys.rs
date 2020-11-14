@@ -1,7 +1,6 @@
 use super::crypto;
 use super::pem;
 use super::xid::*;
-use failure::{Error, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -71,13 +70,16 @@ fn pem_tag(k: &Key) -> &str {
 }
 
 impl Key {
-    pub fn write_to_file(&self, path: &str) -> Result<(), Error> {
-        let mut f = OpenOptions::new()
+    pub fn write_to_file(&self, path: &str) -> Result<(), anyhow::Error> {
+        let mut f = match OpenOptions::new()
             .mode(0o600)
             .write(true)
             .create_new(true)
             .open(path)
-            .with_context(|e| format!("error opening {}: {}", path, e))?; // Give read/write for owner and read for others.
+        {
+            Ok(f) => f,
+            Err(err) => anyhow::bail!("error opening {}: {}", path, err),
+        };
 
         f.write_all("# This file contains a cryptographic key used by 'bupstash' to encrypt and decrypt data.\n#\n".to_string().as_bytes())?;
         f.write_all(format!("# key-id={}\n", self.id().to_string()).as_bytes())?;
@@ -107,20 +109,20 @@ impl Key {
         Ok(())
     }
 
-    pub fn from_slice(pem_data: &[u8]) -> Result<Key, Error> {
+    pub fn from_slice(pem_data: &[u8]) -> Result<Key, anyhow::Error> {
         let pem_data = pem::parse(pem_data)?;
         let k: Key = serde_bare::from_slice(&pem_data.contents)?;
         if pem_tag(&k) != pem_data.tag {
-            failure::bail!("key type does not match pem tag")
+            anyhow::bail!("key type does not match pem tag")
         }
         Ok(k)
     }
 
-    pub fn load_from_file(path: &str) -> Result<Key, Error> {
-        let mut f = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .with_context(|e| format!("error opening {}: {}", path, e))?;
+    pub fn load_from_file(path: &str) -> Result<Key, anyhow::Error> {
+        let mut f = match OpenOptions::new().read(true).open(path) {
+            Ok(f) => f,
+            Err(err) => anyhow::bail!("error opening {}: {}", path, err),
+        };
 
         let mut pem_data = Vec::new();
         f.read_to_end(&mut pem_data)?;

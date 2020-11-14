@@ -14,7 +14,7 @@ pub struct SendLogSession<'a> {
 }
 
 impl SendLog {
-    pub fn open(p: &PathBuf) -> Result<SendLog, failure::Error> {
+    pub fn open(p: &PathBuf) -> Result<SendLog, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
 
         conn.busy_timeout(std::time::Duration::new(600, 0))?;
@@ -47,7 +47,7 @@ impl SendLog {
         ) {
             Ok(v) => {
                 if v != 1 {
-                    failure::bail!("send log at {:?} is from a different version of the software and must be removed manually", &p);
+                    anyhow::bail!("send log at {:?} is from a different version of the software and must be removed manually", &p);
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -101,7 +101,7 @@ impl SendLog {
         Ok(SendLog { conn })
     }
 
-    pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, failure::Error> {
+    pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, anyhow::Error> {
         // We manually control the sqlite3 transaction so we are able
         // to issue checkpoints and commit part way through a send operation.
         self.conn.execute("begin immediate;", rusqlite::NO_PARAMS)?;
@@ -114,7 +114,7 @@ impl SendLog {
         })
     }
 
-    pub fn last_send_id(&self) -> Result<Option<Xid>, failure::Error> {
+    pub fn last_send_id(&self) -> Result<Option<Xid>, anyhow::Error> {
         match self.conn.query_row(
             "select value from LogMeta where key = 'last-send-id';",
             rusqlite::NO_PARAMS,
@@ -131,11 +131,11 @@ impl SendLog {
 }
 
 impl<'a> SendLogSession<'a> {
-    pub fn last_send_id(&self) -> Result<Option<Xid>, failure::Error> {
+    pub fn last_send_id(&self) -> Result<Option<Xid>, anyhow::Error> {
         self.log.last_send_id()
     }
 
-    pub fn perform_cache_invalidations(&self, had_send_id: bool) -> Result<(), failure::Error> {
+    pub fn perform_cache_invalidations(&self, had_send_id: bool) -> Result<(), anyhow::Error> {
         if !self.tx_active {
             panic!()
         };
@@ -165,9 +165,9 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn add_address(&self, addr: &Address) -> Result<(), failure::Error> {
+    pub fn add_address(&self, addr: &Address) -> Result<(), anyhow::Error> {
         if !self.tx_active {
-            failure::bail!("no active transaction");
+            anyhow::bail!("no active transaction");
         };
 
         // We update and not replace so we can keep an old item id if it exists.
@@ -184,7 +184,7 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn cached_address(&self, addr: &Address) -> Result<bool, failure::Error> {
+    pub fn cached_address(&self, addr: &Address) -> Result<bool, anyhow::Error> {
         let mut stmt = self
             .log
             .conn
@@ -205,9 +205,9 @@ impl<'a> SendLogSession<'a> {
         size: u64,
         addresses: &[u8],
         index: &[u8],
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         if !self.tx_active {
-            failure::bail!("no active transaction");
+            anyhow::bail!("no active transaction");
         };
 
         // We update and not replace so we can keep an old item id if it exists.
@@ -241,7 +241,7 @@ impl<'a> SendLogSession<'a> {
     pub fn stat_cache_lookup(
         &self,
         hash: &[u8],
-    ) -> Result<Option<(u64, Vec<u8>, Vec<u8>)>, failure::Error> {
+    ) -> Result<Option<(u64, Vec<u8>, Vec<u8>)>, anyhow::Error> {
         let mut stmt = self
             .log
             .conn
@@ -259,9 +259,9 @@ impl<'a> SendLogSession<'a> {
         }
     }
 
-    pub fn checkpoint(&mut self) -> Result<(), failure::Error> {
+    pub fn checkpoint(&mut self) -> Result<(), anyhow::Error> {
         if !self.tx_active {
-            failure::bail!("no active transaction");
+            anyhow::bail!("no active transaction");
         };
 
         self.log.conn.execute("commit;", rusqlite::NO_PARAMS)?;
@@ -272,9 +272,9 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn commit(mut self, id: &Xid) -> Result<(), failure::Error> {
+    pub fn commit(mut self, id: &Xid) -> Result<(), anyhow::Error> {
         if !self.tx_active {
-            failure::bail!("no active transaction");
+            anyhow::bail!("no active transaction");
         };
 
         // To keep the cache bounded, delete everything

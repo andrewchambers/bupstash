@@ -24,7 +24,6 @@ pub mod sodium;
 pub mod xid;
 pub mod xtar;
 
-use failure::Fail;
 use getopts::{Matches, Options};
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
@@ -34,7 +33,7 @@ fn die(s: String) -> ! {
     std::process::exit(1);
 }
 
-fn cache_dir() -> Result<std::path::PathBuf, failure::Error> {
+fn cache_dir() -> Result<std::path::PathBuf, anyhow::Error> {
     let mut cache_dir = match std::env::var_os("XDG_CACHE_HOME") {
         Some(cache_dir) => std::path::PathBuf::from(&cache_dir),
         None => match std::env::var_os("HOME") {
@@ -43,7 +42,7 @@ fn cache_dir() -> Result<std::path::PathBuf, failure::Error> {
                 h.push(".cache");
                 h
             }
-            None => failure::bail!("unable to determine cache dir from XDG_CACHE_HOME or HOME"),
+            None => anyhow::bail!("unable to determine cache dir from XDG_CACHE_HOME or HOME"),
         },
     };
     cache_dir.push("bupstash");
@@ -126,20 +125,20 @@ fn parse_cli_opts(opts: Options, args: &[String]) -> Matches {
     matches
 }
 
-fn help_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     print_help_and_exit(&args[0], &opts);
     Ok(())
 }
 
-fn version_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     parse_cli_opts(opts, &args[..]);
     println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
     Ok(())
 }
 
-fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     opts.optopt(
@@ -154,7 +153,7 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
         Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
         Some(s) => match serde_json::from_str(&s) {
             Ok(s) => Some(s),
-            Err(err) => failure::bail!("unable to parse storage engine spec: {}", err),
+            Err(err) => anyhow::bail!("unable to parse storage engine spec: {}", err),
         },
         None => None,
     };
@@ -169,15 +168,15 @@ fn init_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn matches_to_key(matches: &Matches) -> Result<keys::Key, failure::Error> {
+fn matches_to_key(matches: &Matches) -> Result<keys::Key, anyhow::Error> {
     if let Some(k) = matches_to_opt_key(matches)? {
         Ok(k)
     } else {
-        failure::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
+        anyhow::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
     }
 }
 
-fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::Error> {
+fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, anyhow::Error> {
     match matches.opt_str("key") {
         Some(k) => Ok(Some(keys::Key::load_from_file(&k)?)),
         None => {
@@ -187,7 +186,7 @@ fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::E
                 match shlex::split(&cmd.into_string().unwrap()) {
                     Some(mut args) => {
                         if args.is_empty() {
-                            failure::bail!("BUPSTASH_KEY_COMMAND must not be empty")
+                            anyhow::bail!("BUPSTASH_KEY_COMMAND must not be empty")
                         }
                         let bin = args.remove(0);
 
@@ -198,10 +197,10 @@ fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::E
                             .output()
                         {
                             Ok(key_data) => Ok(Some(keys::Key::from_slice(&key_data.stdout)?)),
-                            Err(e) => failure::bail!("error running BUPSTASH_KEY_COMMAND: {}", e),
+                            Err(e) => anyhow::bail!("error running BUPSTASH_KEY_COMMAND: {}", e),
                         }
                     }
-                    None => failure::bail!("unable to parse BUPSTASH_KEY_COMMAND"),
+                    None => anyhow::bail!("unable to parse BUPSTASH_KEY_COMMAND"),
                 }
             } else {
                 Ok(None)
@@ -210,7 +209,7 @@ fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, failure::E
     }
 }
 
-fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn new_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.reqopt("o", "output", "set output file.", "PATH");
     let matches = parse_cli_opts(opts, &args[..]);
@@ -218,7 +217,7 @@ fn new_key_main(args: Vec<String>) -> Result<(), failure::Error> {
     primary_key.write_to_file(&matches.opt_str("o").unwrap())
 }
 
-fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn new_send_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optopt("k", "key", "primary key to derive put-key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
@@ -229,11 +228,11 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), failure::Error> {
             let send_key = keys::Key::PutKeyV1(keys::SendKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
-        _ => failure::bail!("key is not a primary key"),
+        _ => anyhow::bail!("key is not a primary key"),
     }
 }
 
-fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn new_metadata_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optopt(
         "k",
@@ -249,11 +248,11 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), failure::Error> {
             let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
-        _ => failure::bail!("key is not a primary key"),
+        _ => anyhow::bail!("key is not a primary key"),
     }
 }
 
-fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, failure::Error> {
+fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, anyhow::Error> {
     match matches.opt_str("query-cache") {
         Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache)),
         None => match std::env::var_os("BUPSTASH_QUERY_CACHE") {
@@ -272,23 +271,23 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, f
 
 fn matches_to_id_and_query(
     matches: &Matches,
-) -> Result<(Option<xid::Xid>, query::Query), failure::Error> {
+) -> Result<(Option<xid::Xid>, query::Query), anyhow::Error> {
     let query: query::Query = if !matches.free.is_empty() {
         match query::parse(&matches.free.join("•")) {
             Ok(query) => query,
             Err(e) => {
                 query::report_parse_error(e);
-                failure::bail!("query parse error");
+                anyhow::bail!("query parse error");
             }
         }
     } else {
-        failure::bail!("you must specify a query");
+        anyhow::bail!("you must specify a query");
     };
     let id = query::get_id_query(&query);
     Ok((id, query))
 }
 
-fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, failure::Error> {
+fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, anyhow::Error> {
     let mut serve_cmd_args = {
         let repo = if matches.opt_present("repository") {
             Some(matches.opt_str("repository").unwrap())
@@ -332,16 +331,16 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
                     match shlex::split(&connect_cmd.into_string().unwrap()) {
                         Some(args) => {
                             if args.is_empty() {
-                                failure::bail!(
+                                anyhow::bail!(
                                     "BUPSTASH_REPOSITORY_COMMAND should have at least one element"
                                 );
                             }
                             args
                         }
-                        None => failure::bail!("unable to parse BUPSTASH_REPOSITORY_COMMAND"),
+                        None => anyhow::bail!("unable to parse BUPSTASH_REPOSITORY_COMMAND"),
                     }
                 } else {
-                    failure::bail!(
+                    anyhow::bail!(
                         "please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_REPOSITORY_COMMAND"
                     );
                 }
@@ -359,7 +358,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
         .spawn()
     {
         Ok(c) => c,
-        Err(err) => return Err(err.context("error spawning serve command").into()),
+        Err(err) => anyhow::bail!("error spawning serve command: {}", err),
     };
 
     Ok(serve_proc)
@@ -368,7 +367,7 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, fa
 fn matches_to_progress_bar(
     matches: &Matches,
     style: indicatif::ProgressStyle,
-) -> Result<indicatif::ProgressBar, failure::Error> {
+) -> Result<indicatif::ProgressBar, anyhow::Error> {
     let want_visible_progress = !matches.opt_present("quiet") && atty::is(atty::Stream::Stderr);
     let progress = indicatif::ProgressBar::with_draw_target(
         u64::MAX,
@@ -392,7 +391,7 @@ enum ListFormat {
     Jsonl,
 }
 
-fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     opts.optopt(
@@ -415,7 +414,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
         Some(f) => match &f[..] {
             "jsonl" => ListFormat::Jsonl,
             "human" => ListFormat::Human,
-            _ => failure::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
         None => ListFormat::Human,
     };
@@ -430,14 +429,14 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
                 keys::Key::MetadataKeyV1(k) => {
                     crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
                 }
-                _ => failure::bail!("provided key is not valid for metadata decryption"),
+                _ => anyhow::bail!("provided key is not valid for metadata decryption"),
             };
 
             (Some(primary_key_id), Some(metadata_dctx))
         }
         None => {
             if !matches.opt_present("query-encrypted") {
-                failure::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
+                anyhow::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
             }
             (None, None)
         }
@@ -448,7 +447,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
             Ok(query) => Some(query),
             Err(e) => {
                 query::report_parse_error(e);
-                failure::bail!("query parse error");
+                anyhow::bail!("query parse error");
             }
         }
     } else {
@@ -532,7 +531,7 @@ fn list_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     opts.optopt(
@@ -618,7 +617,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {
             Ok(v) => v,
-            Err(err) => failure::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err),
+            Err(err) => anyhow::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err),
         },
         Err(_) => 1073741824,
     };
@@ -658,7 +657,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
             (hash_key, data_ectx, metadata_ectx)
         }
-        _ => failure::bail!("can only send data with a primary-key or put-key."),
+        _ => anyhow::bail!("can only send data with a primary-key or put-key."),
     };
 
     let default_tags = !matches.opt_present("no-default-tags");
@@ -674,10 +673,10 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
-        failure::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
+        anyhow::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
     } else {
         if !source_args.len() == 1 {
-            failure::bail!("expected a single data source, got {:?}", source_args);
+            anyhow::bail!("expected a single data source, got {:?}", source_args);
         }
 
         if source_args[0] == "-" {
@@ -691,7 +690,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
-                Err(err) => failure::bail!("unable to open input source {:?}: {}", input_path, err),
+                Err(err) => anyhow::bail!("unable to open input source {:?}: {}", input_path, err),
             };
 
             let name = match input_path.file_name() {
@@ -705,7 +704,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
                 match glob::Pattern::new(&e) {
                     Ok(pattern) => exclusions.push(pattern),
                     Err(err) => {
-                        failure::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
+                        anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
                     }
                 }
             }
@@ -729,7 +728,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
                     data: Box::new(std::fs::File::open(input_path)?),
                 };
             } else {
-                failure::bail!("{} is not a file or a directory", source_args[0]);
+                anyhow::bail!("{} is not a file or a directory", source_args[0]);
             }
         }
     };
@@ -737,7 +736,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     // No easy way to compute the tag set length without actually encoding it due
     // to var ints in the bare encoding.
     if serde_bare::to_vec(&tags)?.len() > itemset::MAX_TAG_SET_SIZE {
-        failure::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
+        anyhow::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
     }
 
     let mut serve_proc = matches_to_serve_process(&matches)?;
@@ -773,7 +772,7 @@ fn put_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     query_opts(&mut opts);
@@ -796,7 +795,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
-        _ => failure::bail!("provided key is not a decryption key"),
+        _ => anyhow::bail!("provided key is not a decryption key"),
     };
 
     let progress = matches_to_progress_bar(
@@ -834,7 +833,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
                     id = item_id;
 
                     if n_matches > 1 {
-                        failure::bail!(
+                        anyhow::bail!(
                             "the provided query matched {} items, need a single match",
                             n_matches
                         );
@@ -904,7 +903,7 @@ fn get_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     query_opts(&mut opts);
@@ -922,7 +921,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
         Some(f) => match &f[..] {
             "jsonl" => ListFormat::Jsonl,
             "human" => ListFormat::Human,
-            _ => failure::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
         None => ListFormat::Human,
     };
@@ -936,7 +935,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
             (hash_key_part_1, data_dctx, metadata_dctx)
         }
-        _ => failure::bail!("provided key is not a decryption key"),
+        _ => anyhow::bail!("provided key is not a decryption key"),
     };
 
     let progress = matches_to_progress_bar(
@@ -974,7 +973,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
                     id = item_id;
 
                     if n_matches > 1 {
-                        failure::bail!(
+                        anyhow::bail!(
                             "the provided query matched {} items, need a single match",
                             n_matches
                         );
@@ -1100,7 +1099,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_opts(&mut opts);
     query_opts(&mut opts);
@@ -1137,7 +1136,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
             }
             match xid::Xid::parse(&l) {
                 Ok(id) => ids.push(id),
-                Err(err) => failure::bail!("error id parsing {:?}: {}", l, err),
+                Err(err) => anyhow::bail!("error id parsing {:?}: {}", l, err),
             };
         }
 
@@ -1179,16 +1178,14 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                             keys::Key::MetadataKeyV1(k) => {
                                 crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
                             }
-                            _ => {
-                                failure::bail!("provided key is not valid for metadata decryption")
-                            }
+                            _ => anyhow::bail!("provided key is not valid for metadata decryption"),
                         };
 
                         (Some(primary_key_id), Some(metadata_dctx))
                     }
                     None => {
                         if !matches.opt_present("query-encrypted") {
-                            failure::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
+                            anyhow::bail!("please set --key, BUPSTASH_KEY, BUPSTASH_KEY_COMMAND or pass --query-encrypted");
                         }
                         (None, None)
                     }
@@ -1216,7 +1213,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
                 )?;
 
                 if ids.len() > 1 && !matches.opt_present("allow-many") {
-                    failure::bail!(
+                    anyhow::bail!(
                         "the provided query matched {} items, need a single match unless --allow-many is specified",
                         ids.len()
                     );
@@ -1234,7 +1231,7 @@ fn remove_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
@@ -1272,7 +1269,7 @@ fn gc_main(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn restore_removed(args: Vec<String>) -> Result<(), failure::Error> {
+fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
@@ -1300,7 +1297,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), failure::Error> {
     Ok(())
 }
 
-fn serve_main(args: Vec<String>) -> Result<(), failure::Error> {
+fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag(
         "",

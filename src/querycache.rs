@@ -22,7 +22,7 @@ pub struct ListOptions {
 }
 
 impl QueryCache {
-    pub fn open(p: &PathBuf) -> Result<QueryCache, failure::Error> {
+    pub fn open(p: &PathBuf) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
 
@@ -43,7 +43,7 @@ impl QueryCache {
         ) {
             Ok(v) => {
                 if v != 1 {
-                    failure::bail!("query cache at {:?} is from a different version of the software and must be removed manually", &p);
+                    anyhow::bail!("query cache at {:?} is from a different version of the software and must be removed manually", &p);
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -86,7 +86,7 @@ impl QueryCache {
         Ok(QueryCache { conn })
     }
 
-    pub fn transaction(&mut self) -> Result<QueryCacheTx, failure::Error> {
+    pub fn transaction(&mut self) -> Result<QueryCacheTx, anyhow::Error> {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -95,7 +95,7 @@ impl QueryCache {
 }
 
 impl<'a> QueryCacheTx<'a> {
-    fn clear(&mut self) -> Result<(), failure::Error> {
+    fn clear(&mut self) -> Result<(), anyhow::Error> {
         self.tx.execute("delete from Items;", rusqlite::NO_PARAMS)?;
         self.tx
             .execute("delete from ItemOpLog;", rusqlite::NO_PARAMS)?;
@@ -106,7 +106,7 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn last_log_op(&mut self) -> Result<i64, failure::Error> {
+    pub fn last_log_op(&mut self) -> Result<i64, anyhow::Error> {
         let last_id = match self.tx.query_row(
             "select OpId from ItemOpLog order by OpId desc limit 1;",
             rusqlite::NO_PARAMS,
@@ -123,7 +123,7 @@ impl<'a> QueryCacheTx<'a> {
         Ok(last_id)
     }
 
-    pub fn current_gc_generation(&mut self) -> Result<Option<Xid>, failure::Error> {
+    pub fn current_gc_generation(&mut self) -> Result<Option<Xid>, anyhow::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
@@ -138,7 +138,7 @@ impl<'a> QueryCacheTx<'a> {
         }
     }
 
-    pub fn start_sync(&mut self, gc_generation: Xid) -> Result<(), failure::Error> {
+    pub fn start_sync(&mut self, gc_generation: Xid) -> Result<(), anyhow::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             rusqlite::NO_PARAMS,
@@ -174,11 +174,11 @@ impl<'a> QueryCacheTx<'a> {
         op_id: i64,
         item_id: Option<Xid>,
         op: itemset::LogOp,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         itemset::sync_ops(&self.tx, op_id, item_id, &op)
     }
 
-    pub fn commit(self) -> Result<(), failure::Error> {
+    pub fn commit(self) -> Result<(), anyhow::Error> {
         self.tx.commit()?;
         Ok(())
     }
@@ -189,8 +189,8 @@ impl<'a> QueryCacheTx<'a> {
         on_match: &mut dyn FnMut(
             Xid,
             std::collections::BTreeMap<String, String>,
-        ) -> Result<(), failure::Error>,
-    ) -> Result<(), failure::Error> {
+        ) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
         let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
             match metadata {
                 itemset::VersionedItemMetadata::V1(metadata) => {

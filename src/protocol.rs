@@ -196,9 +196,9 @@ const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 105;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
-fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), failure::Error> {
+fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), anyhow::Error> {
     if r.read_exact(buf).is_err() {
-        failure::bail!("remote disconnected");
+        anyhow::bail!("remote disconnected");
     };
     Ok(())
 }
@@ -206,10 +206,10 @@ fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), fai
 pub fn read_packet(
     r: &mut dyn std::io::Read,
     max_packet_size: usize,
-) -> Result<Packet, failure::Error> {
+) -> Result<Packet, anyhow::Error> {
     let pkt = read_packet_raw(r, max_packet_size)?;
     if let Packet::Abort(Abort { message, .. }) = pkt {
-        return Err(failure::format_err!("remote error: {}", message));
+        return Err(anyhow::format_err!("remote error: {}", message));
     }
     Ok(pkt)
 }
@@ -217,7 +217,7 @@ pub fn read_packet(
 pub fn read_packet_raw(
     r: &mut dyn std::io::Read,
     max_packet_size: usize,
-) -> Result<Packet, failure::Error> {
+) -> Result<Packet, anyhow::Error> {
     let mut hdr: [u8; 5] = [0; 5];
     read_from_remote(r, &mut hdr[..])?;
     let kind = hdr[4];
@@ -228,13 +228,13 @@ pub fn read_packet_raw(
         | (hdr[0] as usize);
 
     if sz > max_packet_size {
-        failure::bail!("packet too large");
+        anyhow::bail!("packet too large");
     }
 
     /* special case chunks, bypass serde */
     if kind == PACKET_KIND_CHUNK {
         if sz < ADDRESS_SZ {
-            failure::bail!("protocol error, packet smaller than address");
+            anyhow::bail!("protocol error, packet smaller than address");
         }
 
         let mut address = Address { bytes: [0; 32] };
@@ -291,7 +291,7 @@ pub fn read_packet_raw(
         PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => {
-            return Err(failure::format_err!(
+            return Err(anyhow::format_err!(
                 "protocol error, unknown packet kind sent by remote"
             ))
         }
@@ -299,7 +299,7 @@ pub fn read_packet_raw(
     Ok(packet)
 }
 
-fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure::Error> {
+fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), anyhow::Error> {
     let mut hdr: [u8; 5] = [0; 5];
     hdr[4] = kind;
     hdr[3] = ((sz & 0xff00_0000) >> 24) as u8;
@@ -310,7 +310,7 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), failure
     Ok(())
 }
 
-pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), failure::Error> {
+pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyhow::Error> {
     match pkt {
         Packet::Chunk(ref v) => {
             send_hdr(

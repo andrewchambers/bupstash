@@ -12,7 +12,6 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
-use failure::Fail;
 use std::collections::BTreeMap;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -20,9 +19,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    #[fail(display = "corrupt or tampered data")]
+    #[error("corrupt or tampered data")]
     CorruptOrTamperedDataError,
 }
 
@@ -30,7 +29,7 @@ pub fn open_repository(
     w: &mut dyn std::io::Write,
     r: &mut dyn std::io::Read,
     lock_hint: LockHint,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
@@ -49,10 +48,10 @@ pub fn open_repository(
                 // This helps protect against inaccurate item timestamps, which protects users from unintentionally
                 // deleting important backups when deleting based on timestamp queries. Instead they will be notified
                 // of the clock mismatch as soon as we know about it.
-                failure::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW_MINS);
+                anyhow::bail!("server and client have clock skew larger than {} minutes, refusing connection.", MAX_SKEW_MINS);
             }
         }
-        _ => failure::bail!("protocol error, expected begin ack packet"),
+        _ => anyhow::bail!("protocol error, expected begin ack packet"),
     }
 
     Ok(())
@@ -62,11 +61,11 @@ pub fn init_repository(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     storage_spec: Option<repository::StorageEngineSpec>,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     write_packet(w, &Packet::TInitRepository(storage_spec))?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RInitRepository => Ok(()),
-        _ => failure::bail!("protocol error, expected begin ack packet"),
+        _ => anyhow::bail!("protocol error, expected begin ack packet"),
     }
 }
 
@@ -83,7 +82,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         &mut self,
         addr: &Address,
         data: std::vec::Vec<u8>,
-    ) -> std::result::Result<(), failure::Error> {
+    ) -> std::result::Result<(), anyhow::Error> {
         match self.send_log_session {
             Some(ref send_log_session) => {
                 let mut send_log_session = send_log_session.borrow_mut();
@@ -108,7 +107,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                         Packet::RSendSync => {
                             send_log_session.checkpoint()?;
                         }
-                        _ => failure::bail!("protocol error, expected RSentSync packet"),
+                        _ => anyhow::bail!("protocol error, expected RSentSync packet"),
                     }
                 }
 
@@ -159,7 +158,7 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: &mut DataSource,
-) -> Result<Xid, failure::Error> {
+) -> Result<Xid, anyhow::Error> {
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
         None => None,
@@ -169,7 +168,7 @@ pub fn send(
 
     let ack = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RBeginSend(ack) => ack,
-        _ => failure::bail!("protocol error, expected begin ack packet"),
+        _ => anyhow::bail!("protocol error, expected begin ack packet"),
     };
 
     'retry: for _i in 0..256 {
@@ -224,7 +223,7 @@ pub fn send(
                 send_chunks(ctx, &mut sink, &mut chunker, &mut tw, &mut data, None)?;
                 let status = child.wait()?;
                 if !status.success() {
-                    failure::bail!("child failed with status {}", status.code().unwrap());
+                    anyhow::bail!("child failed with status {}", status.code().unwrap());
                 }
             }
             DataSource::Readable {
@@ -279,7 +278,7 @@ pub fn send(
                                 Packet::RSendSync => {
                                     send_log_session.borrow_mut().checkpoint()?;
                                 }
-                                _ => failure::bail!("protocol error, expected RSentSync packet"),
+                                _ => anyhow::bail!("protocol error, expected RSentSync packet"),
                             }
                         }
                         continue 'retry;
@@ -338,11 +337,11 @@ pub fn send(
                 }
                 return Ok(id);
             }
-            _ => failure::bail!("protocol error, expected an RAddItem packet"),
+            _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
         }
     }
 
-    failure::bail!("put retried too many times");
+    anyhow::bail!("put retried too many times");
 }
 
 fn send_chunks(
@@ -352,7 +351,7 @@ fn send_chunks(
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
     mut on_chunk: Option<&mut dyn FnMut(&Address)>,
-) -> Result<usize, failure::Error> {
+) -> Result<usize, anyhow::Error> {
     let mut buf: Vec<u8> = vec![0; 1024 * 1024];
     let mut n_written: usize = 0;
     loop {
@@ -386,7 +385,7 @@ fn send_chunks(
 #[derive(Debug)]
 enum SendDirError {
     FilesystemModified,
-    Other(failure::Error),
+    Other(anyhow::Error),
 }
 
 impl std::fmt::Display for SendDirError {
@@ -406,8 +405,8 @@ impl std::error::Error for SendDirError {
     }
 }
 
-impl From<failure::Error> for SendDirError {
-    fn from(err: failure::Error) -> Self {
+impl From<anyhow::Error> for SendDirError {
+    fn from(err: anyhow::Error) -> Self {
         SendDirError::Other(err)
     }
 }
@@ -472,7 +471,7 @@ fn send_dir(
         if cur_dir == path {
             let metadata = std::fs::metadata(&path)?;
             if !metadata.is_dir() {
-                return Err(SendDirError::Other(failure::format_err!(
+                return Err(SendDirError::Other(anyhow::format_err!(
                     "{} is not a directory",
                     path.display()
                 )));
@@ -774,7 +773,7 @@ pub fn request_data_stream(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     write_packet(
         w,
         &Packet::TRequestData(TRequestData {
@@ -790,9 +789,9 @@ pub fn request_data_stream(
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestData(resp) => match resp.metadata {
             Some(metadata) => metadata,
-            None => failure::bail!("no stored items with the requested id"),
+            None => anyhow::bail!("no stored items with the requested id"),
         },
-        _ => failure::bail!("protocol error, expected ack request packet"),
+        _ => anyhow::bail!("protocol error, expected ack request packet"),
     };
 
     // We only wanted to show the progress bar until we could start getting
@@ -802,7 +801,7 @@ pub fn request_data_stream(
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-                failure::bail!("decryption key does not match master key used for encryption");
+                anyhow::bail!("decryption key does not match master key used for encryption");
             }
 
             let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
@@ -833,15 +832,15 @@ pub fn request_index(
     id: Xid,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<Vec<index::VersionedIndexEntry>, failure::Error> {
+) -> Result<Vec<index::VersionedIndexEntry>, anyhow::Error> {
     write_packet(w, &Packet::TRequestIndex(TRequestIndex { id }))?;
 
     let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestIndex(resp) => match resp.metadata {
             Some(metadata) => metadata,
-            None => failure::bail!("no stored items with the requested id"),
+            None => anyhow::bail!("no stored items with the requested id"),
         },
-        _ => failure::bail!("protocol error, expected ack request packet"),
+        _ => anyhow::bail!("protocol error, expected ack request packet"),
     };
 
     ctx.progress.set_message("fetching content index...");
@@ -849,7 +848,7 @@ pub fn request_index(
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-                failure::bail!("decryption key does not match master key used for encryption");
+                anyhow::bail!("decryption key does not match master key used for encryption");
             }
 
             let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
@@ -860,7 +859,7 @@ pub fn request_index(
 
             let index_tree = match plain_text_metadata.index_tree {
                Some(index_tree) => index_tree,
-                None => failure::bail!("requested item does not have a content index (tarball was not created by bupstash)"),
+                None => anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)"),
             };
 
             let mut tr = htree::TreeReader::new(index_tree.height, &index_tree.address);
@@ -875,7 +874,7 @@ pub fn request_index(
             while index_data.position() != index_data_size {
                 match serde_bare::from_reader(&mut index_data) {
                     Ok(index_entry) => index.push(index_entry),
-                    Err(err) => failure::bail!("error deserializing index: {}", err),
+                    Err(err) => anyhow::bail!("error deserializing index: {}", err),
                 }
             }
 
@@ -890,7 +889,7 @@ fn receive_htree(
     r: &mut dyn std::io::Read,
     tr: &mut htree::TreeReader,
     out: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     while let Some((height, addr)) = tr.next_addr()? {
         let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
@@ -899,7 +898,7 @@ fn receive_htree(
                 }
                 chunk.data
             }
-            _ => failure::bail!("protocol error, expected begin chunk packet"),
+            _ => anyhow::bail!("protocol error, expected begin chunk packet"),
         };
 
         if height == 0 {
@@ -927,7 +926,7 @@ fn receive_partial_htree(
     tr: &mut htree::TreeReader,
     pick: index::PickMap,
     out: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     let mut n_written: u64 = 0;
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
@@ -941,7 +940,7 @@ fn receive_partial_htree(
                 }
                 chunk.data
             }
-            _ => failure::bail!("protocol error, expected begin chunk packet"),
+            _ => anyhow::bail!("protocol error, expected begin chunk packet"),
         };
 
         if height == 0 {
@@ -1012,13 +1011,13 @@ pub fn restore_removed(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<u64, failure::Error> {
+) -> Result<u64, anyhow::Error> {
     progress.set_message("restoring items...");
 
     write_packet(w, &Packet::TRestoreRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored.0),
-        _ => failure::bail!("protocol error, expected restore packet response or progress packet",),
+        _ => anyhow::bail!("protocol error, expected restore packet response or progress packet",),
     }
 }
 
@@ -1026,7 +1025,7 @@ pub fn gc(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<repository::GCStats, failure::Error> {
+) -> Result<repository::GCStats, anyhow::Error> {
     progress.set_message("collecting garbage...");
 
     write_packet(w, &Packet::TGc(TGc {}))?;
@@ -1039,7 +1038,7 @@ pub fn gc(
                 progress.set_message(&msg);
             }
             Packet::RGc(rgc) => return Ok(rgc.stats),
-            _ => failure::bail!("protocol error, expected gc packet or progress packe."),
+            _ => anyhow::bail!("protocol error, expected gc packet or progress packe."),
         };
     }
 }
@@ -1049,7 +1048,7 @@ pub fn sync(
     query_cache: &mut querycache::QueryCache,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     progress.set_message("syncing remote items...");
 
     let mut tx = query_cache.transaction()?;
@@ -1067,7 +1066,7 @@ pub fn sync(
 
     let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RRequestItemSync(ack) => ack.gc_generation,
-        _ => failure::bail!("protocol error, expected items packet"),
+        _ => anyhow::bail!("protocol error, expected items packet"),
     };
 
     tx.start_sync(gc_generation)?;
@@ -1082,7 +1081,7 @@ pub fn sync(
                     tx.sync_op(opid, item_id, op)?;
                 }
             }
-            _ => failure::bail!("protocol error, expected items packet"),
+            _ => anyhow::bail!("protocol error, expected items packet"),
         }
     }
 
@@ -1095,7 +1094,7 @@ pub fn remove(
     ids: Vec<Xid>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), failure::Error> {
+) -> Result<(), anyhow::Error> {
     progress.set_message("removing items...");
 
     for chunked_ids in ids.chunks(4096) {
@@ -1103,13 +1102,13 @@ pub fn remove(
         write_packet(w, &Packet::TRmItems(ids))?;
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::RRmItems => {}
-            _ => failure::bail!("protocol error, expected RRmItems"),
+            _ => anyhow::bail!("protocol error, expected RRmItems"),
         }
     }
     Ok(())
 }
 
-pub fn hangup(w: &mut dyn std::io::Write) -> Result<(), failure::Error> {
+pub fn hangup(w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
     write_packet(w, &Packet::EndOfTransmission)?;
     Ok(())
 }

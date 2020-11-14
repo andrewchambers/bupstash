@@ -16,7 +16,7 @@ enum ReadWorkerMsg {
     GetChunk(
         (
             Address,
-            crossbeam_channel::Sender<Result<Vec<u8>, failure::Error>>,
+            crossbeam_channel::Sender<Result<Vec<u8>, anyhow::Error>>,
         ),
     ),
     Exit,
@@ -24,7 +24,7 @@ enum ReadWorkerMsg {
 
 enum WriteWorkerMsg {
     AddChunk((Address, Vec<u8>)),
-    Barrier(crossbeam_channel::Sender<Option<failure::Error>>),
+    Barrier(crossbeam_channel::Sender<Option<anyhow::Error>>),
     Exit,
 }
 
@@ -50,7 +50,7 @@ pub struct DirStorage {
 }
 
 impl DirStorage {
-    fn add_write_worker_thread(&mut self) -> Result<(), failure::Error> {
+    fn add_write_worker_thread(&mut self) -> Result<(), anyhow::Error> {
         let mut data_path = self.dir_path.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
@@ -74,7 +74,7 @@ impl DirStorage {
         macro_rules! worker_bail {
             ($err:expr) => {{
                 had_io_error.store(true, Ordering::SeqCst);
-                let mut write_err: failure::Error = $err.into();
+                let mut write_err: anyhow::Error = $err.into();
                 loop {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk(_)) => (),
@@ -85,7 +85,7 @@ impl DirStorage {
                             return;
                         }
                     }
-                    write_err = failure::format_err!("io error");
+                    write_err = anyhow::format_err!("io error");
                 }
             }};
         }
@@ -152,12 +152,12 @@ impl DirStorage {
                                     }
                                     Err(err) => {
                                         let _ = rendezvous_tx.send(Some(err.into()));
-                                        worker_bail!(failure::format_err!("io error"));
+                                        worker_bail!(anyhow::format_err!("io error"));
                                     }
                                 },
                                 Err(err) => {
                                     let _ = rendezvous_tx.send(Some(err.into()));
-                                    worker_bail!(failure::format_err!("io error"));
+                                    worker_bail!(anyhow::format_err!("io error"));
                                 }
                             };
                         }
@@ -174,7 +174,7 @@ impl DirStorage {
         Ok(())
     }
 
-    fn add_read_worker_thread(&mut self) -> Result<(), failure::Error> {
+    fn add_read_worker_thread(&mut self) -> Result<(), anyhow::Error> {
         let mut data_path = self.dir_path.clone();
         let read_worker_rx = self.read_worker_rx.clone();
 
@@ -219,7 +219,7 @@ impl DirStorage {
         self.write_worker_tx.clear();
     }
 
-    fn scaling_read_worker_dispatch(&mut self, msg: ReadWorkerMsg) -> Result<(), failure::Error> {
+    fn scaling_read_worker_dispatch(&mut self, msg: ReadWorkerMsg) -> Result<(), anyhow::Error> {
         // Should this be configurable?
         const MAX_READ_WORKERS: usize = 10;
 
@@ -237,7 +237,7 @@ impl DirStorage {
         }
     }
 
-    fn sync_write_workers(&mut self) -> Result<(), failure::Error> {
+    fn sync_write_workers(&mut self) -> Result<(), anyhow::Error> {
         let mut rendezvous = Vec::with_capacity(self.write_worker_handles.len());
 
         debug_assert!(self.write_worker_handles.len() == self.write_worker_tx.len());
@@ -249,7 +249,7 @@ impl DirStorage {
                 .unwrap();
         }
 
-        let mut result: Result<(), failure::Error> = Ok(());
+        let mut result: Result<(), anyhow::Error> = Ok(());
         for c in rendezvous.iter() {
             if let Some(err) = c.recv().unwrap() {
                 if result.is_ok() {
@@ -260,10 +260,10 @@ impl DirStorage {
         result
     }
 
-    fn check_write_worker_io_errors(&mut self) -> Result<(), failure::Error> {
+    fn check_write_worker_io_errors(&mut self) -> Result<(), anyhow::Error> {
         if self.had_io_error.load(Ordering::SeqCst) {
             match self.sync_write_workers() {
-                Ok(()) => Err(failure::format_err!("io error")),
+                Ok(()) => Err(anyhow::format_err!("io error")),
                 Err(err) => Err(err),
             }
         } else {
@@ -271,7 +271,7 @@ impl DirStorage {
         }
     }
 
-    pub fn new(dir_path: &std::path::Path) -> Result<Self, failure::Error> {
+    pub fn new(dir_path: &std::path::Path) -> Result<Self, anyhow::Error> {
         if !dir_path.exists() {
             std::fs::DirBuilder::new().create(dir_path)?;
         }
@@ -303,7 +303,7 @@ impl Drop for DirStorage {
 }
 
 impl Engine for DirStorage {
-    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), failure::Error> {
+    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
         // Lazily start our write threads.
         while self.write_worker_handles.len() < 2 {
             self.add_write_worker_thread()?;
@@ -330,7 +330,7 @@ impl Engine for DirStorage {
     fn get_chunk_async(
         &mut self,
         addr: &Address,
-    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, failure::Error>> {
+    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, anyhow::Error>> {
         let (tx, rx) = crossbeam_channel::bounded(1);
         match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
             Ok(()) => rx,
@@ -342,7 +342,7 @@ impl Engine for DirStorage {
         }
     }
 
-    fn sync(&mut self) -> Result<(), failure::Error> {
+    fn sync(&mut self) -> Result<(), anyhow::Error> {
         self.sync_write_workers()
     }
 
@@ -350,7 +350,7 @@ impl Engine for DirStorage {
         &mut self,
         _reachability_db_path: &std::path::Path,
         reachability_db: &mut rusqlite::Connection,
-    ) -> Result<repository::GCStats, failure::Error> {
+    ) -> Result<repository::GCStats, anyhow::Error> {
         self.stop_workers();
 
         let reachability_tx = reachability_db.transaction()?;

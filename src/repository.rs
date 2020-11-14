@@ -7,21 +7,20 @@ use super::hex;
 use super::htree;
 use super::itemset;
 use super::xid::*;
-use failure::Fail;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepoError {
-    #[fail(display = "path {} already exists, refusing to overwrite it", path)]
+    #[error("path {path:?} already exists, refusing to overwrite it")]
     AlreadyExists { path: String },
-    #[fail(display = "repository was not initialized properly")]
+    #[error("repository was not initialized properly")]
     NotInitializedProperly,
-    #[fail(display = "repository does not exist")]
+    #[error("repository does not exist")]
     RepoDoesNotExist,
-    #[fail(display = "repository database at unsupported version")]
+    #[error("repository database at unsupported version")]
     UnsupportedSchemaVersion,
 }
 
@@ -103,7 +102,7 @@ impl Repo {
     fn open_db_with_flags(
         db_path: &Path,
         flags: rusqlite::OpenFlags,
-    ) -> Result<rusqlite::Connection, failure::Error> {
+    ) -> Result<rusqlite::Connection, anyhow::Error> {
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
 
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
@@ -113,7 +112,7 @@ impl Repo {
         Ok(conn)
     }
 
-    fn open_db(db_path: &Path) -> Result<rusqlite::Connection, failure::Error> {
+    fn open_db(db_path: &Path) -> Result<rusqlite::Connection, anyhow::Error> {
         let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
         Repo::open_db_with_flags(db_path, default_flags)
     }
@@ -121,7 +120,7 @@ impl Repo {
     pub fn init(
         repo_path: &Path,
         storage_engine: Option<StorageEngineSpec>,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         let storage_engine = match storage_engine {
             Some(storage_engine) => storage_engine,
             None => StorageEngineSpec::DirStore,
@@ -216,9 +215,9 @@ impl Repo {
         Ok(())
     }
 
-    pub fn open(repo_path: &Path) -> Result<Repo, failure::Error> {
+    pub fn open(repo_path: &Path) -> Result<Repo, anyhow::Error> {
         if !repo_path.exists() {
-            failure::bail!("no repository at {}", repo_path.to_string_lossy());
+            anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
         }
 
         let conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
@@ -244,7 +243,7 @@ impl Repo {
         Ok(r)
     }
 
-    fn handle_gc_dirty(&mut self) -> Result<(), failure::Error> {
+    fn handle_gc_dirty(&mut self) -> Result<(), anyhow::Error> {
         // The gc_dirty flag gets set when a garbage collection exits without
         // proper cleanup. For external storage engines we handle this by applying a delay to any repository
         // actions to ensure the external engine has had time to finish any operations (especially object deletions)
@@ -306,7 +305,7 @@ impl Repo {
         Ok(())
     }
 
-    pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), failure::Error> {
+    pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), anyhow::Error> {
         // On error we should perhaps put a poison value.
         if self._repo_lock_mode != lock_mode {
             self._repo_lock_mode = lock_mode.clone();
@@ -324,7 +323,7 @@ impl Repo {
         Ok(())
     }
 
-    pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, failure::Error> {
+    pub fn storage_engine_spec(&self) -> Result<StorageEngineSpec, anyhow::Error> {
         let mut p = self.repo_path.clone();
         p.push("storage-engine.json");
         let mut f = std::fs::OpenOptions::new().read(true).open(p)?;
@@ -337,7 +336,7 @@ impl Repo {
     pub fn storage_engine_from_spec(
         &self,
         spec: &StorageEngineSpec,
-    ) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
+    ) -> Result<Box<dyn chunk_storage::Engine>, anyhow::Error> {
         let storage_engine: Box<dyn chunk_storage::Engine> = match spec {
             StorageEngineSpec::DirStore => {
                 let mut data_dir = self.repo_path.to_path_buf();
@@ -357,12 +356,12 @@ impl Repo {
         Ok(storage_engine)
     }
 
-    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, failure::Error> {
+    pub fn storage_engine(&self) -> Result<Box<dyn chunk_storage::Engine>, anyhow::Error> {
         let spec = self.storage_engine_spec()?;
         self.storage_engine_from_spec(&spec)
     }
 
-    pub fn gc_generation(&self) -> Result<Xid, failure::Error> {
+    pub fn gc_generation(&self) -> Result<Xid, anyhow::Error> {
         Ok(self.conn.query_row(
             "select Value from RepositoryMeta where Key='gc-generation';",
             rusqlite::NO_PARAMS,
@@ -374,7 +373,7 @@ impl Repo {
         &mut self,
         gc_generation: Xid,
         item: itemset::VersionedItemMetadata,
-    ) -> Result<Xid, failure::Error> {
+    ) -> Result<Xid, anyhow::Error> {
         match self._repo_lock_mode {
             LockMode::None => panic!("BUG: write lock not held when adding item"),
             LockMode::Write | LockMode::Exclusive => (),
@@ -391,7 +390,7 @@ impl Repo {
         )?;
 
         if gc_generation != current_gc_generation {
-            failure::bail!("gc generation changed during send, aborting");
+            anyhow::bail!("gc generation changed during send, aborting");
         }
 
         let id = itemset::add_item(&tx, item)?;
@@ -399,7 +398,7 @@ impl Repo {
         Ok(id)
     }
 
-    pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), failure::Error> {
+    pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), anyhow::Error> {
         self.alter_lock_mode(LockMode::Write)?;
 
         let tx = self
@@ -413,12 +412,12 @@ impl Repo {
     pub fn lookup_item_by_id(
         &mut self,
         id: &Xid,
-    ) -> Result<Option<itemset::VersionedItemMetadata>, failure::Error> {
+    ) -> Result<Option<itemset::VersionedItemMetadata>, anyhow::Error> {
         let tx = self.conn.transaction()?;
         itemset::lookup_item_by_id(&tx, id)
     }
 
-    pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, failure::Error> {
+    pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
         let tx = self.conn.transaction()?;
         itemset::has_item_with_id(&tx, id)
     }
@@ -427,8 +426,8 @@ impl Repo {
         &mut self,
         after: i64,
         start_gc_generation: Option<Xid>,
-        on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), failure::Error>,
-    ) -> Result<(), failure::Error> {
+        on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
         let tx = self.conn.transaction()?;
 
         let current_gc_generation = tx.query_row(
@@ -467,7 +466,7 @@ impl Repo {
         Ok(())
     }
 
-    pub fn restore_removed(&mut self) -> Result<u64, failure::Error> {
+    pub fn restore_removed(&mut self) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(LockMode::Write)?;
 
         let tx = self
@@ -482,8 +481,8 @@ impl Repo {
 
     pub fn gc(
         &mut self,
-        update_progress_msg: &mut dyn FnMut(String) -> Result<(), failure::Error>,
-    ) -> Result<GCStats, failure::Error> {
+        update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
+    ) -> Result<GCStats, anyhow::Error> {
         self.alter_lock_mode(LockMode::Exclusive)?;
         // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
         // For example, this could make out of space problems even worse.

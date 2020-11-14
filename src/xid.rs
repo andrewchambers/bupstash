@@ -15,14 +15,14 @@ impl Xid {
         Xid { bytes }
     }
 
-    pub fn parse(s: &str) -> Result<Xid, failure::Error> {
+    pub fn parse(s: &str) -> Result<Xid, anyhow::Error> {
         let mut bytes = [0; 16];
         let s = s.as_bytes();
         if s.len() != 32 {
-            failure::bail!("invalid id, should be 32 characters long");
+            anyhow::bail!("invalid id, should be 32 characters long");
         }
         if hex::decode(&s[..], &mut bytes[..]).is_err() {
-            failure::bail!("invalid id, should be a hex value");
+            anyhow::bail!("invalid id, should be a hex value");
         }
         Ok(Xid { bytes })
     }
