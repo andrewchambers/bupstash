@@ -266,7 +266,7 @@ _concurrent_send_test_worker () {
   echo c > "$SCRATCH/foo/bar/c.txt"
   id=$(bupstash put --no-send-log :: "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
-  id=$(bupstash put --no-stat-cache :: "$SCRATCH/foo")
+  id=$(bupstash put --no-stat-caching :: "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
 }
 
