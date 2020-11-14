@@ -12,18 +12,6 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, thiserror::Error)]
-pub enum RepoError {
-    #[error("path {path:?} already exists, refusing to overwrite it")]
-    AlreadyExists { path: String },
-    #[error("repository was not initialized properly")]
-    NotInitializedProperly,
-    #[error("repository does not exist")]
-    RepoDoesNotExist,
-    #[error("repository database at unsupported version")]
-    UnsupportedSchemaVersion,
-}
-
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
@@ -136,10 +124,10 @@ impl Repo {
 
         let mut path_buf = PathBuf::from(&parent);
         if repo_path.exists() {
-            return Err(RepoError::AlreadyExists {
-                path: repo_path.to_string_lossy().to_string(),
-            }
-            .into());
+            anyhow::bail!(
+                "repository already exists at {}",
+                repo_path.to_string_lossy().to_string()
+            );
         }
 
         let mut tmpname = repo_path
@@ -149,10 +137,10 @@ impl Repo {
         tmpname.push(".bupstash-repo-init-tmp");
         path_buf.push(&tmpname);
         if path_buf.exists() {
-            return Err(RepoError::AlreadyExists {
-                path: path_buf.to_string_lossy().to_string(),
-            }
-            .into());
+            anyhow::bail!(
+                "temp dir already exists at {}",
+                path_buf.to_string_lossy().to_string()
+            );
         }
 
         fs::DirBuilder::new().create(path_buf.as_path())?;
@@ -228,7 +216,7 @@ impl Repo {
             |row| row.get(0),
         )?;
         if v.parse::<u64>().unwrap() != 1 {
-            return Err(RepoError::UnsupportedSchemaVersion.into());
+            anyhow::bail!("repository has an unsupported schema version");
         }
 
         let mut r = Repo {
