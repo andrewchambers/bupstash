@@ -1,35 +1,48 @@
 
+#Be extra careful to not mess with a user repository
+unset BUPSTASH_REPOSITORY
 unset BUPSTASH_REPOSITORY_COMMAND
+
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
-export REPO="$SCRATCH/bupstash-test-repo"
 export BUPSTASH_KEY="$SCRATCH/bupstash-test-primary.key"
 export SEND_KEY="$SCRATCH/bupstash-test-send.key"
 export METADATA_KEY="$SCRATCH/bupstash-test-metadata.key"
-export BUPSTASH_REPOSITORY="$REPO"
 export BUPSTASH_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export BUPSTASH_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
-export BUPSTASH_STAT_CACHE="$SCRATCH/stat-cache.sqlite3"
+
+# We have two modes for running the tests...
+# 
+# When BUPSTASH_TEST_REPOSITORY_COMMAND is set, we are running
+# against an external repository, otherwise we are running against
+# a test repository.
+
+if test -z ${BUPSTASH_TEST_REPOSITORY_COMMAND+x}
+then
+  export BUPSTASH_REPOSITORY="$SCRATCH/bupstash-test-repo"
+else
+  unset BUPSTASH_REPOSITORY
+  export BUPSTASH_REPOSITORY_COMMAND="$BUPSTASH_TEST_REPOSITORY_COMMAND"
+fi
 
 setup () {
+  rm -rf "$SCRATCH"
   mkdir "$SCRATCH"
-  bupstash init --repository="$REPO"
   bupstash new-key -o "$BUPSTASH_KEY"
   bupstash new-put-key -o "$SEND_KEY"
   bupstash new-metadata-key -o "$METADATA_KEY"
+  if test -z "$BUPSTASH_REPOSITORY"
+  then
+    bupstash rm --query-encrypted --allow-many id="*"
+    bupstash gc
+    rm -f "$BUPSTASH_QUERY_CACHE"
+    rm -f "$BUPSTASH_SEND_LOG"
+  else
+    bupstash init --repository="$BUPSTASH_REPOSITORY"
+  fi
 }
 
 teardown () {
   rm -rf $SCRATCH
-}
-
-@test "init repository" {
-  test -d "$REPO"
-  test -f "$REPO/bupstash.sqlite3"
-  test -f "$REPO/repo.lock"
-  test -f "$REPO/storage-engine.json"
-  test -f "$BUPSTASH_KEY"
-  test -f "$SEND_KEY"
-  test -f "$METADATA_KEY"
 }
 
 @test "simple put/get primary key" {
@@ -91,10 +104,14 @@ teardown () {
 }
 
 @test "corruption detected" {
+  if test -z "$BUPSTASH_REPOSITORY"
+  then
+    skip
+  fi
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash put :: "$SCRATCH/foo.txt")"
-  echo 'XXXXXXXXXXXXXXXXXXXXX' > "$REPO/data/"*;
+  echo 'XXXXXXXXXXXXXXXXXXXXX' > "$BUPSTASH_REPOSITORY/data/"*;
   run bupstash get id=$id
   echo "$output"
   echo "$output" | grep -q "corrupt"
@@ -132,7 +149,7 @@ _concurrent_send_test_worker () {
 @test "simple search and listing" {
   for i in $(seq 100) # Enough to trigger more than one sync packet.
   do
-    bupstash put -e  "i=$i" :: echo $i
+    bupstash put -e "i=$i" :: echo $i
   done
   for k in $BUPSTASH_KEY $METADATA_KEY
   do
@@ -143,69 +160,93 @@ _concurrent_send_test_worker () {
 }
 
 @test "rm and gc" {
-  bupstash list
+  test 0 = $(bupstash list | wc -l)
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
   id2="$(bupstash put -e :: echo hello2)"
-  bupstash list
+  test 2 = $(bupstash list | wc -l)
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash rm id=$id1
-  bupstash list
+  test 1 = $(bupstash list | wc -l)
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 3 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 3 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash gc
-  bupstash list
+  test 1 = $(bupstash list | wc -l)
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 1 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash rm id=$id2
   bupstash gc
-  bupstash list
+  test 0 = $(bupstash list | wc -l)
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 0 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
 }
 
 @test "rm and restore-removed" {
-  bupstash list
+  test 0 = $(bupstash list | wc -l)
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
   id2="$(bupstash put -e :: echo hello2)"
   test 2 = "$(bupstash list | wc -l)"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash rm id=$id1
   bupstash restore-removed
   test 2 = "$(bupstash list | wc -l)"
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 4 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 2 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 2 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 4 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash rm id=$id1
   bupstash gc
   bupstash restore-removed
   test 1 = "$(bupstash list | wc -l)"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 1 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 1 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
   bupstash rm id=$id2
   bupstash gc
   bupstash restore-removed
   test 0 = "$(bupstash list | wc -l)"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-  test 0 = "$(sqlite3 "$REPO/bupstash.sqlite3" 'select count(*) from Items;')"
-  test 0 = "$(ls "$REPO"/data | wc -l)"
+  if test -n "$BUPSTASH_REPOSITORY"
+  then
+    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
+    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+  fi
 }
 
 @test "query sync" {
@@ -224,16 +265,16 @@ _concurrent_send_test_worker () {
 }
 
 @test "get via query" {
-  bupstash put -e foo=bar ::  echo -n hello1 
-  bupstash put -e foo=baz ::  echo -n hello2 
-  bupstash put -e foo=bang :: echo -n hello2 
+  bupstash put -e foo=bar  echo -n hello1 
+  bupstash put -e foo=baz  echo -n hello2 
+  bupstash put -e foo=bang echo -n hello2 
   test "hello2" = $(bupstash get "foo=ban*")
 }
 
 @test "rm via query" {
-  bupstash put -e  foo=bar :: echo -n hello1 
-  bupstash put -e  foo=baz :: echo -n hello2
-  bupstash put -e  foo=bang :: echo -n hello2
+  bupstash put -e  foo=bar  echo -n hello1 
+  bupstash put -e  foo=baz  echo -n hello2
+  bupstash put -e  foo=bang echo -n hello2
   test 3 = $(bupstash list | wc -l)
   if bupstash rm "foo=*"
   then
@@ -281,6 +322,10 @@ _concurrent_send_test_worker () {
 }
 
 @test "repository command" {
+  if test -z "$BUPSTASH_REPOSITORY"
+  then
+    skip
+  fi
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve $BUPSTASH_REPOSITORY"
   unset BUPSTASH_REPOSITORY
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
