@@ -1,7 +1,9 @@
 
-#Be extra careful to not mess with a user repository
+# Be extra careful to not mess with a user repository
 unset BUPSTASH_REPOSITORY
 unset BUPSTASH_REPOSITORY_COMMAND
+unset BUPSTASH_KEY
+unset BUPSTASH_KEY_COMMAND
 
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
 export BUPSTASH_KEY="$SCRATCH/bupstash-test-primary.key"
