@@ -144,7 +144,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "s",
         "storage",
-        "The storage engine specification. one of 'dir', 'sqlite3' or a json specification. Consult the manual for details.",
+        "The storage engine specification. 'dir', or a json specification. Consult the manual for details.",
         "STORAGE",
     );
     let matches = parse_cli_opts(opts, &args[..]);
@@ -164,6 +164,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     Ok(())
 }
@@ -465,10 +466,11 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"acquiring repository lock...");
+    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     let mut on_match = |_item_id: xid::Xid, tags: std::collections::BTreeMap<String, String>| {
         let mut tags: Vec<(String, String)> = tags.into_iter().collect();
@@ -765,6 +767,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &mut data_source,
     )?;
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     progress.finish_and_clear();
 
@@ -808,7 +811,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"acquiring repository lock...");
+    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
@@ -897,6 +900,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     )?;
 
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     progress.finish_and_clear();
 
@@ -948,7 +952,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"acquiring repository lock...");
+    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
@@ -1013,6 +1017,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     )?;
 
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     progress.finish_and_clear();
 
@@ -1148,6 +1153,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
+        serve_proc.wait()?;
     } else {
         let mut serve_proc = matches_to_serve_process(&matches)?;
         let mut serve_out = serve_proc.stdout.as_mut().unwrap();
@@ -1224,6 +1230,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         };
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
+        serve_proc.wait()?;
     };
 
     progress.finish_and_clear();
@@ -1251,6 +1258,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Gc)?;
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     progress.finish_and_clear();
 
@@ -1289,6 +1297,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
     let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
 
     progress.finish_and_clear();
 
