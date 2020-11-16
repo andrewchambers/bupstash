@@ -125,50 +125,6 @@ fn parse_cli_opts(opts: Options, args: &[String]) -> Matches {
     matches
 }
 
-fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let opts = default_cli_opts();
-    print_help_and_exit(&args[0], &opts);
-    Ok(())
-}
-
-fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let opts = default_cli_opts();
-    parse_cli_opts(opts, &args[..]);
-    println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
-    Ok(())
-}
-
-fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
-    opts.optopt(
-        "s",
-        "storage",
-        "The storage engine specification. 'dir', or a json specification. Consult the manual for details.",
-        "STORAGE",
-    );
-    let matches = parse_cli_opts(opts, &args[..]);
-
-    let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
-        Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
-        Some(s) => match serde_json::from_str(&s) {
-            Ok(s) => Some(s),
-            Err(err) => anyhow::bail!("unable to parse storage engine spec: {}", err),
-        },
-        None => None,
-    };
-
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
-
-    client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
-    client::hangup(&mut serve_in)?;
-    serve_proc.wait()?;
-
-    Ok(())
-}
-
 fn matches_to_key(matches: &Matches) -> Result<keys::Key, anyhow::Error> {
     if let Some(k) = matches_to_opt_key(matches)? {
         Ok(k)
@@ -288,7 +244,36 @@ fn matches_to_id_and_query(
     Ok((id, query))
 }
 
-fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, anyhow::Error> {
+// Define a smiple wrapper around the serve process
+// the wrapper ensures we handle stderr correctly.
+struct ServeProcess {
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
+    proc: std::process::Child,
+}
+
+impl ServeProcess {
+    fn wait(mut self) -> Result<(), anyhow::Error> {
+        if let Some(handle) = self.stderr_reader.take() {
+            handle.join().unwrap();
+        }
+        self.proc.wait()?;
+        Ok(())
+    }
+}
+
+impl Drop for ServeProcess {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.proc.id() as i32, libc::SIGTERM) };
+        if let Some(handle) = self.stderr_reader.take() {
+            handle.join().unwrap();
+        }
+    }
+}
+
+fn matches_to_serve_process(
+    matches: &Matches,
+    progress: &indicatif::ProgressBar,
+) -> Result<ServeProcess, anyhow::Error> {
     let mut serve_cmd_args = {
         let repo = if matches.opt_present("repository") {
             Some(matches.opt_str("repository").unwrap())
@@ -351,9 +336,13 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, an
 
     let bin = serve_cmd_args.remove(0);
 
-    let serve_proc = match std::process::Command::new(bin)
+    let mut proc = match std::process::Command::new(bin)
         .args(serve_cmd_args)
-        .stderr(std::process::Stdio::inherit())
+        .stderr(if progress.is_hidden() {
+            std::process::Stdio::inherit()
+        } else {
+            std::process::Stdio::piped()
+        })
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -362,7 +351,28 @@ fn matches_to_serve_process(matches: &Matches) -> Result<std::process::Child, an
         Err(err) => anyhow::bail!("error spawning serve command: {}", err),
     };
 
-    Ok(serve_proc)
+    let stderr_reader = if progress.is_hidden() {
+        None
+    } else {
+        let progress = progress.clone();
+        let proc_stderr = proc.stderr.take().unwrap();
+
+        let stderr_reader = std::thread::spawn(move || {
+            let buf_reader = std::io::BufReader::new(proc_stderr);
+            for line in buf_reader.lines() {
+                if let Ok(line) = line {
+                    progress.println(line);
+                }
+            }
+        });
+
+        Some(stderr_reader)
+    };
+
+    Ok(ServeProcess {
+        stderr_reader,
+        proc,
+    })
 }
 
 fn matches_to_progress_bar(
@@ -379,12 +389,62 @@ fn matches_to_progress_bar(
         },
     );
     progress.set_style(style);
-    progress.set_message(&"connecting to repository...");
+    progress.set_message(&"connecting...");
     if want_visible_progress {
         progress.enable_steady_tick(250)
     };
     progress.tick();
     Ok(progress)
+}
+
+fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let opts = default_cli_opts();
+    print_help_and_exit(&args[0], &opts);
+    Ok(())
+}
+
+fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let opts = default_cli_opts();
+    parse_cli_opts(opts, &args[..]);
+    println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
+    Ok(())
+}
+
+fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    repo_opts(&mut opts);
+    opts.optopt(
+        "s",
+        "storage",
+        "The storage engine specification. 'dir', or a json specification. Consult the manual for details.",
+        "STORAGE",
+    );
+    opts.optflag("q", "quiet", "Suppress progress indicators.");
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
+        Some(s) if s == "dir" => Some(repository::StorageEngineSpec::DirStore),
+        Some(s) => match serde_json::from_str(&s) {
+            Ok(s) => Some(s),
+            Err(err) => anyhow::bail!("unable to parse storage engine spec: {}", err),
+        },
+        None => None,
+    };
+
+    let progress = matches_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    )?;
+
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
+
+    client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
+    client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
+
+    Ok(())
 }
 
 enum ListFormat {
@@ -462,11 +522,10 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let mut query_cache = matches_to_query_cache(&matches)?;
 
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
@@ -741,9 +800,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
     }
 
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
         progress: progress.clone(),
         compression,
@@ -807,11 +866,10 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     )?;
 
     let (id, query) = matches_to_id_and_query(&matches)?;
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
@@ -948,11 +1006,10 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     )?;
 
     let (id, query) = matches_to_id_and_query(&matches)?;
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"opening repository...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
 
     let id = match (id, query) {
@@ -1145,9 +1202,9 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         }
 
-        let mut serve_proc = matches_to_serve_process(&matches)?;
-        let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-        let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+        let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+        let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+        let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
         progress.set_message(&"acquiring repository lock...");
         client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
@@ -1155,9 +1212,9 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     } else {
-        let mut serve_proc = matches_to_serve_process(&matches)?;
-        let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-        let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+        let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+        let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+        let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
         progress.set_message(&"acquiring repository lock...");
         client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
 
@@ -1250,9 +1307,9 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Gc)?;
@@ -1289,9 +1346,9 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut serve_proc = matches_to_serve_process(&matches)?;
-    let mut serve_out = serve_proc.stdout.as_mut().unwrap();
-    let mut serve_in = serve_proc.stdin.as_mut().unwrap();
+    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
     progress.set_message(&"acquiring repository lock...");
     client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
