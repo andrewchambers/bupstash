@@ -24,7 +24,6 @@ pub mod sodium;
 pub mod xid;
 pub mod xtar;
 
-use getopts::{Matches, Options};
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write};
 
@@ -49,7 +48,7 @@ fn cache_dir() -> Result<std::path::PathBuf, anyhow::Error> {
     Ok(cache_dir)
 }
 
-fn print_help_and_exit(subcommand: &str, opts: &Options) {
+fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
     let brief = match subcommand {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
@@ -71,14 +70,14 @@ fn print_help_and_exit(subcommand: &str, opts: &Options) {
     std::process::exit(0);
 }
 
-fn default_cli_opts() -> Options {
-    let mut opts = Options::new();
+fn default_cli_opts() -> getopts::Options {
+    let mut opts = getopts::Options::new();
     opts.parsing_style(getopts::ParsingStyle::StopAtFirstFree);
     opts.optflag("h", "help", "print this help menu.");
     opts
 }
 
-fn query_opts(opts: &mut Options) {
+fn query_opts(opts: &mut getopts::Options) {
     opts.optopt(
         "",
         "query-cache",
@@ -101,7 +100,7 @@ fn query_opts(opts: &mut Options) {
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 }
 
-fn repo_opts(opts: &mut Options) {
+fn repo_opts(opts: &mut getopts::Options) {
     opts.optopt(
         "r",
         "repository",
@@ -112,7 +111,7 @@ fn repo_opts(opts: &mut Options) {
     );
 }
 
-fn parse_cli_opts(opts: Options, args: &[String]) -> Matches {
+fn parse_cli_opts(opts: getopts::Options, args: &[String]) -> getopts::Matches {
     if args.len() >= 2 && (args[1] == "-h" || args[1] == "--help") {
         print_help_and_exit(&args[0], &opts)
     }
@@ -125,15 +124,15 @@ fn parse_cli_opts(opts: Options, args: &[String]) -> Matches {
     matches
 }
 
-fn matches_to_key(matches: &Matches) -> Result<keys::Key, anyhow::Error> {
-    if let Some(k) = matches_to_opt_key(matches)? {
+fn cli_to_key(matches: &getopts::Matches) -> Result<keys::Key, anyhow::Error> {
+    if let Some(k) = cli_to_opt_key(matches)? {
         Ok(k)
     } else {
         anyhow::bail!("please set --key, BUPSTASH_KEY or BUPSTASH_KEY_COMMAND");
     }
 }
 
-fn matches_to_opt_key(matches: &Matches) -> Result<Option<keys::Key>, anyhow::Error> {
+fn cli_to_opt_key(matches: &getopts::Matches) -> Result<Option<keys::Key>, anyhow::Error> {
     match matches.opt_str("key") {
         Some(k) => Ok(Some(keys::Key::load_from_file(&k)?)),
         None => {
@@ -179,7 +178,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt("k", "key", "primary key to derive put-key from.", "PATH");
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = parse_cli_opts(opts, &args[..]);
-    let k = matches_to_key(&matches)?;
+    let k = cli_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
             let send_key = keys::Key::PutKeyV1(keys::SendKey::gen(&primary_key));
@@ -199,7 +198,7 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
     opts.reqopt("o", "output", "output file.", "PATH");
     let matches = parse_cli_opts(opts, &args[..]);
-    let k = matches_to_key(&matches)?;
+    let k = cli_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
             let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&primary_key));
@@ -209,7 +208,7 @@ fn new_metadata_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 }
 
-fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, anyhow::Error> {
+fn cli_to_query_cache(matches: &getopts::Matches) -> Result<querycache::QueryCache, anyhow::Error> {
     match matches.opt_str("query-cache") {
         Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache)),
         None => match std::env::var_os("BUPSTASH_QUERY_CACHE") {
@@ -226,8 +225,8 @@ fn matches_to_query_cache(matches: &Matches) -> Result<querycache::QueryCache, a
     }
 }
 
-fn matches_to_id_and_query(
-    matches: &Matches,
+fn cli_to_id_and_query(
+    matches: &getopts::Matches,
 ) -> Result<(Option<xid::Xid>, query::Query), anyhow::Error> {
     let query: query::Query = if !matches.free.is_empty() {
         match query::parse(&matches.free.join("•")) {
@@ -270,8 +269,8 @@ impl Drop for ServeProcess {
     }
 }
 
-fn matches_to_serve_process(
-    matches: &Matches,
+fn cli_to_serve_process(
+    matches: &getopts::Matches,
     progress: &indicatif::ProgressBar,
 ) -> Result<ServeProcess, anyhow::Error> {
     let mut serve_cmd_args = {
@@ -375,8 +374,8 @@ fn matches_to_serve_process(
     })
 }
 
-fn matches_to_progress_bar(
-    matches: &Matches,
+fn cli_to_progress_bar(
+    matches: &getopts::Matches,
     style: indicatif::ProgressStyle,
 ) -> Result<indicatif::ProgressBar, anyhow::Error> {
     let want_visible_progress = !matches.opt_present("quiet") && atty::is(atty::Stream::Stderr);
@@ -431,12 +430,12 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None => None,
     };
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -480,7 +479,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None => ListFormat::Human,
     };
 
-    let (primary_key_id, metadata_dctx) = match matches_to_opt_key(&matches)? {
+    let (primary_key_id, metadata_dctx) = match cli_to_opt_key(&matches)? {
         Some(key) => {
             let primary_key_id = key.primary_key_id();
             let metadata_dctx = match key {
@@ -515,14 +514,14 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None
     };
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut query_cache = matches_to_query_cache(&matches)?;
+    let mut query_cache = cli_to_query_cache(&matches)?;
 
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -702,7 +701,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
-    let key = matches_to_key(&matches)?;
+    let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let send_key_id = key.id();
     let (hash_key, data_ectx, metadata_ectx) = match key {
@@ -725,7 +724,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let mut data_source: client::DataSource;
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
@@ -800,7 +799,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
     }
 
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
@@ -848,7 +847,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let key = matches_to_key(&matches)?;
+    let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
@@ -860,13 +859,13 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         _ => anyhow::bail!("provided key is not a decryption key"),
     };
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let (id, query) = matches_to_id_and_query(&matches)?;
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let (id, query) = cli_to_id_and_query(&matches)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -875,7 +874,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let id = match (id, query) {
         (Some(id), _) => id,
         (_, query) => {
-            let mut query_cache = matches_to_query_cache(&matches)?;
+            let mut query_cache = cli_to_query_cache(&matches)?;
 
             // Only sync the client if we have a non id query.
             client::sync(
@@ -988,7 +987,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None => ListFormat::Human,
     };
 
-    let key = matches_to_key(&matches)?;
+    let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
@@ -1000,13 +999,13 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         _ => anyhow::bail!("provided key is not a decryption key"),
     };
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let (id, query) = matches_to_id_and_query(&matches)?;
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let (id, query) = cli_to_id_and_query(&matches)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1015,7 +1014,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let id = match (id, query) {
         (Some(id), _) => id,
         (_, query) => {
-            let mut query_cache = matches_to_query_cache(&matches)?;
+            let mut query_cache = cli_to_query_cache(&matches)?;
 
             // Only sync the client if we have a non id query.
             client::sync(
@@ -1183,7 +1182,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
@@ -1202,7 +1201,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         }
 
-        let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+        let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1212,16 +1211,16 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     } else {
-        let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+        let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
         progress.set_message(&"acquiring repository lock...");
         client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
 
-        let ids: Vec<xid::Xid> = match matches_to_id_and_query(&matches)? {
+        let ids: Vec<xid::Xid> = match cli_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
             (_, query) => {
-                let mut query_cache = matches_to_query_cache(&matches)?;
+                let mut query_cache = cli_to_query_cache(&matches)?;
 
                 // Only sync the client if we have a non id query.
                 client::sync(
@@ -1231,7 +1230,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     &mut serve_in,
                 )?;
 
-                let (primary_key_id, metadata_dctx) = match matches_to_opt_key(&matches)? {
+                let (primary_key_id, metadata_dctx) = match cli_to_opt_key(&matches)? {
                     Some(key) => {
                         let primary_key_id = key.primary_key_id();
                         let metadata_dctx = match key {
@@ -1302,12 +1301,12 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     repo_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1341,12 +1340,12 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     repo_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let progress = matches_to_progress_bar(
+    let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
-    let mut serve_proc = matches_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
