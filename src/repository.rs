@@ -548,7 +548,6 @@ impl Repo {
             // that arrives between the end of this walk and us getting the
             // exclusive lock on the repository.
             let tx = self.conn.transaction()?;
-            update_progress_msg("walking reachable data...".to_string())?;
             itemset::walk_items(&tx, &mut walk_item)?;
             tx.commit()?;
         }
@@ -564,12 +563,12 @@ impl Repo {
             rusqlite::params![Xid::new()],
         )?;
 
+        update_progress_msg("finalizing reachable data...".to_string())?;
         {
             let tx = self
                 .conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-            update_progress_msg("finalizing reachable data...".to_string())?;
             // Will skip items that we already processed when we did not hold
             // an exclusive repository lock.
             itemset::walk_items(&tx, &mut walk_item)?;
