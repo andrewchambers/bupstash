@@ -297,7 +297,9 @@ pub fn read_packet_raw(
         PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_REQUEST_CHUNK_DATA => Packet::TRequestChunkData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_REQUEST_CHUNK_DATA => {
+            Packet::TRequestChunkData(serde_bare::from_slice(&buf)?)
+        }
         PACKET_KIND_R_REQUEST_CHUNK_DATA => Packet::RRequestChunkData(buf),
         PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
