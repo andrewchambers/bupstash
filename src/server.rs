@@ -20,23 +20,6 @@ pub fn serve(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    match serve2(cfg, r, w) {
-        Ok(()) => Ok(()),
-        Err(err) => write_packet(
-            w,
-            &Packet::Abort(Abort {
-                message: format!("{}", err),
-                code: None,
-            }),
-        ),
-    }
-}
-
-fn serve2(
-    cfg: ServerConfig,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
-) -> Result<(), anyhow::Error> {
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {

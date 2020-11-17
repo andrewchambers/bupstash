@@ -66,7 +66,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "version" => include_str!("../doc/cli/version.txt"),
         _ => panic!(),
     };
-    print!("{}", opts.usage(brief));
+    let _ = std::io::stdout().write_all(opts.usage(brief).as_bytes());
     std::process::exit(0);
 }
 
@@ -77,7 +77,7 @@ fn default_cli_opts() -> getopts::Options {
     opts
 }
 
-fn query_opts(opts: &mut getopts::Options) {
+fn query_cli_opts(opts: &mut getopts::Options) {
     opts.optopt(
         "",
         "query-cache",
@@ -100,7 +100,7 @@ fn query_opts(opts: &mut getopts::Options) {
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 }
 
-fn repo_opts(opts: &mut getopts::Options) {
+fn repo_cli_opts(opts: &mut getopts::Options) {
     opts.optopt(
         "r",
         "repository",
@@ -405,13 +405,17 @@ fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     parse_cli_opts(opts, &args[..]);
-    println!("bupstash-{}", env!("CARGO_PKG_VERSION"));
+    write!(
+        &mut std::io::stdout(),
+        "bupstash-{}\n",
+        env!("CARGO_PKG_VERSION"),
+    )?;
     Ok(())
 }
 
 fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
+    repo_cli_opts(&mut opts);
     opts.optopt(
         "s",
         "storage",
@@ -453,7 +457,7 @@ enum ListFormat {
 
 fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
+    repo_cli_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
@@ -466,7 +470,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Output format, valid values are 'human' or 'jsonl'.",
         "FORMAT",
     );
-    query_opts(&mut opts);
+    query_cli_opts(&mut opts);
 
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -530,6 +534,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
+    let out = std::io::stdout();
+    let mut out = out.lock();
+
     let mut on_match = |_item_id: xid::Xid, tags: std::collections::BTreeMap<String, String>| {
         let mut tags: Vec<(String, String)> = tags.into_iter().collect();
 
@@ -546,29 +553,31 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             ListFormat::Human => {
                 for (i, (k, v)) in tags.iter().enumerate() {
                     if i != 0 {
-                        print!(" ");
+                        write!(out, " ")?;
                     }
-                    print!(
+                    write!(
+                        out,
                         "{}=\"{}\"",
                         k,
                         v.replace("\\", "\\\\").replace("\"", "\\\"")
-                    );
+                    )?;
                 }
-                println!();
+                write!(out, "\n")?;
             }
             ListFormat::Jsonl => {
-                print!("{{");
+                write!(out, "{{")?;
                 for (i, (k, v)) in tags.iter().enumerate() {
                     if i != 0 {
-                        print!(", ");
+                        write!(out, ", ")?;
                     }
-                    print!(
+                    write!(
+                        out,
                         "{}:{}",
                         serde_json::to_string(&k)?,
                         serde_json::to_string(&v)?
-                    )
+                    )?;
                 }
-                println!("}}");
+                write!(out, "}}\n")?;
             }
         }
 
@@ -593,7 +602,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
+    repo_cli_opts(&mut opts);
     opts.optopt(
         "k",
         "key",
@@ -829,14 +838,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    println!("{}", id);
+    write!(std::io::stdout(), "{}\n", id)?;
     Ok(())
 }
 
 fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
-    query_opts(&mut opts);
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
     opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
     opts.optopt(
         "",
@@ -966,8 +975,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
-    query_opts(&mut opts);
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
     opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
     opts.optopt(
         "",
@@ -1086,6 +1095,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let utc_timestamps = matches.opt_present("utc-timestamps");
 
+    let out = std::io::stdout();
+    let mut out = out.lock();
+
     match list_format {
         ListFormat::Human => {
             let mut max_size_digits = 0;
@@ -1122,14 +1134,15 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             .take(max_size_digits - size.len())
                             .collect();
 
-                        println!(
-                            "{} {}{} {} {}",
+                        write!(
+                            out,
+                            "{} {}{} {} {}\n",
                             item.display_mode(),
                             size,
                             size_padding,
                             ts,
                             item.path,
-                        );
+                        )?;
                     }
                 }
             }
@@ -1138,32 +1151,32 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             for item in content_index.iter() {
                 match item {
                     index::VersionedIndexEntry::V1(item) => {
-                        print!("{{");
-                        print!("\"mode\":{},", serde_json::to_string(&item.mode.0)?);
-                        print!("\"size\":{},", item.size.0);
-                        print!("\"path\":{},", serde_json::to_string(&item.path)?);
-                        print!("\"ctime\":{},", serde_json::to_string(&item.ctime.0)?);
-                        print!(
+                        write!(out, "{{")?;
+                        write!(out, "\"mode\":{},", serde_json::to_string(&item.mode.0)?)?;
+                        write!(out, "\"size\":{},", item.size.0)?;
+                        write!(out, "\"path\":{},", serde_json::to_string(&item.path)?)?;
+                        write!(out, "\"ctime\":{},", serde_json::to_string(&item.ctime.0)?)?;
+                        write!(
+                            out,
                             "\"ctime_nsec\":{}",
                             serde_json::to_string(&item.ctime_nsec.0)?
-                        );
-                        print!("}}");
-                        println!();
+                        )?;
+                        write!(out, "}}\n")?;
                     }
                 }
             }
         }
     }
 
-    std::io::stdout().flush()?;
+    out.flush()?;
 
     Ok(())
 }
 
 fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    repo_opts(&mut opts);
-    query_opts(&mut opts);
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
 
     opts.optopt(
         "k",
@@ -1187,6 +1200,8 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     )?;
 
+    let n_removed;
+
     if matches.opt_present("ids-from-stdin") {
         let mut ids = Vec::new();
 
@@ -1200,6 +1215,8 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 Err(err) => anyhow::bail!("error id parsing {:?}: {}", l, err),
             };
         }
+
+        n_removed = ids.len();
 
         let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
@@ -1284,12 +1301,15 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 ids
             }
         };
+        n_removed = ids.len();
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     };
 
     progress.finish_and_clear();
+
+    write!(std::io::stdout(), "{} item(s) removed\n", n_removed)?;
 
     Ok(())
 }
@@ -1298,7 +1318,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
-    repo_opts(&mut opts);
+    repo_cli_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
 
     let progress = cli_to_progress_bar(
@@ -1318,18 +1338,22 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
+    let out = std::io::stdout();
+    let mut out = out.lock();
+
     if let Some(chunks_freed) = stats.chunks_freed {
-        println!("{} chunks freed", chunks_freed);
+        write!(out, "{} chunks freed\n", chunks_freed)?;
     }
     if let Some(chunks_remaining) = stats.chunks_remaining {
-        println!("{} chunks remaining", chunks_remaining);
+        write!(out, "{} chunks remaining\n", chunks_remaining)?;
     }
     if let Some(bytes_freed) = stats.bytes_freed {
-        println!("{} bytes freed", bytes_freed);
+        write!(out, "{} bytes freed\n", bytes_freed)?;
     }
     if let Some(bytes_remaining) = stats.bytes_remaining {
-        println!("{} bytes remaining", bytes_remaining);
+        write!(out, "{} bytes remaining\n", bytes_remaining)?;
     }
+
     Ok(())
 }
 
@@ -1337,7 +1361,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
-    repo_opts(&mut opts);
+    repo_cli_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
 
     let progress = cli_to_progress_bar(
@@ -1357,7 +1381,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    println!("{} item(s) restored", n_restored);
+    write!(std::io::stdout(), "{} item(s) restored\n", n_restored)?;
 
     Ok(())
 }
@@ -1477,6 +1501,12 @@ fn main() {
     };
 
     if let Err(err) = result {
-        die(format!("bupstash {}: {}", subcommand, err));
+        // Support unix style pipelines, don't print an error on EPIPE.
+        match err.root_cause().downcast_ref::<std::io::Error>() {
+            Some(io_error) if io_error.kind() == std::io::ErrorKind::BrokenPipe => {
+                std::process::exit(1)
+            }
+            _ => die(format!("bupstash {}: {}", subcommand, err)),
+        }
     }
 }

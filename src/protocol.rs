@@ -196,10 +196,30 @@ const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 105;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
+// Note that these functions intentionally do not return the underlying IO error.
+// This is done for a few reasons:
+//
+// - We don't want to see any EPIPE at the top level caused by disconnects in the backend.
+// - It seems like it is always clearer for the end user to see a disconnected message.
+
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), anyhow::Error> {
     if r.read_exact(buf).is_err() {
-        anyhow::bail!("remote disconnected");
-    };
+        anyhow::bail!("remote disconnected")
+    }
+    Ok(())
+}
+
+fn write_to_remote(w: &mut dyn std::io::Write, buf: &[u8]) -> Result<(), anyhow::Error> {
+    if w.write_all(buf).is_err() {
+        anyhow::bail!("remote disconnected")
+    }
+    Ok(())
+}
+
+fn flush_remote(w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
+    if w.flush().is_err() {
+        anyhow::bail!("remote disconnected")
+    }
     Ok(())
 }
 
@@ -306,7 +326,7 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), anyhow:
     hdr[2] = ((sz & 0x00ff_0000) >> 16) as u8;
     hdr[1] = ((sz & 0x0000_ff00) >> 8) as u8;
     hdr[0] = (sz & 0x0000_00ff) as u8;
-    w.write_all(&hdr[..])?;
+    write_to_remote(w, &hdr[..])?;
     Ok(())
 }
 
@@ -318,23 +338,23 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
                 PACKET_KIND_CHUNK,
                 (v.data.len() + ADDRESS_SZ).try_into()?,
             )?;
-            w.write_all(&v.address.bytes)?;
-            w.write_all(&v.data)?;
+            write_to_remote(w, &v.address.bytes)?;
+            write_to_remote(w, &v.data)?;
         }
         Packet::TOpenRepository(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_OPEN_REPOSITORY, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::ROpenRepository(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_OPEN_REPOSITORY, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TInitRepository(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_INIT_REPOSITORY, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RInitRepository => {
             send_hdr(w, PACKET_KIND_R_INIT_REPOSITORY, 0)?;
@@ -342,12 +362,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::TBeginSend(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_BEGIN_SEND, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RBeginSend(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TSendSync => {
             send_hdr(w, PACKET_KIND_T_SEND_SYNC, 0)?;
@@ -358,17 +378,17 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::TAddItem(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_ADD_ITEM, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RAddItem(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_ADD_ITEM, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRmItems(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_RM_ITEMS, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RRmItems => {
             send_hdr(w, PACKET_KIND_R_RM_ITEMS, 0)?;
@@ -376,66 +396,66 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::TRequestData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_DATA, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RRequestData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_DATA, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRequestIndex(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_INDEX, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RRequestIndex(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_INDEX, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TGc(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_GC, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RGc(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_GC, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRequestItemSync(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RRequestItemSync(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::SyncLogOps(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRequestChunk(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::RRequestChunk(ref v) => {
             send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK, v.len().try_into()?)?;
-            w.write_all(&v)?;
+            write_to_remote(w, &v)?;
         }
         Packet::Progress(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_PROGRESS, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::Abort(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_ABORT, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRestoreRemoved => {
             send_hdr(w, PACKET_KIND_T_RESTORE_REMOVED, 0)?;
@@ -443,17 +463,17 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::RRestoreRemoved(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_RESTORE_REMOVED, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::StorageConnect(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::StorageBeginGC(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::StorageGCHeartBeat => {
             send_hdr(w, PACKET_KIND_STORAGE_GC_HEARTBEAT, 0)?;
@@ -461,7 +481,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::StorageGCComplete(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
-            w.write_all(&b)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TStorageWriteBarrier => {
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
@@ -473,6 +493,6 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;
         }
     }
-    w.flush()?;
+    flush_remote(w)?;
     Ok(())
 }
