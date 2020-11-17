@@ -568,14 +568,18 @@ impl Repo {
             let tx = self
                 .conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
             // Will skip items that we already processed when we did not hold
             // an exclusive repository lock.
             itemset::walk_items(&tx, &mut walk_item)?;
+            tx.commit()?;
+        }
 
-            update_progress_msg("compacting item log...".to_string())?;
+        update_progress_msg("compacting item log...".to_string())?;
+        {
+            let tx = self
+                .conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             itemset::compact(&tx)?;
-
             tx.commit()?;
         }
 
