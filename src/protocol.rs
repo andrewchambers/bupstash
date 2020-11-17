@@ -140,8 +140,8 @@ pub enum Packet {
     TRequestItemSync(TRequestItemSync),
     RRequestItemSync(RRequestItemSync),
     SyncLogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
-    TRequestChunk(Address),
-    RRequestChunk(Vec<u8>),
+    TRequestChunkData(Address),
+    RRequestChunkData(Vec<u8>),
     Progress(Progress),
     Abort(Abort),
     TRestoreRemoved,
@@ -177,8 +177,8 @@ const PACKET_KIND_R_GC: u8 = 16;
 const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 17;
 const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 18;
 const PACKET_KIND_SYNC_LOG_OPS: u8 = 19;
-const PACKET_KIND_T_REQUEST_CHUNK: u8 = 20;
-const PACKET_KIND_R_REQUEST_CHUNK: u8 = 21;
+const PACKET_KIND_T_REQUEST_CHUNK_DATA: u8 = 20;
+const PACKET_KIND_R_REQUEST_CHUNK_DATA: u8 = 21;
 const PACKET_KIND_PROGRESS: u8 = 22;
 const PACKET_KIND_ABORT: u8 = 23;
 const PACKET_KIND_T_RESTORE_REMOVED: u8 = 24;
@@ -297,8 +297,8 @@ pub fn read_packet_raw(
         PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_REQUEST_CHUNK => Packet::TRequestChunk(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_REQUEST_CHUNK => Packet::RRequestChunk(buf),
+        PACKET_KIND_T_REQUEST_CHUNK_DATA => Packet::TRequestChunkData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_CHUNK_DATA => Packet::RRequestChunkData(buf),
         PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_RESTORE_REMOVED => Packet::TRestoreRemoved,
@@ -438,13 +438,13 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TRequestChunk(ref v) => {
+        Packet::TRequestChunkData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK_DATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRequestChunk(ref v) => {
-            send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK, v.len().try_into()?)?;
+        Packet::RRequestChunkData(ref v) => {
+            send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK_DATA, v.len().try_into()?)?;
             write_to_remote(w, &v)?;
         }
         Packet::Progress(ref v) => {

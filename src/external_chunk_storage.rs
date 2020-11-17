@@ -142,13 +142,13 @@ impl ExternalStorage {
                     Ok(ReadWorkerMsg::GetChunk((addr, result_tx))) => {
                         match protocol::write_packet(
                             &mut sock,
-                            &protocol::Packet::TRequestChunk(addr),
+                            &protocol::Packet::TRequestChunkData(addr),
                         ) {
                             Ok(()) => (),
                             Err(err) => result_tx.send(Err(err)).unwrap(),
                         }
                         match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                            Ok(protocol::Packet::RRequestChunk(data)) => {
+                            Ok(protocol::Packet::RRequestChunkData(data)) => {
                                 let _ = result_tx.send(Ok(data));
                             }
                             Ok(_) => {
