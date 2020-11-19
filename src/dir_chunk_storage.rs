@@ -3,6 +3,7 @@ use super::chunk_storage::Engine;
 use super::crypto;
 use super::hex;
 use super::repository;
+use super::xid;
 
 use std::convert::TryInto;
 use std::io::Write;
@@ -346,6 +347,10 @@ impl Engine for DirStorage {
         self.sync_write_workers()
     }
 
+    fn prepare_for_gc(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     fn gc(
         &mut self,
         _reachability_db_path: &std::path::Path,
@@ -408,6 +413,10 @@ impl Engine for DirStorage {
             bytes_freed: Some(bytes_freed),
             bytes_remaining: Some(bytes_remaining),
         })
+    }
+
+    fn await_gc_completion(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+        Ok(())
     }
 }
 

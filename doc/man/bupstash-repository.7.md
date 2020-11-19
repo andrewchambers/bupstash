@@ -49,7 +49,7 @@ schema-version=$NUMBER
 gc-generation=$RANDOM_UNIQUE_ID 
 
 # Marker that a garbage collection was interrupted.
-gc-dirty=$BOOL
+gc-dirty=$RANDOM_UNIQUE_ID|NULL
 
 ```
 

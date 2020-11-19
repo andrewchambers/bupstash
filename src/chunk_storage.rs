@@ -1,6 +1,7 @@
 use super::address::*;
 use super::htree;
 use super::repository;
+use super::xid;
 
 pub trait Engine {
     // Get a chunk from the storage engine using the worker pool.
@@ -14,12 +15,20 @@ pub trait Engine {
         self.get_chunk_async(addr).recv()?
     }
 
+    // Set the gc_id for the following call to gc. This is a form
+    // of two phase commit where we ensure the backend saves this
+    // id so we can later check if it has completed.
+    fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
+
     // Remove all chunks not in the reachable set.
     fn gc(
         &mut self,
         reachability_db_path: &std::path::Path,
         reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, anyhow::Error>;
+
+    // Check that a previous invocation of gc has finished.
+    fn await_gc_completion(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name to protect historic items from corruption.

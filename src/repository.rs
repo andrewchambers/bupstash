@@ -16,11 +16,7 @@ use std::path::{Path, PathBuf};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum StorageEngineSpec {
     DirStore,
-    ExternalStore {
-        socket_path: String,
-        path: String,
-        quiescent_period_ms: Option<u64>,
-    },
+    ExternalStore { socket_path: String, path: String },
 }
 
 #[derive(Clone, PartialEq)]
@@ -189,8 +185,8 @@ impl Repo {
             rusqlite::params![Xid::new()],
         )?;
         tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('gc-dirty', ?);",
-            rusqlite::params![false],
+            "insert into RepositoryMeta(Key, Value) values('gc-dirty', Null);",
+            rusqlite::NO_PARAMS,
         )?;
 
         itemset::init_tables(&tx)?;
@@ -219,78 +215,12 @@ impl Repo {
             anyhow::bail!("repository has an unsupported schema version");
         }
 
-        let mut r = Repo {
+        Ok(Repo {
             conn,
             repo_path: fs::canonicalize(&repo_path)?,
             _repo_lock_mode: LockMode::None,
             _repo_lock: None,
-        };
-
-        r.handle_gc_dirty()?;
-
-        Ok(r)
-    }
-
-    fn handle_gc_dirty(&mut self) -> Result<(), anyhow::Error> {
-        // The gc_dirty flag gets set when a garbage collection exits without
-        // proper cleanup. For external storage engines we handle this by applying a delay to any repository
-        // actions to ensure the external engine has had time to finish any operations (especially object deletions)
-        // that might have been in flight at the time of a crash.
-        //
-        // Consider the following case:
-        //
-        // 1. We are deleting a set of objects in an external storage engine.
-        // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
-        // 3. The repository process crashes.
-        // 4. A new put starts.
-        // 5. The new process resends the same object that is in the process of deletion.
-        // 6. The delete object message gets processed by the backend.
-        //
-        // I cannot see a precise way to avoid this problem assuming the presence of arbitrary network
-        // delays without the storage backend being made aware of gc generations somehow.
-        //
-        // I think in an ideal world, the external storage engine must be made aware of the gc generation
-        // then be able to use it as as a 'fence' (condition that stops the upload or delete from succeeding).
-        //
-        // The current mitigation introduces the idea of a quiescent_period to an external storage implementation.
-        // The idea is that between steps 4 and 5 we introduce a mandatory delay if the gc process crashed. This
-        // means in practice we can make what is already an unlikely event, extremely unlikely by increasing this period.
-
-        let gc_dirty: bool = self.conn.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
-        if gc_dirty {
-            // Don't reset gc-dirty unless we have the write lock.
-            self.alter_lock_mode(LockMode::Write)?;
-
-            let storage_spec = self.storage_engine_spec()?;
-            let tx = self
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-            match storage_spec {
-                StorageEngineSpec::ExternalStore {
-                    quiescent_period_ms,
-                    ..
-                } => {
-                    if let Some(quiescent_period_ms) = quiescent_period_ms {
-                        std::thread::sleep(std::time::Duration::from_millis(quiescent_period_ms));
-                    }
-                }
-                StorageEngineSpec::DirStore { .. } => (),
-            }
-            tx.execute(
-                "update RepositoryMeta set Value = ? where key = 'gc-dirty';",
-                rusqlite::params![false],
-            )?;
-
-            tx.commit()?;
-        }
-
-        Ok(())
+        })
     }
 
     pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), anyhow::Error> {
@@ -308,6 +238,56 @@ impl Repo {
                 )?),
             };
         }
+
+        if matches!(self._repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
+            // The gc_dirty id is set when a garbage collection exits without
+            // proper cleanup. For external storage engines this poses a problem:
+            //
+            // Consider the following case:
+            //
+            // 1. We are deleting a set of objects in an external storage engine.
+            // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+            // 3. The repository process crashes.
+            // 4. A new put starts.
+            // 5. The new process resends the same object that is in the process of deletion.
+            // 6. The delete object message gets processed by the backend.
+            //
+            // To solve this we:
+            // - explicitly start a gc hold with an id in the storage engine (This hold clears once storage engine gc aborts or finishes).
+            // - We then mark the repository as gc-dirty=id.
+            // - we then save the gc hold id as gc-hold in the metadata table.
+            // - We finally signal to the storage engine it is safe to begin gc deletions.
+            // - when deletions finish successfully, we set gc-dirty=false.
+            //
+            // If during this process, bupstash crashes or is terminated gc-dirty will be set,
+            // We cannot safely perform and write or gc operations until we are sure that the interrupted
+            // gc has safely terminated in the storage engine.
+            //
+            // To continue safely gc or writes we must check the gc has finished, we must:
+            //
+            //  - ensure we have a write or exclusive repository lock.
+            //  - check gc-dirty is null, if it is, we can continue with no problems if set we must recover.
+            //  - we must explicitly wait for the storage engine backend to tell us our gc operation is complete.
+            //  - We can finally remove the gc-dirty marker.
+
+            if let Some(gc_dirty) = self.conn.query_row(
+                "select Value from RepositoryMeta where Key='gc-dirty';",
+                rusqlite::NO_PARAMS,
+                |row| row.get(0),
+            )? {
+                let mut storage_engine = self.storage_engine()?;
+
+                storage_engine.await_gc_completion(gc_dirty)?;
+
+                // Because we hold either a write lock, or the exclusive lock, we know gc-dirty
+                // cannot change from anything but false to true at this point.
+                self.conn.execute(
+                    "update RepositoryMeta set Value = Null where key = 'gc-dirty' and Value = $1;",
+                    rusqlite::params![&gc_dirty],
+                )?;
+            }
+        }
+
         Ok(())
     }
 
@@ -574,6 +554,10 @@ impl Repo {
             tx.commit()?;
         }
 
+        // The after this commit, the reachability database now contains all reachable chunks
+        // ready for use by the storage engine.
+        reachability_tx.commit()?;
+
         update_progress_msg("compacting item log...".to_string())?;
         {
             let tx = self
@@ -585,14 +569,14 @@ impl Repo {
 
         self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
 
+        let gc_id = Xid::new();
+
+        storage_engine.prepare_for_gc(gc_id)?;
+
         self.conn.execute(
             "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
-            rusqlite::params![true],
+            rusqlite::params![&gc_id],
         )?;
-
-        // The after this commit, the reachability database now contains all reachable chunks
-        // ready for use by the storage engine.
-        reachability_tx.commit()?;
 
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = storage_engine.gc(&reachability_db_path, &mut reachability_db)?;
@@ -601,8 +585,8 @@ impl Repo {
         std::fs::remove_file(&reachability_db_path)?;
 
         self.conn.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
-            rusqlite::params![false],
+            "update RepositoryMeta set Value = null where Key = 'gc-dirty';",
+            rusqlite::NO_PARAMS,
         )?;
 
         Ok(stats)

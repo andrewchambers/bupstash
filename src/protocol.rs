@@ -151,9 +151,12 @@ pub enum Packet {
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
+    TStoragePrepareForGC(Xid),
+    RStoragePrepareForGC,
     StorageBeginGC(StorageBeginGC),
-    StorageGCHeartBeat,
     StorageGCComplete(repository::GCStats),
+    TStorageAwaitGCCompletion(Xid),
+    RStorageAwaitGCCompletion,
     EndOfTransmission,
 }
 
@@ -190,9 +193,12 @@ const PACKET_KIND_R_REQUEST_INDEX: u8 = 27;
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
 const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 103;
-const PACKET_KIND_STORAGE_GC_HEARTBEAT: u8 = 104;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 105;
+const PACKET_KIND_T_STORAGE_PREPARE_FOR_GC: u8 = 103;
+const PACKET_KIND_R_STORAGE_PREPARE_FOR_GC: u8 = 104;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 105;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 107;
+const PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION: u8 = 108;
+const PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION: u8 = 109;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
@@ -306,9 +312,16 @@ pub fn read_packet_raw(
         PACKET_KIND_T_RESTORE_REMOVED => Packet::TRestoreRemoved,
         PACKET_KIND_R_RESTORE_REMOVED => Packet::RRestoreRemoved(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_STORAGE_PREPARE_FOR_GC => {
+            Packet::TStoragePrepareForGC(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_R_STORAGE_PREPARE_FOR_GC => Packet::RStoragePrepareForGC,
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_STORAGE_GC_HEARTBEAT => Packet::StorageGCHeartBeat,
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION => {
+            Packet::TStorageAwaitGCCompletion(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION => Packet::RStorageAwaitGCCompletion,
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
@@ -472,18 +485,35 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
+        Packet::TStoragePrepareForGC(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_T_STORAGE_PREPARE_FOR_GC, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::RStoragePrepareForGC => {
+            send_hdr(w, PACKET_KIND_R_STORAGE_PREPARE_FOR_GC, 0)?;
+        }
         Packet::StorageBeginGC(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::StorageGCHeartBeat => {
-            send_hdr(w, PACKET_KIND_STORAGE_GC_HEARTBEAT, 0)?;
-        }
         Packet::StorageGCComplete(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
+        }
+        Packet::TStorageAwaitGCCompletion(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(
+                w,
+                PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION,
+                b.len().try_into()?,
+            )?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::RStorageAwaitGCCompletion => {
+            send_hdr(w, PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION, 0)?;
         }
         Packet::TStorageWriteBarrier => {
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;

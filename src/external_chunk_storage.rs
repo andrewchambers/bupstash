@@ -2,6 +2,7 @@ use super::address::Address;
 use super::chunk_storage::Engine;
 use super::protocol;
 use super::repository;
+use super::xid;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -36,6 +37,9 @@ pub struct ExternalStorage {
     write_worker_handles: Vec<std::thread::JoinHandle<()>>,
     write_worker_tx: crossbeam_channel::Sender<WriteWorkerMsg>,
     write_worker_rx: crossbeam_channel::Receiver<WriteWorkerMsg>,
+
+    // GC
+    gc_sock: Option<UnixStream>,
 }
 
 fn socket_connect(socket_path: &std::path::Path, path: &str) -> Result<UnixStream, anyhow::Error> {
@@ -272,6 +276,7 @@ impl ExternalStorage {
             write_worker_handles,
             write_worker_tx,
             write_worker_rx,
+            gc_sock: None,
         })
     }
 }
@@ -308,14 +313,32 @@ impl Engine for ExternalStorage {
         self.sync_write_workers()
     }
 
+    fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+        self.stop_workers();
+
+        let mut sock = socket_connect(&self.socket_path, &self.path)?;
+
+        protocol::write_packet(&mut sock, &protocol::Packet::TStoragePrepareForGC(gc_id))?;
+
+        match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+            Ok(protocol::Packet::RStoragePrepareForGC) => (),
+            Ok(_) => anyhow::bail!("unexpected packet response"),
+            Err(err) => return Err(err),
+        }
+
+        self.gc_sock = Some(sock);
+        Ok(())
+    }
+
     fn gc(
         &mut self,
         reachability_db_path: &std::path::Path,
         _reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, anyhow::Error> {
-        self.stop_workers();
+        assert!(self.read_worker_handles.len() == 0);
+        assert!(self.write_worker_handles.len() == 0);
 
-        let mut sock = socket_connect(&self.socket_path, &self.path)?;
+        let mut sock = self.gc_sock.take().unwrap();
 
         protocol::write_packet(
             &mut sock,
@@ -326,7 +349,7 @@ impl Engine for ExternalStorage {
 
         loop {
             match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                Ok(protocol::Packet::StorageGCHeartBeat) => (),
+                // TODO progress messages...
                 Ok(protocol::Packet::StorageGCComplete(stats)) => {
                     let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
                     return Ok(stats);
@@ -334,6 +357,21 @@ impl Engine for ExternalStorage {
                 Ok(_) => anyhow::bail!("unexpected packet response"),
                 Err(err) => return Err(err),
             }
+        }
+    }
+
+    fn await_gc_completion(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+        let mut sock = socket_connect(&self.socket_path, &self.path)?;
+
+        protocol::write_packet(
+            &mut sock,
+            &protocol::Packet::TStorageAwaitGCCompletion(gc_id),
+        )?;
+
+        match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+            Ok(protocol::Packet::RStorageAwaitGCCompletion) => Ok(()),
+            Ok(_) => Err(anyhow::format_err!("unexpected packet response")),
+            Err(err) => Err(err),
         }
     }
 }
