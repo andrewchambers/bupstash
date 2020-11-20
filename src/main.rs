@@ -622,7 +622,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag(
         "",
         "no-stat-caching",
-        "Do not use stat caching to skip sending directories to the server.",
+        "Do not use stat caching to skip sending files to the repository.",
     );
     opts.optflag(
         "",
@@ -632,7 +632,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "send-log",
-        "Use the file at PATH as a 'send log', used to skip data that was previously sent to the server.",
+        "Use the file at PATH as a 'send log', used to skip data that was previously sent to the repository.",
         "PATH",
     );
     opts.optmulti(

@@ -98,8 +98,7 @@ Default tags can be overidden manually by simply specifying them.
   Disable use of a send log, all data will be written over the network. Implies --no-stat-caching.
 
 * --no-stat-caching:
-  Disable the caching of file attributes to encrypted chunks. Only used
-  when `WHAT` is a directory. 
+  Do not use stat caching to skip sending files to the repository.
 
 * --no-default-tags:
   Do no set default tags.
