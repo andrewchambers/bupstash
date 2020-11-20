@@ -1,16 +1,10 @@
 Need to do:
 
-- Add --version and/or version.
 - Document required rust version.
 - Improve documentation on key exchange packet and 'box' structure.
-- Editing of items - work out a scheme that is either backwards compatible, OR implement it.
-- Verify we handle atime correctly when snapshotting.
 - Hardlink support?
 - Torture test in cli suite for send checkpointing duration.
 - Send permission denied: Permission denied (os error 13), add path to error message.
-- Tarball sort by extension to group similar files.
-- use $(pwd) in docs to avoid relative paths.
-- Change timestamp to date or time?
 
 Can do later (medium term):
 
@@ -23,20 +17,11 @@ Can do later (medium term):
 - Localization
   - tests for localized tags.
 
-- Tests shouldn't depend on bash.
-
 - Should allow running of single cli tests.
 
 - busy timeout or other mechanism for send log and query cache.
 
-- Concurrent garbage collector, walk htrees in parallel and/or walk multiple entries
-  in parallel.
-
-- Incremental garbage collector.
-
 - Sparse file support in snapshots.
-
-- Writing to broken pipe for 'list' and 'put' should be a failure, but not a panic or error message.
 
 - Document precedence.
 
@@ -50,14 +35,6 @@ Long term:
 Unclassified:
 
 - Prefetch system should also work for non leaf tree nodes.
-
-- failure error package is deprecated.
-
-- Man page headers too big on site.
-
-- Don't scroll in man examples.
-
-- Synopsis into a single formatted rectangle on bupstash.1
 
 - Consider a single larger man page.
 
