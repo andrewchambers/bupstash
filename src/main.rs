@@ -405,9 +405,9 @@ fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     parse_cli_opts(opts, &args[..]);
-    write!(
+    writeln!(
         &mut std::io::stdout(),
-        "bupstash-{}\n",
+        "bupstash-{}",
         env!("CARGO_PKG_VERSION"),
     )?;
     Ok(())
@@ -562,7 +562,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         v.replace("\\", "\\\\").replace("\"", "\\\"")
                     )?;
                 }
-                write!(out, "\n")?;
+                writeln!(out)?;
             }
             ListFormat::Jsonl => {
                 write!(out, "{{")?;
@@ -577,7 +577,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         serde_json::to_string(&v)?
                     )?;
                 }
-                write!(out, "}}\n")?;
+                writeln!(out, "}}")?;
             }
         }
 
@@ -838,7 +838,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    write!(std::io::stdout(), "{}\n", id)?;
+    writeln!(std::io::stdout(), "{}", id)?;
     Ok(())
 }
 
@@ -1134,9 +1134,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             .take(max_size_digits - size.len())
                             .collect();
 
-                        write!(
+                        writeln!(
                             out,
-                            "{} {}{} {} {}\n",
+                            "{} {}{} {} {}",
                             item.display_mode(),
                             size,
                             size_padding,
@@ -1161,7 +1161,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             "\"ctime_nsec\":{}",
                             serde_json::to_string(&item.ctime_nsec.0)?
                         )?;
-                        write!(out, "}}\n")?;
+                        writeln!(out, "}}")?;
                     }
                 }
             }
@@ -1309,7 +1309,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    write!(std::io::stdout(), "{} item(s) removed\n", n_removed)?;
+    writeln!(std::io::stdout(), "{} item(s) removed", n_removed)?;
 
     Ok(())
 }
@@ -1342,16 +1342,16 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut out = out.lock();
 
     if let Some(chunks_freed) = stats.chunks_freed {
-        write!(out, "{} chunks freed\n", chunks_freed)?;
+        writeln!(out, "{} chunks freed", chunks_freed)?;
     }
     if let Some(chunks_remaining) = stats.chunks_remaining {
-        write!(out, "{} chunks remaining\n", chunks_remaining)?;
+        writeln!(out, "{} chunks remaining", chunks_remaining)?;
     }
     if let Some(bytes_freed) = stats.bytes_freed {
-        write!(out, "{} bytes freed\n", bytes_freed)?;
+        writeln!(out, "{} bytes freed", bytes_freed)?;
     }
     if let Some(bytes_remaining) = stats.bytes_remaining {
-        write!(out, "{} bytes remaining\n", bytes_remaining)?;
+        writeln!(out, "{} bytes remaining", bytes_remaining)?;
     }
 
     Ok(())
@@ -1381,7 +1381,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    write!(std::io::stdout(), "{} item(s) restored\n", n_restored)?;
+    writeln!(std::io::stdout(), "{} item(s) restored", n_restored)?;
 
     Ok(())
 }

@@ -335,8 +335,8 @@ impl Engine for ExternalStorage {
         reachability_db_path: &std::path::Path,
         _reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, anyhow::Error> {
-        assert!(self.read_worker_handles.len() == 0);
-        assert!(self.write_worker_handles.len() == 0);
+        assert!(self.read_worker_handles.is_empty());
+        assert!(self.write_worker_handles.is_empty());
 
         let mut sock = self.gc_sock.take().unwrap();
 
@@ -347,16 +347,14 @@ impl Engine for ExternalStorage {
             }),
         )?;
 
-        loop {
-            match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-                // TODO progress messages...
-                Ok(protocol::Packet::StorageGCComplete(stats)) => {
-                    let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
-                    return Ok(stats);
-                }
-                Ok(_) => anyhow::bail!("unexpected packet response"),
-                Err(err) => return Err(err),
+        match protocol::read_packet(&mut sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+            // TODO progress messages...
+            Ok(protocol::Packet::StorageGCComplete(stats)) => {
+                let _ = protocol::write_packet(&mut sock, &protocol::Packet::EndOfTransmission);
+                Ok(stats)
             }
+            Ok(_) => anyhow::bail!("unexpected packet response"),
+            Err(err) => Err(err),
         }
     }
 
