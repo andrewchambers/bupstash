@@ -1,6 +1,6 @@
 [package]
 name = "bupstash"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Andrew Chambers <ac@acha.ninja>"]
 edition = "2018"
 license = "MIT"
@@ -18,7 +18,7 @@ incremental = false
 
 anyhow = "1.0"
 thiserror = "1.0"
-crossbeam-channel = "0.4"
+crossbeam-channel = "0.5"
 libc = "0.2"
 rusqlite = { version = "0.23", features = ["bundled"] }
 getopts = "0.2"
