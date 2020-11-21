@@ -252,10 +252,10 @@ struct ServeProcess {
 
 impl ServeProcess {
     fn wait(mut self) -> Result<(), anyhow::Error> {
+        self.proc.wait()?;
         if let Some(handle) = self.stderr_reader.take() {
             handle.join().unwrap();
         }
-        self.proc.wait()?;
         Ok(())
     }
 }
