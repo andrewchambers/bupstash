@@ -237,54 +237,54 @@ impl Repo {
                     &Repo::repo_lock_path(&self.repo_path),
                 )?),
             };
-        }
 
-        if matches!(self._repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
-            // The gc_dirty id is set when a garbage collection exits without
-            // proper cleanup. For external storage engines this poses a problem:
-            //
-            // Consider the following case:
-            //
-            // 1. We are deleting a set of objects in an external storage engine.
-            // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
-            // 3. The repository process crashes.
-            // 4. A new put starts.
-            // 5. The new process resends the same object that is in the process of deletion.
-            // 6. The delete object message gets processed by the backend.
-            //
-            // To solve this we:
-            // - explicitly start a gc hold with an id in the storage engine (This hold clears once storage engine gc aborts or finishes).
-            // - We then mark the repository as gc-dirty=id.
-            // - we then save the gc hold id as gc-hold in the metadata table.
-            // - We finally signal to the storage engine it is safe to begin gc deletions.
-            // - when deletions finish successfully, we set gc-dirty=false.
-            //
-            // If during this process, bupstash crashes or is terminated gc-dirty will be set,
-            // We cannot safely perform and write or gc operations until we are sure that the interrupted
-            // gc has safely terminated in the storage engine.
-            //
-            // To continue safely gc or writes we must check the gc has finished, we must:
-            //
-            //  - ensure we have a write or exclusive repository lock.
-            //  - check gc-dirty is null, if it is, we can continue with no problems if set we must recover.
-            //  - we must explicitly wait for the storage engine backend to tell us our gc operation is complete.
-            //  - We can finally remove the gc-dirty marker.
+            if matches!(self._repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
+                // The gc_dirty id is set when a garbage collection exits without
+                // proper cleanup. For external storage engines this poses a problem:
+                //
+                // Consider the following case:
+                //
+                // 1. We are deleting a set of objects in an external storage engine.
+                // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+                // 3. The repository process crashes.
+                // 4. A new put starts.
+                // 5. The new process resends the same object that is in the process of deletion.
+                // 6. The delete object message gets processed by the backend.
+                //
+                // To solve this we:
+                // - explicitly start a gc hold with an id in the storage engine (This hold clears once storage engine gc aborts or finishes).
+                // - We then mark the repository as gc-dirty=id.
+                // - we then save the gc hold id as gc-hold in the metadata table.
+                // - We finally signal to the storage engine it is safe to begin gc deletions.
+                // - when deletions finish successfully, we set gc-dirty=false.
+                //
+                // If during this process, bupstash crashes or is terminated gc-dirty will be set,
+                // We cannot safely perform and write or gc operations until we are sure that the interrupted
+                // gc has safely terminated in the storage engine.
+                //
+                // To continue safely gc or writes we must check the gc has finished, we must:
+                //
+                //  - ensure we have a write or exclusive repository lock.
+                //  - check gc-dirty is null, if it is, we can continue with no problems if set we must recover.
+                //  - we must explicitly wait for the storage engine backend to tell us our gc operation is complete.
+                //  - We can finally remove the gc-dirty marker.
 
-            if let Some(gc_dirty) = self.conn.query_row(
-                "select Value from RepositoryMeta where Key='gc-dirty';",
-                rusqlite::NO_PARAMS,
-                |row| row.get(0),
-            )? {
-                let mut storage_engine = self.storage_engine()?;
+                if let Some(gc_dirty) = self.conn.query_row(
+                    "select Value from RepositoryMeta where Key='gc-dirty';",
+                    rusqlite::NO_PARAMS,
+                    |row| row.get(0),
+                )? {
+                    let mut storage_engine = self.storage_engine()?;
 
-                storage_engine.await_gc_completion(gc_dirty)?;
+                    storage_engine.await_gc_completion(gc_dirty)?;
 
-                // Because we hold either a write lock, or the exclusive lock, we know gc-dirty
-                // cannot change from anything but false to true at this point.
-                self.conn.execute(
-                    "update RepositoryMeta set Value = Null where key = 'gc-dirty' and Value = $1;",
-                    rusqlite::params![&gc_dirty],
-                )?;
+                    // Because we hold either a write lock, or the exclusive lock, we know gc-dirty
+                    // cannot change from anything but false to true at this point.
+                    self.conn.execute(
+                        "update RepositoryMeta set Value = Null where key = 'gc-dirty' and Value = $1;",
+                        rusqlite::params![&gc_dirty],
+                    )?;
+                }
             }
         }
 
