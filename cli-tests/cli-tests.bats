@@ -480,28 +480,32 @@ _concurrent_modify_worker () {
 }
 
 @test "pick and index" {
+  
   mkdir $SCRATCH/foo
-  echo foo > $SCRATCH/foo/foo.txt
-  echo bar > $SCRATCH/foo/bar.txt
-  echo baz > $SCRATCH/foo/baz.txt
   mkdir $SCRATCH/foo/baz
-  echo foo > $SCRATCH/foo/baz/foo.txt
-  echo bar > $SCRATCH/foo/baz/bar.txt
-  echo baz > $SCRATCH/foo/baz/baz.txt
+  
+  for n in `seq 5`
+  do
+    # Create some test files scattered in two directories.
+    # Small files
+    head -c "$(shuf -i 10-1000 -n 1)" /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
+    head -c "$(shuf -i 10-1000 -n 1)" /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
+    # Large files
+    head -c "$(shuf -i 10000-10000000 -n 1)" /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
+    head -c "$(shuf -i 10000-10000000 -n 1)" /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
+  done
 
   # Loop so we test cache code paths
   for i in `seq 2`
   do
     id="$(bupstash put $SCRATCH/foo)"
-    test $(bupstash get --pick foo.txt id=$id) = foo
-    test $(bupstash get --pick bar.txt id=$id) = bar
-    test $(bupstash get --pick baz.txt id=$id) = baz
-    test $(bupstash get --pick baz/foo.txt id=$id) = foo
-    test $(bupstash get --pick baz/bar.txt id=$id) = bar
-    test $(bupstash get --pick baz/baz.txt id=$id) = baz
-    test $(bupstash get id=$id | tar -t | wc -l) = 8
-    test $(bupstash get --pick . id=$id | tar -t | wc -l) = 8
-    test $(bupstash get --pick baz id=$id | tar -t | wc -l) = 4
-    test $(bupstash list-contents  id=$id | wc -l) = 8
+    for f in $(sh -c "cd $SCRATCH/foo && find . -type f | cut -c 3-")
+    do
+      cmp <(bupstash get --pick "$f" id=$id) "$SCRATCH/foo/$f"
+    done
+    test $(bupstash get id=$id | tar -t | wc -l) = 22
+    test $(bupstash get --pick . id=$id | tar -t | wc -l) = 22
+    test $(bupstash get --pick baz id=$id | tar -t | wc -l) = 11
+    test $(bupstash list-contents  id=$id | wc -l) = 22
   done
 }
