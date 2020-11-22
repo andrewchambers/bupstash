@@ -20,7 +20,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 crossbeam-channel = "0.5"
 libc = "0.2"
-rusqlite = { version = "0.23", features = ["bundled"] }
+rusqlite = { version = "0.23", features = ["bundled", "backup"] }
 getopts = "0.2"
 fs2 = "0.4.3"
 codemap = "0.1"
