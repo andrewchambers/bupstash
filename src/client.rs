@@ -33,7 +33,7 @@ pub fn open_repository(
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
-            repository_protocol_version: "1".to_string(),
+            repository_protocol_version: "2".to_string(),
             lock_hint,
         }),
     )?;
@@ -890,7 +890,7 @@ fn receive_htree(
     tr: &mut htree::TreeReader,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    while let Some((height, addr)) = tr.next_addr()? {
+    while let Some((height, addr)) = tr.next_addr() {
         let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
                 if addr != chunk.address {
@@ -930,68 +930,85 @@ fn receive_partial_htree(
     let mut n_written: u64 = 0;
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
-    let mut pending_data_chunks = std::collections::VecDeque::new();
 
-    while let Some((height, addr)) = tr.next_addr()? {
-        let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Chunk(chunk) => {
-                if addr != chunk.address {
-                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                }
-                chunk.data
-            }
-            _ => anyhow::bail!("protocol error, expected begin chunk packet"),
-        };
+    loop {
+        match tr.current_height() {
+            Some(0) => {
+                let mut chunk_address = Address::default();
+                let addresses = tr.pop_level().unwrap();
 
-        if height == 0 {
-            let data = ctx.data_dctx.decrypt_data(data)?;
-            if addr != crypto::keyed_content_address(&data, &hash_key) {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
-            }
+                for address_slice in addresses.chunks(ADDRESS_SZ) {
+                    match pick.data_chunk_ranges.get(range_idx) {
+                        Some(current_range) => {
+                            chunk_address.bytes.clone_from_slice(&address_slice);
 
-            if let Some(chunk_idx) = pending_data_chunks.pop_back() {
-                match pick.incomplete_data_chunks.get(&chunk_idx) {
-                    Some(ranges) => {
-                        for range in ranges.iter() {
-                            let data = &data[range.start..std::cmp::min(data.len(), range.end)];
-                            n_written += data.len() as u64;
-                            out.write_all(data)?;
+                            if current_data_chunk_idx >= current_range.start_idx
+                                && current_data_chunk_idx <= current_range.end_idx
+                            {
+                                let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                                    Packet::Chunk(chunk) => {
+                                        if chunk_address != chunk.address {
+                                            return Err(
+                                                ClientError::CorruptOrTamperedDataError.into()
+                                            );
+                                        }
+                                        chunk.data
+                                    }
+                                    _ => anyhow::bail!("protocol error, expected chunk packet"),
+                                };
+
+                                let data = ctx.data_dctx.decrypt_data(data)?;
+                                if chunk_address != crypto::keyed_content_address(&data, &hash_key)
+                                {
+                                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                                }
+
+                                match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
+                                    Some(ranges) => {
+                                        for range in ranges.iter() {
+                                            let data = &data
+                                                [range.start..std::cmp::min(data.len(), range.end)];
+                                            n_written += data.len() as u64;
+                                            out.write_all(data)?;
+                                        }
+                                    }
+                                    None => {
+                                        n_written += data.len() as u64;
+                                        out.write_all(&data)?;
+                                    }
+                                }
+                            }
+
+                            current_data_chunk_idx += 1;
+                            if current_data_chunk_idx > current_range.end_idx {
+                                range_idx += 1;
+                            }
                         }
-                    }
-                    None => {
-                        n_written += data.len() as u64;
-                        out.write_all(&data)?;
+                        None => break,
                     }
                 }
             }
-        } else {
-            if addr != htree::tree_block_address(&data) {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
-            }
-
-            if height == 1 {
-                let mut filtered_data = Vec::with_capacity(data.len());
-
-                for addr_bytes in data.chunks(ADDRESS_SZ) {
-                    if let Some(current_range) = pick.data_chunk_ranges.get(range_idx) {
-                        if current_data_chunk_idx >= current_range.start_idx
-                            && current_data_chunk_idx <= current_range.end_idx
-                        {
-                            filtered_data.extend_from_slice(addr_bytes);
-                            pending_data_chunks.push_front(current_data_chunk_idx);
+            Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
+                Some((height, addr)) => {
+                    let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                        Packet::Chunk(chunk) => {
+                            if addr != chunk.address {
+                                return Err(ClientError::CorruptOrTamperedDataError.into());
+                            }
+                            chunk.data
                         }
-                        current_data_chunk_idx += 1;
+                        _ => anyhow::bail!("protocol error, expected chunk packet"),
+                    };
 
-                        if current_data_chunk_idx > current_range.end_idx {
-                            range_idx += 1;
-                        }
+                    if addr != htree::tree_block_address(&data) {
+                        return Err(ClientError::CorruptOrTamperedDataError.into());
                     }
-                }
 
-                tr.push_level(height - 1, filtered_data)?;
-            } else if pick.data_chunk_ranges.get(range_idx).is_some() {
-                tr.push_level(height - 1, data)?;
-            }
+                    tr.push_level(height - 1, data)?;
+                }
+                None => break,
+            },
+            _ => break,
         }
     }
 

@@ -23,7 +23,7 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.repository_protocol_version != "1" {
+                if req.repository_protocol_version != "2" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.repository_protocol_version
@@ -254,57 +254,68 @@ fn send_index(
     Ok(())
 }
 
+const HTREE_SEND_PIPELINE_LEN: usize = 5;
+
 fn send_htree(
     repo: &mut repository::Repo,
     tr: &mut htree::TreeReader,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let mut storage_engine = repo.storage_engine()?;
-    // The idea is we fetch the next chunk while we are sending the current chunk.
-    // to mitigate some of the problems with latency when fetching from a slow storage engine.
-    let (height, chunk_address) = tr.next_addr()?.unwrap();
-    let mut next = (
-        height,
-        chunk_address,
-        storage_engine.get_chunk_async(&chunk_address),
-    );
 
     loop {
-        let (height, chunk_address, pending_chunk) = next;
-        let chunk_data = pending_chunk.recv()??;
-        if height != 0 {
-            tr.push_level(height - 1, chunk_data.clone())?;
-        }
+        match tr.current_height() {
+            Some(0) => {
+                let mut chunk_address = address::Address::default();
+                let mut pipeline = std::collections::VecDeque::new();
 
-        match tr.next_addr()? {
-            Some((height, chunk_address)) => {
-                next = (
-                    height,
-                    chunk_address,
-                    storage_engine.get_chunk_async(&chunk_address),
-                );
-            }
-            None => {
-                write_packet(
-                    w,
-                    &Packet::Chunk(Chunk {
-                        address: chunk_address,
-                        data: chunk_data,
-                    }),
-                )?;
-                return Ok(());
-            }
-        }
+                for address_slice in tr.pop_level().unwrap().chunks(address::ADDRESS_SZ) {
+                    chunk_address.bytes.clone_from_slice(&address_slice);
+                    pipeline.push_back((
+                        chunk_address,
+                        storage_engine.get_chunk_async(&chunk_address),
+                    ));
 
-        // Write the chunk out while the async worker fetches the next one.
-        write_packet(
-            w,
-            &Packet::Chunk(Chunk {
-                address: chunk_address,
-                data: chunk_data,
-            }),
-        )?;
+                    if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
+                        let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
+                        write_packet(
+                            w,
+                            &Packet::Chunk(Chunk {
+                                address: chunk_address,
+                                data: chunk_data.recv()??,
+                            }),
+                        )?;
+                    }
+                }
+
+                while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
+                    write_packet(
+                        w,
+                        &Packet::Chunk(Chunk {
+                            address: chunk_address,
+                            data: chunk_data.recv()??,
+                        }),
+                    )?;
+                }
+            }
+            Some(_) => {
+                if let Some((height, chunk_address)) = tr.next_addr() {
+                    let chunk_data = storage_engine.get_chunk(&chunk_address)?;
+                    tr.push_level(height - 1, chunk_data.clone())?;
+                    write_packet(
+                        w,
+                        &Packet::Chunk(Chunk {
+                            address: chunk_address.clone(),
+                            data: chunk_data,
+                        }),
+                    )?;
+                }
+            }
+            None => break,
+        }
     }
+
+    Ok(())
 }
 
 fn send_partial_htree(
@@ -334,70 +345,78 @@ fn send_partial_htree(
 
     let mut storage_engine = repo.storage_engine()?;
 
-    let (height, chunk_address) = tr.next_addr()?.unwrap();
-    let mut next = (
-        height,
-        chunk_address,
-        storage_engine.get_chunk_async(&chunk_address),
-    );
-
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
 
     loop {
-        let (height, chunk_address, pending_chunk) = next;
-        let chunk_data = pending_chunk.recv()??;
+        match tr.current_height() {
+            Some(0) => {
+                let mut chunk_address = address::Address::default();
+                let mut pipeline = std::collections::VecDeque::new();
+                let addresses = tr.pop_level().unwrap();
 
-        if height == 1 {
-            let mut filtered_chunk_data = Vec::with_capacity(chunk_data.len());
+                for address_slice in addresses.chunks(address::ADDRESS_SZ) {
+                    match ranges.get(range_idx) {
+                        Some(current_range) => {
+                            chunk_address.bytes.clone_from_slice(&address_slice);
 
-            for addr_bytes in chunk_data.chunks(address::ADDRESS_SZ) {
-                if let Some(current_range) = ranges.get(range_idx) {
-                    if current_data_chunk_idx >= current_range.start_idx
-                        && current_data_chunk_idx <= current_range.end_idx
-                    {
-                        filtered_chunk_data.extend_from_slice(addr_bytes);
-                    }
-                    current_data_chunk_idx += 1;
-                    if current_data_chunk_idx > current_range.end_idx {
-                        range_idx += 1;
+                            if current_data_chunk_idx >= current_range.start_idx
+                                && current_data_chunk_idx <= current_range.end_idx
+                            {
+                                pipeline.push_back((
+                                    chunk_address,
+                                    storage_engine.get_chunk_async(&chunk_address),
+                                ));
+
+                                if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
+                                    let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
+                                    write_packet(
+                                        w,
+                                        &Packet::Chunk(Chunk {
+                                            address: chunk_address,
+                                            data: chunk_data.recv()??,
+                                        }),
+                                    )?;
+                                }
+                            }
+
+                            current_data_chunk_idx += 1;
+                            if current_data_chunk_idx > current_range.end_idx {
+                                range_idx += 1;
+                            }
+                        }
+                        None => break,
                     }
                 }
-            }
 
-            tr.push_level(height - 1, filtered_chunk_data)?;
-        } else if ranges.get(range_idx).is_some() {
-            tr.push_level(height - 1, chunk_data.clone())?;
+                while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
+                    write_packet(
+                        w,
+                        &Packet::Chunk(Chunk {
+                            address: chunk_address,
+                            data: chunk_data.recv()??,
+                        }),
+                    )?;
+                }
+            }
+            Some(_) if ranges.get(range_idx).is_some() => {
+                if let Some((height, chunk_address)) = tr.next_addr() {
+                    let chunk_data = storage_engine.get_chunk(&chunk_address)?;
+                    tr.push_level(height - 1, chunk_data.clone())?;
+                    write_packet(
+                        w,
+                        &Packet::Chunk(Chunk {
+                            address: chunk_address.clone(),
+                            data: chunk_data,
+                        }),
+                    )?;
+                }
+            }
+            _ => break,
         }
-
-        match tr.next_addr()? {
-            Some((height, chunk_address)) => {
-                next = (
-                    height,
-                    chunk_address,
-                    storage_engine.get_chunk_async(&chunk_address),
-                );
-            }
-            None => {
-                write_packet(
-                    w,
-                    &Packet::Chunk(Chunk {
-                        address: chunk_address,
-                        data: chunk_data,
-                    }),
-                )?;
-                return Ok(());
-            }
-        }
-
-        write_packet(
-            w,
-            &Packet::Chunk(Chunk {
-                address: chunk_address,
-                data: chunk_data,
-            }),
-        )?;
     }
+
+    Ok(())
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {

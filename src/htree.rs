@@ -184,23 +184,26 @@ impl TreeReader {
         tr
     }
 
-    fn pop(&mut self) {
-        self.tree_blocks.pop();
+    pub fn pop_level(&mut self) -> Option<Vec<u8>> {
         self.tree_heights.pop();
         self.read_offsets.pop();
+        self.tree_blocks.pop()
     }
 
     pub fn push_level(&mut self, level: usize, data: Vec<u8>) -> Result<(), anyhow::Error> {
+        if (data.len() % ADDRESS_SZ) != 0 {
+            return Err(HTreeError::CorruptOrTamperedDataError.into());
+        }
         self.read_offsets.push(0);
         self.tree_heights.push(level);
         self.tree_blocks.push(data);
         Ok(())
     }
 
-    pub fn next_addr(&mut self) -> Result<Option<(usize, Address)>, anyhow::Error> {
+    pub fn next_addr(&mut self) -> Option<(usize, Address)> {
         loop {
             if self.tree_blocks.is_empty() {
-                return Ok(None);
+                return None;
             }
 
             let data = self.tree_blocks.last().unwrap();
@@ -209,19 +212,22 @@ impl TreeReader {
             let remaining = &data[*read_offset..];
 
             if remaining.is_empty() {
-                self.pop();
+                self.pop_level();
                 continue;
-            }
-
-            if remaining.len() < ADDRESS_SZ {
-                return Err(HTreeError::CorruptOrTamperedDataError.into());
             }
 
             let mut addr = Address::default();
             addr.bytes.clone_from_slice(&remaining[0..ADDRESS_SZ]);
             *read_offset += ADDRESS_SZ;
 
-            return Ok(Some((height, addr)));
+            return Some((height, addr));
+        }
+    }
+
+    pub fn current_height(&mut self) -> Option<usize> {
+        match self.tree_heights.last() {
+            Some(h) => Some(*h),
+            None => None,
         }
     }
 }
@@ -380,7 +386,7 @@ mod tests {
         let mut leaf_count = 0;
 
         loop {
-            match tr.next_addr().unwrap() {
+            match tr.next_addr() {
                 Some((height, addr)) => {
                     if height != 0 {
                         let data = chunks.get_chunk(&addr).unwrap();

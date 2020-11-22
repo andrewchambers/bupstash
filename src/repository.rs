@@ -508,7 +508,7 @@ impl Repo {
 
                 for tree in trees {
                     let mut tr = htree::TreeReader::new(tree.height, &tree.address);
-                    while let Some((height, addr)) = tr.next_addr()? {
+                    while let Some((height, addr)) = tr.next_addr() {
                         let rows_changed =
                             add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
                         if rows_changed != 0 && height != 0 {
