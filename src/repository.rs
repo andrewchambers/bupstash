@@ -475,6 +475,7 @@ impl Repo {
         // are ok to disable synchronous operation. If we get power off event, the next
         // gc will remove the corrupt database first so theres no chance we open a corrupt db.
         reachability_db.execute("pragma synchronous = OFF;", rusqlite::NO_PARAMS)?;
+        reachability_db.query_row("pragma journal_mode = OFF;", rusqlite::NO_PARAMS, |_| Ok(()))?;
 
         let reachability_tx =
             reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
