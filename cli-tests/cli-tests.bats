@@ -47,28 +47,6 @@ teardown () {
   rm -rf $SCRATCH
 }
 
-@test "pick torture" {
-  if test -z "$PICK_TORTURE_DIR"
-  then
-    skip "Set PICK_TORTURE_DIR to run this test."
-  fi
-
-  id=$(bupstash put :: "$PICK_TORTURE_DIR")
-
-  for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
-  do
-    cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
-  done
-
-  for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
-  do
-    echo dir "'$d'"
-    diff -u \
-      <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
-      <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
-  done
-}
-
 @test "simple put/get primary key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
@@ -529,5 +507,27 @@ _concurrent_modify_worker () {
     test $(bupstash get --pick . id=$id | tar -t | wc -l) = 22
     test $(bupstash get --pick baz id=$id | tar -t | wc -l) = 11
     test $(bupstash list-contents  id=$id | wc -l) = 22
+  done
+}
+
+@test "pick torture" {
+  if test -z "$PICK_TORTURE_DIR"
+  then
+    skip "Set PICK_TORTURE_DIR to run this test."
+  fi
+
+  id=$(bupstash put :: "$PICK_TORTURE_DIR")
+
+  for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
+  do
+    cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
+  done
+
+  for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
+  do
+    echo dir "'$d'"
+    diff -u \
+      <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
+      <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
   done
 }
