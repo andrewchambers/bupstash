@@ -520,7 +520,7 @@ _concurrent_modify_worker () {
 
   for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
   do
-    echo $f
+    echo file "'$f'"
     cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
   done
 
