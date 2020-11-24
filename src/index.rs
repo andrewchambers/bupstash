@@ -242,6 +242,15 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
             IndexEntryKind::Regular => {
                 let mut incomplete_data_chunks = std::collections::HashMap::new();
 
+                if ent.size.0 == 0 {
+                    return Ok(PickMap {
+                        is_subtar: false,
+                        size: 0,
+                        data_chunk_ranges: vec![],
+                        incomplete_data_chunks,
+                    });
+                }
+
                 if ent.data_chunk_content_idx == ent.data_chunk_content_end_idx {
                     let mut range_set = rangemap::RangeSet::new();
 

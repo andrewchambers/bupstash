@@ -13,6 +13,7 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use std::collections::BTreeMap;
+use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::OpenOptionsExt;
@@ -261,10 +262,12 @@ pub fn send(
                             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
                         )?;
 
-                        let (idx_tree_height, idx_address) = idx_tw.finish(&mut sink)?;
+                        let (idx_tree_height, idx_tree_data_chunk_count, idx_address) =
+                            idx_tw.finish(&mut sink)?;
 
                         index_tree = Some(itemset::HTreeMetadata {
-                            height: idx_tree_height,
+                            height: idx_tree_height as u64,
+                            data_chunk_count: idx_tree_data_chunk_count,
                             address: idx_address,
                         });
                     }
@@ -295,12 +298,14 @@ pub fn send(
             &addr,
             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
         )?;
-        let (data_tree_height, data_tree_address) = tw.finish(&mut sink)?;
+        let (data_tree_height, data_tree_data_chunk_count, data_tree_address) =
+            tw.finish(&mut sink)?;
 
         let plain_text_metadata = itemset::PlainTextItemMetadata {
             primary_key_id: ctx.primary_key_id,
             data_tree: itemset::HTreeMetadata {
-                height: data_tree_height,
+                height: data_tree_height as u64,
+                data_chunk_count: data_tree_data_chunk_count,
                 address: data_tree_address,
             },
             index_tree,
@@ -548,7 +553,7 @@ fn send_dir(
                 let mut address = Address::default();
                 for cached_address in cached_addresses.chunks(ADDRESS_SZ) {
                     address.bytes[..].clone_from_slice(cached_address);
-                    tw.add_addr(sink, 0, &address)?;
+                    tw.add_addr(sink, 0, 1, &address)?;
                 }
 
                 let mut dir_index: Vec<index::VersionedIndexEntry> =
@@ -759,7 +764,6 @@ fn send_dir(
 }
 
 pub struct DataRequestContext {
-    pub progress: indicatif::ProgressBar,
     pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub data_dctx: crypto::DecryptionContext,
@@ -774,6 +778,13 @@ pub fn request_data_stream(
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
+    // It makes little sense to ask the server for an empty pick.
+    if let Some(ref pick) = pick {
+        if pick.size == 0 {
+            return Ok(());
+        }
+    }
+
     write_packet(
         w,
         &Packet::TRequestData(TRequestData {
@@ -794,10 +805,6 @@ pub fn request_data_stream(
         _ => anyhow::bail!("protocol error, expected ack request packet"),
     };
 
-    // We only wanted to show the progress bar until we could start getting
-    // messages, at this point we know the repository is unlocked.
-    ctx.progress.finish_and_clear();
-
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
@@ -811,7 +818,8 @@ pub fn request_data_stream(
                 crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
 
             let mut tr = htree::TreeReader::new(
-                plain_text_metadata.data_tree.height,
+                plain_text_metadata.data_tree.height.try_into()?,
+                plain_text_metadata.data_tree.data_chunk_count,
                 &plain_text_metadata.data_tree.address,
             );
 
@@ -843,8 +851,6 @@ pub fn request_index(
         _ => anyhow::bail!("protocol error, expected ack request packet"),
     };
 
-    ctx.progress.set_message("fetching content index...");
-
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
@@ -862,7 +868,11 @@ pub fn request_index(
                 None => anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)"),
             };
 
-            let mut tr = htree::TreeReader::new(index_tree.height, &index_tree.address);
+            let mut tr = htree::TreeReader::new(
+                index_tree.height.try_into()?,
+                index_tree.data_chunk_count,
+                &index_tree.address,
+            );
 
             let mut index_data = std::io::Cursor::new(Vec::new());
             receive_htree(ctx, &hash_key, r, &mut tr, &mut index_data)?;
@@ -919,6 +929,25 @@ fn receive_htree(
     Ok(())
 }
 
+fn receive_htree_chunk(
+    r: &mut dyn std::io::Read,
+    address: Address,
+) -> Result<Vec<u8>, anyhow::Error> {
+    let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::Chunk(chunk) => {
+            if address != chunk.address {
+                return Err(ClientError::CorruptOrTamperedDataError.into());
+            }
+            chunk.data
+        }
+        _ => anyhow::bail!("protocol error, expected chunk packet"),
+    };
+    if address != htree::tree_block_address(&data) {
+        return Err(ClientError::CorruptOrTamperedDataError.into());
+    }
+    Ok(data)
+}
+
 fn receive_partial_htree(
     mut ctx: DataRequestContext,
     hash_key: &crypto::HashKey,
@@ -931,13 +960,51 @@ fn receive_partial_htree(
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
 
+    // This complicated logic is mirroring the send logic
+    // on the server side, only the chunks are coming from the remote.
+    // We must also verify all the chunk addresses match what we expect.
+
+    let start_chunk_idx = pick.data_chunk_ranges[0].start_idx;
+
+    loop {
+        let height = match tr.current_height() {
+            Some(v) => v,
+            None => anyhow::bail!("htree is corrupt, pick data not found"),
+        };
+
+        if height == 0 {
+            break;
+        }
+
+        let (_, address) = tr.next_addr().unwrap();
+
+        let mut chunk_data = receive_htree_chunk(r, address)?;
+        let mut level_data_chunk_idx = current_data_chunk_idx;
+        let mut skip_count = 0;
+        for ent_slice in chunk_data.chunks(8 + ADDRESS_SZ) {
+            let data_chunk_count = u64::from_le_bytes(ent_slice[..8].try_into()?);
+            if level_data_chunk_idx + data_chunk_count > start_chunk_idx {
+                break;
+            }
+            level_data_chunk_idx += data_chunk_count;
+            skip_count += 1;
+        }
+        current_data_chunk_idx = level_data_chunk_idx;
+        chunk_data.drain(0..(skip_count * (8 + ADDRESS_SZ)));
+        tr.push_level(height - 1, chunk_data)?;
+    }
+
+    if current_data_chunk_idx != start_chunk_idx {
+        anyhow::bail!("htree is corrupt, seek went too far");
+    }
+
     loop {
         match tr.current_height() {
             Some(0) => {
                 let mut chunk_address = Address::default();
-                let addresses = tr.pop_level().unwrap();
-
-                for address_slice in addresses.chunks(ADDRESS_SZ) {
+                let level_chunk = tr.pop_level().unwrap();
+                for ent_slice in level_chunk.chunks(8 + ADDRESS_SZ) {
+                    let address_slice = &ent_slice[8..];
                     match pick.data_chunk_ranges.get(range_idx) {
                         Some(current_range) => {
                             chunk_address.bytes.clone_from_slice(&address_slice);
@@ -989,21 +1056,8 @@ fn receive_partial_htree(
                 }
             }
             Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
-                Some((height, addr)) => {
-                    let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-                        Packet::Chunk(chunk) => {
-                            if addr != chunk.address {
-                                return Err(ClientError::CorruptOrTamperedDataError.into());
-                            }
-                            chunk.data
-                        }
-                        _ => anyhow::bail!("protocol error, expected chunk packet"),
-                    };
-
-                    if addr != htree::tree_block_address(&data) {
-                        return Err(ClientError::CorruptOrTamperedDataError.into());
-                    }
-
+                Some((height, address)) => {
+                    let data = receive_htree_chunk(r, address)?;
                     tr.push_level(height - 1, data)?;
                 }
                 None => break,

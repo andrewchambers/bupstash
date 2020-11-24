@@ -47,6 +47,28 @@ teardown () {
   rm -rf $SCRATCH
 }
 
+@test "pick torture" {
+  if test -z "$PICK_TORTURE_DIR"
+  then
+    skip "Set PICK_TORTURE_DIR to run this test."
+  fi
+
+  id=$(bupstash put :: "$PICK_TORTURE_DIR")
+
+  for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
+  do
+    cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
+  done
+
+  for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
+  do
+    echo dir "'$d'"
+    diff -u \
+      <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
+      <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
+  done
+}
+
 @test "simple put/get primary key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"

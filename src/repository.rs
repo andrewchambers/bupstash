@@ -8,6 +8,7 @@ use super::htree;
 use super::itemset;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -173,7 +174,7 @@ impl Repo {
         )?;
         tx.execute(
             /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '1');",
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '2');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -211,7 +212,7 @@ impl Repo {
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
-        if v.parse::<u64>().unwrap() != 1 {
+        if v.parse::<u64>().unwrap() != 2 {
             anyhow::bail!("repository has an unsupported schema version");
         }
 
@@ -512,7 +513,11 @@ impl Repo {
                 };
 
                 for tree in trees {
-                    let mut tr = htree::TreeReader::new(tree.height, &tree.address);
+                    let mut tr = htree::TreeReader::new(
+                        tree.height.try_into()?,
+                        tree.data_chunk_count,
+                        &tree.address,
+                    );
                     while let Some((height, addr)) = tr.next_addr() {
                         let rows_changed =
                             add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;

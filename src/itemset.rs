@@ -9,7 +9,8 @@ pub const MAX_METADATA_SIZE: usize = MAX_TAG_SET_SIZE + 2048;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct HTreeMetadata {
-    pub height: usize,
+    pub height: u64,
+    pub data_chunk_count: u64,
     pub address: Address,
 }
 

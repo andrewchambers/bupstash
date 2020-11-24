@@ -360,7 +360,13 @@ fn cli_to_serve_process(
             let buf_reader = std::io::BufReader::new(proc_stderr);
             for line in buf_reader.lines() {
                 if let Ok(line) = line {
-                    progress.println(line);
+                    progress.println(&line);
+                    // Theres a tiny race condition here where we may print an
+                    // error line twice, I can't see how to fix this unless we
+                    // rewrite the progress bar library to report if the print happened.
+                    if progress.is_finished() || progress.is_hidden() {
+                        eprintln!("{}", line);
+                    }
                 }
             }
         });
@@ -378,7 +384,9 @@ fn cli_to_progress_bar(
     matches: &getopts::Matches,
     style: indicatif::ProgressStyle,
 ) -> Result<indicatif::ProgressBar, anyhow::Error> {
-    let want_visible_progress = !matches.opt_present("quiet") && atty::is(atty::Stream::Stderr);
+    let want_visible_progress = !matches.opt_present("quiet")
+        && atty::is(atty::Stream::Stderr)
+        && atty::is(atty::Stream::Stdout);
     let progress = indicatif::ProgressBar::with_draw_target(
         u64::MAX,
         if want_visible_progress {
@@ -929,9 +937,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     let pick = if matches.opt_present("pick") {
+        progress.set_message("fetching content index...");
         let content_index = client::request_index(
             client::DataRequestContext {
-                progress: progress.clone(),
                 primary_key_id,
                 hash_key_part_1: hash_key_part_1.clone(),
                 data_dctx: data_dctx.clone(),
@@ -950,9 +958,10 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None
     };
 
+    progress.finish_and_clear();
+
     client::request_data_stream(
         client::DataRequestContext {
-            progress: progress.clone(),
             primary_key_id,
             hash_key_part_1,
             data_dctx,
@@ -967,8 +976,6 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
-
-    progress.finish_and_clear();
 
     Ok(())
 }
@@ -1068,9 +1075,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
+    progress.set_message("fetching content index...");
     let mut content_index = client::request_index(
         client::DataRequestContext {
-            progress: progress.clone(),
             primary_key_id,
             hash_key_part_1,
             data_dctx,

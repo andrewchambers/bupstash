@@ -5,6 +5,7 @@ use super::itemset;
 use super::protocol::*;
 use super::repository;
 use super::xid::*;
+use std::convert::TryInto;
 
 pub struct ServerConfig {
     pub repo_path: std::path::PathBuf,
@@ -206,7 +207,8 @@ fn send(
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             let mut tr = htree::TreeReader::new(
-                metadata.plain_text_metadata.data_tree.height,
+                metadata.plain_text_metadata.data_tree.height.try_into()?,
+                metadata.plain_text_metadata.data_tree.data_chunk_count,
                 &metadata.plain_text_metadata.data_tree.address,
             );
 
@@ -245,7 +247,11 @@ fn send_index(
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
-                let mut tr = htree::TreeReader::new(index_tree.height, &index_tree.address);
+                let mut tr = htree::TreeReader::new(
+                    index_tree.height.try_into()?,
+                    index_tree.data_chunk_count,
+                    &index_tree.address,
+                );
                 send_htree(repo, &mut tr, w)?;
             }
         }
@@ -269,7 +275,8 @@ fn send_htree(
                 let mut chunk_address = address::Address::default();
                 let mut pipeline = std::collections::VecDeque::new();
 
-                for address_slice in tr.pop_level().unwrap().chunks(address::ADDRESS_SZ) {
+                for ent_slice in tr.pop_level().unwrap().chunks(8 + address::ADDRESS_SZ) {
+                    let address_slice = &ent_slice[8..];
                     chunk_address.bytes.clone_from_slice(&address_slice);
                     pipeline.push_back((
                         chunk_address,
@@ -324,6 +331,10 @@ fn send_partial_htree(
     ranges: Vec<index::HTreeDataRange>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
+    if ranges.is_empty() {
+        anyhow::bail!("malformed tree fetch range, range is empty")
+    }
+
     // The ranges are sent from the client, first validate them.
     for (i, r) in ranges.iter().enumerate() {
         if r.start_idx > r.end_idx {
@@ -341,25 +352,68 @@ fn send_partial_htree(
         }
     }
 
-    // Mostly the same as the less complicated send_htree function, but we filter out unwanted chunks and exit early.
-
-    let mut storage_engine = repo.storage_engine()?;
-
     let mut range_idx: usize = 0;
+    let mut storage_engine = repo.storage_engine()?;
     let mut current_data_chunk_idx: u64 = 0;
+    let start_chunk_idx = ranges[range_idx].start_idx;
 
+    // Use the offset data in the htree to efficiently seek to the first data chunk.
+    loop {
+        let height = match tr.current_height() {
+            Some(v) => v,
+            None => anyhow::bail!("htree is corrupt, pick data not found"),
+        };
+
+        if height == 0 {
+            break;
+        }
+
+        let (_, address) = tr.next_addr().unwrap();
+
+        let chunk_packet = Packet::Chunk(Chunk {
+            address,
+            data: storage_engine.get_chunk(&address)?,
+        });
+
+        write_packet(w, &chunk_packet)?;
+
+        // This match avoids cloning the data, which may be large.
+        let mut chunk_data = match chunk_packet {
+            Packet::Chunk(Chunk { data, .. }) => data,
+            _ => unreachable!(),
+        };
+
+        let mut level_data_chunk_idx = current_data_chunk_idx;
+        let mut skip_count = 0;
+        for ent_slice in chunk_data.chunks(8 + address::ADDRESS_SZ) {
+            let data_chunk_count = u64::from_le_bytes(ent_slice[..8].try_into()?);
+            if level_data_chunk_idx + data_chunk_count > start_chunk_idx {
+                break;
+            }
+            level_data_chunk_idx += data_chunk_count;
+            skip_count += 1;
+        }
+        current_data_chunk_idx = level_data_chunk_idx;
+        chunk_data.drain(0..(skip_count * (8 + address::ADDRESS_SZ)));
+        tr.push_level(height - 1, chunk_data)?;
+    }
+
+    if current_data_chunk_idx != start_chunk_idx {
+        anyhow::bail!("htree is corrupt, seek went too far");
+    }
+
+    // Mostly the same as the less complicated send_htree function, but we filter out unwanted chunks and exit early.
     loop {
         match tr.current_height() {
             Some(0) => {
                 let mut chunk_address = address::Address::default();
                 let mut pipeline = std::collections::VecDeque::new();
-                let addresses = tr.pop_level().unwrap();
-
-                for address_slice in addresses.chunks(address::ADDRESS_SZ) {
+                let level_chunk = tr.pop_level().unwrap();
+                for ent_slice in level_chunk.chunks(8 + address::ADDRESS_SZ) {
+                    let address_slice = &ent_slice[8..];
                     match ranges.get(range_idx) {
                         Some(current_range) => {
                             chunk_address.bytes.clone_from_slice(&address_slice);
-
                             if current_data_chunk_idx >= current_range.start_idx
                                 && current_data_chunk_idx <= current_range.end_idx
                             {
