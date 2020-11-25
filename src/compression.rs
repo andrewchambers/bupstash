@@ -78,9 +78,9 @@ pub fn unauthenticated_decompress(data: Vec<u8>) -> Result<Vec<u8>, anyhow::Erro
         Some(f) if *f == COMPRESS_FOOTER_NO_COMPRESSION => decompress(data),
         // Once we are confident in the security/memory safety of our decompression function,
         // we can shift to enabling compression of the unauthenticated data.
-        Some(f) => panic!(), /* anyhow::bail!(
-                                 "decompression of unauthenticated data is currently disabled (encryption footer is {})",
-                                 *f
-                             )*/
+        Some(f) => anyhow::bail!(
+            "decompression of unauthenticated data is currently disabled (encryption footer is {})",
+            *f
+        ),
     }
 }
