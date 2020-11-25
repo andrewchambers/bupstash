@@ -16,7 +16,7 @@ pub const BOX_BEFORENMBYTES: usize =
     sodium::crypto_box_curve25519xchacha20poly1305_BEFORENMBYTES as usize;
 pub const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_MACBYTES as usize;
 
-pub const BOX_PRE_SHARED_KEY_BYTES: usize = sodium::crypto_generichash_KEYBYTES as usize;
+pub const BOX_PRE_SHARED_KEY_BYTES: usize = 32;
 
 pub fn init() {
     unsafe {
@@ -126,12 +126,8 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedK
             pk.bytes.as_ptr(),
             sk.bytes.as_ptr(),
         )
-    } != 0
+    } == 0
     {
-        BoxKey {
-            bytes: [0; BOX_BEFORENMBYTES],
-        }
-    } else {
         /*
           XXX TODO FIXME REVIEWME:
           Integrate the preshared key bytes with the computed secret so the
@@ -148,28 +144,12 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedK
           We need advice from experts on how to do this appropriately, and if
           what even we are doing is right at all.
         */
-
-        let mut mixed_key_bytes: [u8; BOX_BEFORENMBYTES] =
-            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-
-        debug_assert!(BOX_PRE_SHARED_KEY_BYTES == sodium::crypto_generichash_KEYBYTES as usize);
-
-        unsafe {
-            if sodium::crypto_generichash(
-                mixed_key_bytes.as_mut_ptr(),
-                mixed_key_bytes.len(),
-                unmixed_key_bytes.as_ptr(),
-                unmixed_key_bytes.len().try_into().unwrap(),
-                psk.bytes.as_ptr(),
-                psk.bytes.len(),
-            ) != 0
-            {
-                panic!();
-            }
-        };
-
         BoxKey {
-            bytes: mixed_key_bytes,
+            bytes: blake3::keyed_hash(&psk.bytes, &unmixed_key_bytes[..]).into(),
+        }
+    } else {
+        BoxKey {
+            bytes: [0; BOX_BEFORENMBYTES],
         }
     }
 }
@@ -311,13 +291,12 @@ impl DecryptionContext {
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct PartialHashKey {
-    pub bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize],
+    pub bytes: [u8; 32],
 }
 
 impl PartialHashKey {
     pub fn new() -> Self {
-        let mut bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize] =
-            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut bytes: [u8; 32] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         randombytes(&mut bytes[..]);
         PartialHashKey { bytes }
     }
