@@ -317,7 +317,7 @@ fn send_htree(
 
                     write_packet(w, &chunk_packet)?;
 
-                    let mut chunk_data = match chunk_packet {
+                    let chunk_data = match chunk_packet {
                         Packet::Chunk(Chunk { data, .. }) => {
                             compression::unauthenticated_decompress(data)?
                         }
