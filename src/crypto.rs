@@ -1,4 +1,5 @@
 use super::address::*;
+use super::compression;
 use super::sodium;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -16,9 +17,6 @@ pub const BOX_BEFORENMBYTES: usize =
 pub const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_MACBYTES as usize;
 
 pub const BOX_PRE_SHARED_KEY_BYTES: usize = sodium::crypto_generichash_KEYBYTES as usize;
-
-pub const CHUNK_FOOTER_NO_COMPRESSION: u8 = 0;
-pub const CHUNK_FOOTER_ZSTD_COMPRESSED: u8 = 1;
 
 pub fn init() {
     unsafe {
@@ -222,59 +220,6 @@ pub fn box_decrypt(pt: &mut [u8], bt: &[u8], bk: &BoxKey) -> bool {
     true
 }
 
-fn zstd_compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
-    // Our max chunk size means this should never happen.
-    assert!(data.len() <= 0xffffffff);
-    let mut compressed_data = zstd::block::compress(&data, 0).unwrap();
-    if (compressed_data.len() + 4) >= data.len() {
-        data.push(CHUNK_FOOTER_NO_COMPRESSION);
-        data
-    } else {
-        compressed_data.reserve(5);
-        let sz = data.len() as u32;
-        compressed_data.push((sz & 0x000000ff) as u8);
-        compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
-        compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
-        compressed_data.push(((sz & 0xff000000) >> 24) as u8);
-        compressed_data.push(CHUNK_FOOTER_ZSTD_COMPRESSED);
-        compressed_data
-    }
-}
-
-fn decompress_chunk(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
-    if data.is_empty() {
-        anyhow::bail!("data chunk was too small, missing footer");
-    }
-
-    let data = match data[data.len() - 1] {
-        footer if footer == CHUNK_FOOTER_NO_COMPRESSION => {
-            data.pop();
-            data
-        }
-        footer if footer == CHUNK_FOOTER_ZSTD_COMPRESSED => {
-            data.pop();
-            if data.len() < 4 {
-                anyhow::bail!("data footer missing decompressed size");
-            }
-            let data_len = data.len();
-            let decompressed_sz = ((data[data_len - 1] as u32) << 24)
-                | ((data[data_len - 2] as u32) << 16)
-                | ((data[data_len - 3] as u32) << 8)
-                | (data[data_len - 4] as u32);
-            data.truncate(data.len() - 4);
-            zstd::block::decompress(&data, decompressed_sz as usize)?
-        }
-        _ => anyhow::bail!("unknown footer type type"),
-    };
-    Ok(data)
-}
-
-#[derive(Clone, Copy)]
-pub enum DataCompression {
-    None,
-    Zstd,
-}
-
 #[derive(Clone)]
 pub struct EncryptionContext {
     nonce: BoxNonce,
@@ -294,14 +239,8 @@ impl EncryptionContext {
         }
     }
 
-    pub fn encrypt_data(&mut self, mut pt: Vec<u8>, compression: DataCompression) -> Vec<u8> {
-        let pt = match compression {
-            DataCompression::None => {
-                pt.push(CHUNK_FOOTER_NO_COMPRESSION);
-                pt
-            }
-            DataCompression::Zstd => zstd_compress_chunk(pt),
-        };
+    pub fn encrypt_data(&mut self, pt: Vec<u8>, compression: compression::Scheme) -> Vec<u8> {
+        let pt = compression::compress(compression, pt);
         let ct_len = pt.len() + BOX_NONCEBYTES + BOX_MACBYTES + self.ephemeral_pk.bytes.len();
         let mut ct = Vec::with_capacity(ct_len);
         unsafe { ct.set_len(ct_len) };
@@ -366,7 +305,7 @@ impl DecryptionContext {
             anyhow::bail!("data corrupt");
         }
 
-        decompress_chunk(pt)
+        compression::decompress(pt)
     }
 }
 
@@ -540,8 +479,8 @@ mod tests {
         let pt1 = vec![1, 2, 3];
         let mut ectx1 = EncryptionContext::new(&pk, &psk);
         let mut ectx2 = EncryptionContext::new(&pk, &psk);
-        let ct1 = ectx1.encrypt_data(pt1.clone(), DataCompression::None);
-        let ct2 = ectx2.encrypt_data(pt1.clone(), DataCompression::Zstd);
+        let ct1 = ectx1.encrypt_data(pt1.clone(), compression::Scheme::None);
+        let ct2 = ectx2.encrypt_data(pt1.clone(), compression::Scheme::Zstd);
         let mut dctx = DecryptionContext::new(sk, psk);
         let pt2 = dctx.decrypt_data(ct1).unwrap();
         let pt3 = dctx.decrypt_data(ct2).unwrap();

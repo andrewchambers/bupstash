@@ -3,6 +3,7 @@ pub mod base64;
 pub mod chunk_storage;
 pub mod chunker;
 pub mod client;
+pub mod compression;
 pub mod crypto;
 pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
@@ -684,9 +685,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     let compression = if matches.opt_present("no-compression") {
-        crypto::DataCompression::None
+        compression::Scheme::None
     } else {
-        crypto::DataCompression::Zstd
+        compression::Scheme::Zstd
     };
 
     let use_stat_cache = !matches.opt_present("no-stat-caching");

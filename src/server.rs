@@ -1,4 +1,5 @@
 use super::address;
+use super::compression;
 use super::htree;
 use super::index;
 use super::itemset;
@@ -308,14 +309,22 @@ fn send_htree(
             Some(_) => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
-                    tr.push_level(height - 1, chunk_data.clone())?;
-                    write_packet(
-                        w,
-                        &Packet::Chunk(Chunk {
-                            address: chunk_address.clone(),
-                            data: chunk_data,
-                        }),
-                    )?;
+
+                    let chunk_packet = Packet::Chunk(Chunk {
+                        address: chunk_address,
+                        data: chunk_data,
+                    });
+
+                    write_packet(w, &chunk_packet)?;
+
+                    let mut chunk_data = match chunk_packet {
+                        Packet::Chunk(Chunk { data, .. }) => {
+                            compression::unauthenticated_decompress(data)?
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    tr.push_level(height - 1, chunk_data)?;
                 }
             }
             None => break,
@@ -379,7 +388,7 @@ fn send_partial_htree(
 
         // This match avoids cloning the data, which may be large.
         let mut chunk_data = match chunk_packet {
-            Packet::Chunk(Chunk { data, .. }) => data,
+            Packet::Chunk(Chunk { data, .. }) => compression::unauthenticated_decompress(data)?,
             _ => unreachable!(),
         };
 
@@ -456,6 +465,7 @@ fn send_partial_htree(
             Some(_) if ranges.get(range_idx).is_some() => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
+                    let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data.clone())?;
                     write_packet(
                         w,

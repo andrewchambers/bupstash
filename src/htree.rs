@@ -1,4 +1,5 @@
 use super::address::*;
+use super::compression;
 use super::crypto;
 use super::rollsum;
 use std::convert::TryInto;
@@ -77,6 +78,7 @@ impl TreeWriter {
             for chunk in block.chunks(8 + ADDRESS_SZ) {
                 leaf_count += u64::from_le_bytes(chunk[..8].try_into()?);
             }
+            let block = compression::compress(compression::Scheme::None, block);
             sink.add_chunk(&block_address, block)?;
             self.add_addr(sink, level + 1, leaf_count, &block_address)?;
         }
@@ -301,7 +303,8 @@ mod tests {
         // chunk1, chunk2
         assert_eq!(n_data, 2);
         assert_eq!(chunks.len(), 3);
-        let addr_chunk = chunks.get_mut(&result).unwrap();
+        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
 
@@ -331,7 +334,8 @@ mod tests {
         // chunk0, chunk1, chunk3
         assert_eq!(n_data, 3);
         assert_eq!(chunks.len(), 6);
-        let addr_chunk = chunks.get_mut(&result).unwrap();
+        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
 
@@ -354,7 +358,8 @@ mod tests {
         // chunk1, chunk2
         assert_eq!(n_data, 2);
         assert_eq!(chunks.len(), 3);
-        let addr_chunk = chunks.get_mut(&result).unwrap();
+        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
 
@@ -384,7 +389,8 @@ mod tests {
         // chunk0, chunk1, chunk3
         assert_eq!(n_data, 3);
         assert_eq!(chunks.len(), 6);
-        let addr_chunk = chunks.get_mut(&result).unwrap();
+        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
 
@@ -427,6 +433,7 @@ mod tests {
                 Some((height, addr)) => {
                     if height != 0 {
                         let data = chunks.get_chunk(&addr).unwrap();
+                        let data = compression::unauthenticated_decompress(data).unwrap();
                         tr.push_level(height - 1, data).unwrap();
                     }
 

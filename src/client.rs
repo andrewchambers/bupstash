@@ -1,5 +1,6 @@
 use super::address::*;
 use super::chunker;
+use super::compression;
 use super::crypto;
 use super::fsutil;
 use super::htree;
@@ -130,7 +131,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
 
 pub struct SendContext {
     pub progress: indicatif::ProgressBar,
-    pub compression: crypto::DataCompression,
+    pub compression: compression::Scheme,
     pub use_stat_cache: bool,
     pub primary_key_id: Xid,
     pub send_key_id: Xid,
@@ -327,10 +328,9 @@ pub fn send(
                 gc_generation: ack.gc_generation,
                 item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
                     plain_text_metadata,
-                    encrypted_metadata: ctx.metadata_ectx.encrypt_data(
-                        serde_bare::to_vec(&e_metadata)?,
-                        crypto::DataCompression::Zstd,
-                    ),
+                    encrypted_metadata: ctx
+                        .metadata_ectx
+                        .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Zstd),
                 }),
             }),
         )?;
@@ -893,43 +893,7 @@ pub fn request_index(
     }
 }
 
-fn receive_htree(
-    mut ctx: DataRequestContext,
-    hash_key: &crypto::HashKey,
-    r: &mut dyn std::io::Read,
-    tr: &mut htree::TreeReader,
-    out: &mut dyn std::io::Write,
-) -> Result<(), anyhow::Error> {
-    while let Some((height, addr)) = tr.next_addr() {
-        let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Chunk(chunk) => {
-                if addr != chunk.address {
-                    return Err(ClientError::CorruptOrTamperedDataError.into());
-                }
-                chunk.data
-            }
-            _ => anyhow::bail!("protocol error, expected begin chunk packet"),
-        };
-
-        if height == 0 {
-            let data = ctx.data_dctx.decrypt_data(data)?;
-            if addr != crypto::keyed_content_address(&data, &hash_key) {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
-            }
-            out.write_all(&data)?;
-        } else {
-            if addr != htree::tree_block_address(&data) {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
-            }
-            tr.push_level(height - 1, data)?;
-        }
-    }
-
-    out.flush()?;
-    Ok(())
-}
-
-fn receive_htree_chunk(
+fn receive_and_authenticate_htree_chunk(
     r: &mut dyn std::io::Read,
     address: Address,
 ) -> Result<Vec<u8>, anyhow::Error> {
@@ -942,10 +906,45 @@ fn receive_htree_chunk(
         }
         _ => anyhow::bail!("protocol error, expected chunk packet"),
     };
+    let data = compression::unauthenticated_decompress(data)?;
     if address != htree::tree_block_address(&data) {
         return Err(ClientError::CorruptOrTamperedDataError.into());
     }
     Ok(data)
+}
+
+fn receive_htree(
+    mut ctx: DataRequestContext,
+    hash_key: &crypto::HashKey,
+    r: &mut dyn std::io::Read,
+    tr: &mut htree::TreeReader,
+    out: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    while let Some((height, addr)) = tr.next_addr() {
+        if height == 0 {
+            let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                Packet::Chunk(chunk) => {
+                    if addr != chunk.address {
+                        return Err(ClientError::CorruptOrTamperedDataError.into());
+                    }
+                    chunk.data
+                }
+                _ => anyhow::bail!("protocol error, expected begin chunk packet"),
+            };
+
+            let data = ctx.data_dctx.decrypt_data(data)?;
+            if addr != crypto::keyed_content_address(&data, &hash_key) {
+                return Err(ClientError::CorruptOrTamperedDataError.into());
+            }
+            out.write_all(&data)?;
+        } else {
+            let data = receive_and_authenticate_htree_chunk(r, addr)?;
+            tr.push_level(height - 1, data)?;
+        }
+    }
+
+    out.flush()?;
+    Ok(())
 }
 
 fn receive_partial_htree(
@@ -978,7 +977,7 @@ fn receive_partial_htree(
 
         let (_, address) = tr.next_addr().unwrap();
 
-        let mut chunk_data = receive_htree_chunk(r, address)?;
+        let mut chunk_data = receive_and_authenticate_htree_chunk(r, address)?;
         let mut level_data_chunk_idx = current_data_chunk_idx;
         let mut skip_count = 0;
         for ent_slice in chunk_data.chunks(8 + ADDRESS_SZ) {
@@ -1057,7 +1056,7 @@ fn receive_partial_htree(
             }
             Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
                 Some((height, address)) => {
-                    let data = receive_htree_chunk(r, address)?;
+                    let data = receive_and_authenticate_htree_chunk(r, address)?;
                     tr.push_level(height - 1, data)?;
                 }
                 None => break,

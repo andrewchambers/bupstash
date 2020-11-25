@@ -1,4 +1,5 @@
 use super::chunk_storage;
+use super::compression;
 use super::crypto;
 use super::dir_chunk_storage;
 use super::external_chunk_storage;
@@ -523,6 +524,7 @@ impl Repo {
                             add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
                         if rows_changed != 0 && height != 0 {
                             let data = storage_engine.get_chunk(&addr)?;
+                            let data = compression::unauthenticated_decompress(data)?;
                             tr.push_level(height - 1, data)?;
                         }
                     }
