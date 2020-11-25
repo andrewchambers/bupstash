@@ -92,13 +92,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                     send_log_session.add_address(addr)?;
                 } else {
                     self.dirty_bytes += data.len() as u64;
-                    write_packet(
-                        self.w,
-                        &Packet::Chunk(Chunk {
-                            address: *addr,
-                            data,
-                        }),
-                    )?;
+                    write_chunk(self.w, addr, &data)?;
                     send_log_session.add_address(addr)?;
                 }
 
@@ -116,13 +110,7 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                 Ok(())
             }
             None => {
-                write_packet(
-                    self.w,
-                    &Packet::Chunk(Chunk {
-                        address: *addr,
-                        data,
-                    }),
-                )?;
+                write_chunk(self.w, addr, &data)?;
                 Ok(())
             }
         }
@@ -357,7 +345,7 @@ fn send_chunks(
     data: &mut dyn std::io::Read,
     mut on_chunk: Option<&mut dyn FnMut(&Address)>,
 ) -> Result<usize, anyhow::Error> {
-    let mut buf: Vec<u8> = vec![0; 1024 * 1024];
+    let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     let mut n_written: usize = 0;
     loop {
         match data.read(&mut buf) {

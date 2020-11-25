@@ -345,6 +345,20 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), anyhow:
     Ok(())
 }
 
+// We write a lot of chunks and sometimes having to create a packet
+// (which requires buffer ownership) is tedious, this shorthand helps.
+pub fn write_chunk(
+    w: &mut dyn std::io::Write,
+    address: &Address,
+    data: &Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    send_hdr(w, PACKET_KIND_CHUNK, (data.len() + ADDRESS_SZ).try_into()?)?;
+    write_to_remote(w, &address.bytes)?;
+    write_to_remote(w, data)?;
+    flush_remote(w)?;
+    Ok(())
+}
+
 pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyhow::Error> {
     match pkt {
         Packet::Chunk(ref v) => {

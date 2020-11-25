@@ -286,44 +286,19 @@ fn send_htree(
 
                     if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
                         let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
-                        write_packet(
-                            w,
-                            &Packet::Chunk(Chunk {
-                                address: chunk_address,
-                                data: chunk_data.recv()??,
-                            }),
-                        )?;
+                        write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
                     }
                 }
 
                 while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
-                    write_packet(
-                        w,
-                        &Packet::Chunk(Chunk {
-                            address: chunk_address,
-                            data: chunk_data.recv()??,
-                        }),
-                    )?;
+                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
                 }
             }
             Some(_) => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
-
-                    let chunk_packet = Packet::Chunk(Chunk {
-                        address: chunk_address,
-                        data: chunk_data,
-                    });
-
-                    write_packet(w, &chunk_packet)?;
-
-                    let chunk_data = match chunk_packet {
-                        Packet::Chunk(Chunk { data, .. }) => {
-                            compression::unauthenticated_decompress(data)?
-                        }
-                        _ => unreachable!(),
-                    };
-
+                    write_chunk(w, &chunk_address, &chunk_data)?;
+                    let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data)?;
                 }
             }
@@ -379,18 +354,9 @@ fn send_partial_htree(
 
         let (_, address) = tr.next_addr().unwrap();
 
-        let chunk_packet = Packet::Chunk(Chunk {
-            address,
-            data: storage_engine.get_chunk(&address)?,
-        });
-
-        write_packet(w, &chunk_packet)?;
-
-        // This match avoids cloning the data, which may be large.
-        let mut chunk_data = match chunk_packet {
-            Packet::Chunk(Chunk { data, .. }) => compression::unauthenticated_decompress(data)?,
-            _ => unreachable!(),
-        };
+        let chunk_data = storage_engine.get_chunk(&address)?;
+        write_chunk(w, &address, &chunk_data)?;
+        let mut chunk_data = compression::unauthenticated_decompress(chunk_data)?;
 
         let mut level_data_chunk_idx = current_data_chunk_idx;
         let mut skip_count = 0;
@@ -433,13 +399,7 @@ fn send_partial_htree(
 
                                 if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
                                     let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
-                                    write_packet(
-                                        w,
-                                        &Packet::Chunk(Chunk {
-                                            address: chunk_address,
-                                            data: chunk_data.recv()??,
-                                        }),
-                                    )?;
+                                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
                                 }
                             }
 
@@ -453,34 +413,14 @@ fn send_partial_htree(
                 }
 
                 while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
-                    write_packet(
-                        w,
-                        &Packet::Chunk(Chunk {
-                            address: chunk_address,
-                            data: chunk_data.recv()??,
-                        }),
-                    )?;
+                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
                 }
             }
             Some(_) if ranges.get(range_idx).is_some() => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
-
-                    let chunk_packet = Packet::Chunk(Chunk {
-                        address: chunk_address,
-                        data: chunk_data,
-                    });
-
-                    write_packet(w, &chunk_packet)?;
-
-                    // This match avoids cloning the data, which may be large.
-                    let chunk_data = match chunk_packet {
-                        Packet::Chunk(Chunk { data, .. }) => {
-                            compression::unauthenticated_decompress(data)?
-                        }
-                        _ => unreachable!(),
-                    };
-
+                    write_chunk(w, &chunk_address, &chunk_data)?;
+                    let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data)?;
                 }
             }
