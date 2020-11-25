@@ -4,7 +4,7 @@ use super::sodium;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
-pub const HASH_BYTES: usize = sodium::crypto_generichash_BYTES as usize;
+pub const HASH_BYTES: usize = 32;
 
 pub const BOX_NONCEBYTES: usize =
     sodium::crypto_box_curve25519xchacha20poly1305_NONCEBYTES as usize;
@@ -376,7 +376,7 @@ pub fn derive_hash_key(part1: &PartialHashKey, part2: &PartialHashKey) -> HashKe
 pub struct HashKey {
     pub part1: PartialHashKey,
     pub part2: PartialHashKey,
-    pub bytes: [u8; sodium::crypto_generichash_KEYBYTES as usize],
+    pub bytes: [u8; 32],
 }
 
 impl Drop for HashKey {
@@ -386,60 +386,30 @@ impl Drop for HashKey {
 }
 
 pub struct HashState {
-    st: sodium::crypto_generichash_state,
+    st: blake3::Hasher,
 }
 
 impl HashState {
+    #[inline(always)]
     pub fn new(key: Option<&HashKey>) -> HashState {
-        let mut h = HashState {
-            st: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
-        };
-
-        if unsafe {
-            sodium::crypto_generichash_init(
-                &mut h.st as *mut sodium::crypto_generichash_state,
-                if let Some(k) = key {
-                    k.bytes.as_ptr() as *const u8
-                } else {
-                    std::ptr::null()
-                },
-                if let Some(k) = key { k.bytes.len() } else { 0 },
-                HASH_BYTES,
-            )
-        } != 0
-        {
-            panic!()
+        match key {
+            Some(k) => HashState {
+                st: blake3::Hasher::new_keyed(&k.bytes),
+            },
+            None => HashState {
+                st: blake3::Hasher::new(),
+            },
         }
-        h
     }
 
+    #[inline(always)]
     pub fn update(&mut self, data: &[u8]) {
-        if unsafe {
-            sodium::crypto_generichash_update(
-                &mut self.st as *mut sodium::crypto_generichash_state,
-                data.as_ptr() as *const u8,
-                data.len().try_into().unwrap(),
-            )
-        } != 0
-        {
-            panic!();
-        };
+        self.st.update(data);
     }
 
-    pub fn finish(mut self) -> [u8; HASH_BYTES] {
-        let mut out: [u8; HASH_BYTES] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-        if unsafe {
-            sodium::crypto_generichash_final(
-                &mut self.st as *mut sodium::crypto_generichash_state,
-                out.as_mut_ptr(),
-                out.len(),
-            )
-        } != 0
-        {
-            panic!();
-        }
-
-        out
+    #[inline(always)]
+    pub fn finish(self) -> [u8; HASH_BYTES] {
+        self.st.finalize().into()
     }
 }
 
