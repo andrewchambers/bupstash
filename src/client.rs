@@ -35,7 +35,7 @@ pub fn open_repository(
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
-            repository_protocol_version: "2".to_string(),
+            repository_protocol_version: "3".to_string(),
             lock_hint,
         }),
     )?;
