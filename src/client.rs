@@ -35,7 +35,7 @@ pub fn open_repository(
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
-            repository_protocol_version: "3".to_string(),
+            repository_protocol_version: "4".to_string(),
             lock_hint,
         }),
     )?;
@@ -751,6 +751,22 @@ fn send_dir(
     Ok(())
 }
 
+pub fn request_metadata(
+    id: Xid,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<itemset::VersionedItemMetadata, anyhow::Error> {
+    write_packet(w, &Packet::TRequestMetadata(TRequestMetadata { id }))?;
+
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RRequestMetadata(resp) => match resp.metadata {
+            Some(metadata) => Ok(metadata),
+            None => anyhow::bail!("no stored items with the requested id"),
+        },
+        _ => anyhow::bail!("protocol error, expected ack request packet"),
+    }
+}
+
 pub struct DataRequestContext {
     pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
@@ -761,6 +777,7 @@ pub struct DataRequestContext {
 pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,
+    metadata: &itemset::ItemMetadata,
     pick: Option<index::PickMap>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -773,112 +790,89 @@ pub fn request_data_stream(
         }
     }
 
-    write_packet(
-        w,
-        &Packet::TRequestData(TRequestData {
-            id,
-            ranges: if let Some(ref pick) = pick {
-                Some(pick.data_chunk_ranges.clone())
-            } else {
-                None
-            },
-        }),
-    )?;
+    if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
+        anyhow::bail!("decryption key does not match master key used for encryption");
+    }
 
-    let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRequestData(resp) => match resp.metadata {
-            Some(metadata) => metadata,
-            None => anyhow::bail!("no stored items with the requested id"),
-        },
-        _ => anyhow::bail!("protocol error, expected ack request packet"),
-    };
+    let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let plain_text_metadata = &metadata.plain_text_metadata;
 
-    match metadata {
-        itemset::VersionedItemMetadata::V1(metadata) => {
-            if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-                anyhow::bail!("decryption key does not match master key used for encryption");
-            }
+    let hash_key =
+        crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
 
-            let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
-            let plain_text_metadata = metadata.plain_text_metadata;
+    let mut tr = htree::TreeReader::new(
+        plain_text_metadata.data_tree.height.try_into()?,
+        plain_text_metadata.data_tree.data_chunk_count,
+        &plain_text_metadata.data_tree.address,
+    );
 
-            let hash_key =
-                crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+    match pick {
+        Some(pick) => {
+            write_packet(
+                w,
+                &Packet::RequestData(RequestData {
+                    id,
+                    ranges: Some(pick.data_chunk_ranges.clone()),
+                }),
+            )?;
+            receive_partial_htree(ctx, &hash_key, r, &mut tr, pick, out)?;
+        }
+        None => {
+            write_packet(w, &Packet::RequestData(RequestData { id, ranges: None }))?;
 
-            let mut tr = htree::TreeReader::new(
-                plain_text_metadata.data_tree.height.try_into()?,
-                plain_text_metadata.data_tree.data_chunk_count,
-                &plain_text_metadata.data_tree.address,
-            );
-
-            if let Some(pick) = pick {
-                receive_partial_htree(ctx, &hash_key, r, &mut tr, pick, out)?;
-            } else {
-                receive_htree(ctx, &hash_key, r, &mut tr, out)?;
-            }
-
-            out.flush()?;
-            Ok(())
+            receive_htree(ctx, &hash_key, r, &mut tr, out)?;
         }
     }
+
+    out.flush()?;
+    Ok(())
 }
 
 pub fn request_index(
     mut ctx: DataRequestContext,
     id: Xid,
+    metadata: &itemset::ItemMetadata,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<Vec<index::VersionedIndexEntry>, anyhow::Error> {
-    write_packet(w, &Packet::TRequestIndex(TRequestIndex { id }))?;
+    if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
+        anyhow::bail!("decryption key does not match master key used for encryption");
+    }
 
-    let metadata = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRequestIndex(resp) => match resp.metadata {
-            Some(metadata) => metadata,
-            None => anyhow::bail!("no stored items with the requested id"),
-        },
-        _ => anyhow::bail!("protocol error, expected ack request packet"),
+    let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let plain_text_metadata = &metadata.plain_text_metadata;
+
+    let hash_key =
+        crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+
+    let index_tree = match &plain_text_metadata.index_tree {
+        Some(index_tree) => index_tree,
+        None => anyhow::bail!("requested item missing an index"),
     };
 
-    match metadata {
-        itemset::VersionedItemMetadata::V1(metadata) => {
-            if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-                anyhow::bail!("decryption key does not match master key used for encryption");
-            }
+    let mut tr = htree::TreeReader::new(
+        index_tree.height.try_into()?,
+        index_tree.data_chunk_count,
+        &index_tree.address,
+    );
 
-            let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
-            let plain_text_metadata = metadata.plain_text_metadata;
+    let mut index_data = std::io::Cursor::new(Vec::new());
 
-            let hash_key =
-                crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+    write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
+    receive_htree(ctx, &hash_key, r, &mut tr, &mut index_data)?;
 
-            let index_tree = match plain_text_metadata.index_tree {
-               Some(index_tree) => index_tree,
-                None => anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)"),
-            };
+    let mut index: Vec<index::VersionedIndexEntry> = Vec::new();
 
-            let mut tr = htree::TreeReader::new(
-                index_tree.height.try_into()?,
-                index_tree.data_chunk_count,
-                &index_tree.address,
-            );
-
-            let mut index_data = std::io::Cursor::new(Vec::new());
-            receive_htree(ctx, &hash_key, r, &mut tr, &mut index_data)?;
-
-            let mut index: Vec<index::VersionedIndexEntry> = Vec::new();
-
-            let index_data_size = index_data.position();
-            index_data.set_position(0);
-            while index_data.position() != index_data_size {
-                match serde_bare::from_reader(&mut index_data) {
-                    Ok(index_entry) => index.push(index_entry),
-                    Err(err) => anyhow::bail!("error deserializing index: {}", err),
-                }
-            }
-
-            Ok(index)
+    let index_data_size = index_data.position();
+    index_data.set_position(0);
+    while index_data.position() != index_data_size {
+        match serde_bare::from_reader(&mut index_data) {
+            Ok(index_entry) => index.push(index_entry),
+            Err(err) => anyhow::bail!("error deserializing index: {}", err),
         }
     }
+
+    Ok(index)
 }
 
 fn receive_and_authenticate_htree_chunk(

@@ -937,9 +937,13 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
-    let pick = if matches.opt_present("pick") {
-        progress.set_message("fetching content index...");
-        let content_index = client::request_index(
+    progress.set_message("fetching item metadata...");
+    let metadata = match client::request_metadata(id, &mut serve_out, &mut serve_in)? {
+        itemset::VersionedItemMetadata::V1(metadata) => metadata,
+    };
+
+    let content_index = if metadata.plain_text_metadata.index_tree.is_some() {
+        Some(client::request_index(
             client::DataRequestContext {
                 primary_key_id,
                 hash_key_part_1: hash_key_part_1.clone(),
@@ -947,14 +951,25 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 metadata_dctx: metadata_dctx.clone(),
             },
             id,
+            &metadata,
             &mut serve_out,
             &mut serve_in,
-        )?;
-
-        Some(index::pick(
-            &matches.opt_str("pick").unwrap(),
-            &content_index,
         )?)
+    } else {
+        None
+    };
+
+    let pick = if matches.opt_present("pick") {
+        progress.set_message("fetching content index...");
+
+        if let Some(content_index) = content_index {
+            Some(index::pick(
+                &matches.opt_str("pick").unwrap(),
+                &content_index,
+            )?)
+        } else {
+            anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)")
+        }
     } else {
         None
     };
@@ -969,6 +984,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             metadata_dctx,
         },
         id,
+        &metadata,
         pick,
         &mut serve_out,
         &mut serve_in,
@@ -1076,6 +1092,15 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
+    progress.set_message("fetching item metadata...");
+    let metadata = match client::request_metadata(id, &mut serve_out, &mut serve_in)? {
+        itemset::VersionedItemMetadata::V1(metadata) => metadata,
+    };
+
+    if metadata.plain_text_metadata.index_tree.is_none() {
+        anyhow::bail!("list-contents is only supported for tarballs created by bupstash");
+    }
+
     progress.set_message("fetching content index...");
     let mut content_index = client::request_index(
         client::DataRequestContext {
@@ -1085,6 +1110,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             metadata_dctx,
         },
         id,
+        &metadata,
         &mut serve_out,
         &mut serve_in,
     )?;

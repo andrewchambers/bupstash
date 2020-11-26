@@ -44,24 +44,24 @@ pub struct RBeginSend {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TRequestData {
+pub struct TRequestMetadata {
+    pub id: Xid,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RRequestMetadata {
+    pub metadata: Option<itemset::VersionedItemMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RequestData {
     pub id: Xid,
     pub ranges: Option<Vec<index::HTreeDataRange>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RRequestData {
-    pub metadata: Option<itemset::VersionedItemMetadata>,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TRequestIndex {
+pub struct RequestIndex {
     pub id: Xid,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RRequestIndex {
-    pub metadata: Option<itemset::VersionedItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -133,8 +133,9 @@ pub enum Packet {
     RAddItem(Xid),
     TRmItems(Vec<Xid>),
     RRmItems,
-    TRequestData(TRequestData),
-    RRequestData(RRequestData),
+    TRequestMetadata(TRequestMetadata),
+    RRequestMetadata(RRequestMetadata),
+    RequestData(RequestData),
     TGc(TGc),
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
@@ -146,8 +147,7 @@ pub enum Packet {
     Abort(Abort),
     TRestoreRemoved,
     RRestoreRemoved(RRestoreRemoved),
-    TRequestIndex(TRequestIndex),
-    RRequestIndex(RRequestIndex),
+    RequestIndex(RequestIndex),
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
@@ -173,8 +173,7 @@ const PACKET_KIND_T_ADD_ITEM: u8 = 9;
 const PACKET_KIND_R_ADD_ITEM: u8 = 10;
 const PACKET_KIND_T_RM_ITEMS: u8 = 11;
 const PACKET_KIND_R_RM_ITEMS: u8 = 12;
-const PACKET_KIND_T_REQUEST_DATA: u8 = 13;
-const PACKET_KIND_R_REQUEST_DATA: u8 = 14;
+const PACKET_KIND_REQUEST_DATA: u8 = 13;
 const PACKET_KIND_T_GC: u8 = 15;
 const PACKET_KIND_R_GC: u8 = 16;
 const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 17;
@@ -186,8 +185,9 @@ const PACKET_KIND_PROGRESS: u8 = 22;
 const PACKET_KIND_ABORT: u8 = 23;
 const PACKET_KIND_T_RESTORE_REMOVED: u8 = 24;
 const PACKET_KIND_R_RESTORE_REMOVED: u8 = 25;
-const PACKET_KIND_T_REQUEST_INDEX: u8 = 26;
-const PACKET_KIND_R_REQUEST_INDEX: u8 = 27;
+const PACKET_KIND_REQUEST_INDEX: u8 = 26;
+const PACKET_KIND_T_REQUEST_METADATA: u8 = 28;
+const PACKET_KIND_R_REQUEST_METADATA: u8 = 29;
 
 // Backend storage protocol messages.
 const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
@@ -294,10 +294,10 @@ pub fn read_packet_raw(
         PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
-        PACKET_KIND_T_REQUEST_DATA => Packet::TRequestData(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_REQUEST_DATA => Packet::RRequestData(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_REQUEST_INDEX => Packet::TRequestIndex(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_REQUEST_INDEX => Packet::RRequestIndex(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_REQUEST_METADATA => Packet::TRequestMetadata(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_METADATA => Packet::RRequestMetadata(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_REQUEST_DATA => Packet::RequestData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_REQUEST_INDEX => Packet::RequestIndex(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_GC => Packet::TGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_GC => Packet::RGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
@@ -422,24 +422,24 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::RRmItems => {
             send_hdr(w, PACKET_KIND_R_RM_ITEMS, 0)?;
         }
-        Packet::TRequestData(ref v) => {
+        Packet::TRequestMetadata(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_T_REQUEST_DATA, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_METADATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRequestData(ref v) => {
+        Packet::RRequestMetadata(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_R_REQUEST_DATA, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_REQUEST_METADATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TRequestIndex(ref v) => {
+        Packet::RequestData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_T_REQUEST_INDEX, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRequestIndex(ref v) => {
+        Packet::RequestIndex(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_R_REQUEST_INDEX, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_REQUEST_INDEX, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TGc(ref v) => {

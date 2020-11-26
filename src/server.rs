@@ -25,7 +25,7 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.repository_protocol_version != "3" {
+                if req.repository_protocol_version != "4" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.repository_protocol_version
@@ -84,14 +84,21 @@ fn serve_repository(
                 repo.alter_lock_mode(repository::LockMode::Write)?;
                 recv(repo, begin, r, w)?;
             }
-            Packet::TRequestData(req) => {
+            Packet::TRequestMetadata(req) => {
+                if !cfg.allow_get {
+                    anyhow::bail!("server has disabled get for this client")
+                }
+                repo.alter_lock_mode(repository::LockMode::None)?;
+                send_metadata(repo, req.id, w)?;
+            }
+            Packet::RequestData(req) => {
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
                 repo.alter_lock_mode(repository::LockMode::None)?;
                 send(repo, req.id, req.ranges, w)?;
             }
-            Packet::TRequestIndex(req) => {
+            Packet::RequestIndex(req) => {
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
@@ -183,6 +190,31 @@ fn recv(
     Ok(())
 }
 
+fn send_metadata(
+    repo: &mut repository::Repo,
+    id: Xid,
+    w: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    match repo.lookup_item_by_id(&id)? {
+        Some(metadata) => {
+            write_packet(
+                w,
+                &Packet::RRequestMetadata(RRequestMetadata {
+                    metadata: Some(metadata),
+                }),
+            )?;
+            Ok(())
+        }
+        None => {
+            write_packet(
+                w,
+                &Packet::RRequestMetadata(RRequestMetadata { metadata: None }),
+            )?;
+            Ok(())
+        }
+    }
+}
+
 fn send(
     repo: &mut repository::Repo,
     id: Xid,
@@ -190,19 +222,8 @@ fn send(
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
-        Some(metadata) => {
-            write_packet(
-                w,
-                &Packet::RRequestData(RRequestData {
-                    metadata: Some(metadata.clone()),
-                }),
-            )?;
-            metadata
-        }
-        None => {
-            write_packet(w, &Packet::RRequestData(RRequestData { metadata: None }))?;
-            return Ok(());
-        }
+        Some(metadata) => metadata,
+        None => anyhow::bail!("client requested missing item"),
     };
 
     match metadata {
@@ -230,19 +251,8 @@ fn send_index(
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
-        Some(metadata) => {
-            write_packet(
-                w,
-                &Packet::RRequestIndex(RRequestIndex {
-                    metadata: Some(metadata.clone()),
-                }),
-            )?;
-            metadata
-        }
-        None => {
-            write_packet(w, &Packet::RRequestIndex(RRequestIndex { metadata: None }))?;
-            return Ok(());
-        }
+        Some(metadata) => metadata,
+        None => anyhow::bail!("client requested index for missing item"),
     };
 
     match metadata {
@@ -254,6 +264,8 @@ fn send_index(
                     &index_tree.address,
                 );
                 send_htree(repo, &mut tr, w)?;
+            } else {
+                anyhow::bail!("requested item does not have an index");
             }
         }
     }
