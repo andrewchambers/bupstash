@@ -327,9 +327,6 @@ fn send_partial_htree(
     ranges: Vec<index::HTreeDataRange>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    if ranges.is_empty() {
-        anyhow::bail!("malformed tree fetch range, range is empty")
-    }
 
     // The ranges are sent from the client, first validate them.
     for (i, r) in ranges.iter().enumerate() {
@@ -351,7 +348,10 @@ fn send_partial_htree(
     let mut range_idx: usize = 0;
     let mut storage_engine = repo.storage_engine()?;
     let mut current_data_chunk_idx: u64 = 0;
-    let start_chunk_idx = ranges[range_idx].start_idx;
+    let start_chunk_idx = match ranges.get(0) {
+        Some(range) => range.start_idx,
+        None => 0,
+    };
 
     // Use the offset data in the htree to efficiently seek to the first data chunk.
     loop {

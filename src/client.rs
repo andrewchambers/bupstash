@@ -16,6 +16,7 @@ use super::xtar;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
@@ -344,9 +345,9 @@ fn send_chunks(
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
     mut on_chunk: Option<&mut dyn FnMut(&Address)>,
-) -> Result<usize, anyhow::Error> {
+) -> Result<u64, anyhow::Error> {
     let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-    let mut n_written: usize = 0;
+    let mut n_written: u64 = 0;
     loop {
         match data.read(&mut buf) {
             Ok(0) => {
@@ -368,7 +369,7 @@ fn send_chunks(
                     }
                 }
                 ctx.progress.inc(n_read as u64);
-                n_written += n_read;
+                n_written += n_read as u64;
             }
             Err(err) => return Err(err.into()),
         }
@@ -425,6 +426,81 @@ fn likely_smear_error(err: &std::io::Error) -> bool {
     )
 }
 
+cfg_if::cfg_if! {
+    if #[cfg(linux)] {
+
+        fn dev_major(dev: u64) -> u32 {
+            ((dev >> 32) & 0xffff_f000) |
+            ((dev >>  8) & 0x0000_0fff)
+        }
+
+        fn dev_minor(dev: u64) -> u32 {
+            ((dev >> 12) & 0xffff_ff00) |
+            ((dev      ) & 0x0000_00ff)
+        }
+
+    } else {
+
+        fn dev_major(_dev: u64) -> u32 {
+            panic!("unable to get device major number on this platform (file a bug report)");
+        }
+
+        fn dev_minor(_dev: u64) -> u32 {
+            panic!("unable to get device minor number on this platform (file a bug report)");
+        }
+
+    }
+}
+
+fn dir_ent_to_index_ent(
+    full_path: &std::path::PathBuf,
+    short_path: &std::path::PathBuf,
+    metadata: &std::fs::Metadata,
+) -> Result<index::IndexEntry, std::io::Error> {
+    // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
+    // how best to handle this?
+
+    let t = metadata.file_type();
+
+    let (dev_major, dev_minor) = if t.is_block_device() || t.is_block_device() {
+        (dev_major(metadata.rdev()), dev_minor(metadata.rdev()))
+    } else {
+        (0, 0)
+    };
+
+    Ok(index::IndexEntry {
+        path: short_path.to_string_lossy().to_string(),
+        size: serde_bare::Uint(if metadata.is_file() {
+            metadata.size()
+        } else {
+            0
+        }),
+        uid: serde_bare::Uint(metadata.uid() as u64),
+        gid: serde_bare::Uint(metadata.gid() as u64),
+        mode: serde_bare::Uint(metadata.permissions().mode() as u64),
+        ctime: serde_bare::Uint(metadata.ctime() as u64),
+        ctime_nsec: serde_bare::Uint(metadata.ctime_nsec() as u64),
+        mtime: serde_bare::Uint(metadata.mtime() as u64),
+        mtime_nsec: serde_bare::Uint(metadata.mtime_nsec() as u64),
+        link_target: if t.is_symlink() {
+            Some(
+                std::fs::read_link(&full_path)?
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        },
+        dev_major: serde_bare::Uint(dev_major as u64),
+        dev_minor: serde_bare::Uint(dev_minor as u64),
+        xattrs: None,
+        data_chunk_idx: serde_bare::Uint(0),
+        data_chunk_end_idx: serde_bare::Uint(0),
+        data_chunk_offset: serde_bare::Uint(0),
+        data_chunk_end_offset: serde_bare::Uint(0),
+    })
+}
+
 fn send_dir(
     ctx: &mut SendContext,
     sink: &mut dyn htree::Sink,
@@ -448,7 +524,7 @@ fn send_dir(
         let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
         // Incorporate the absolute dir in our cache key.
         hash_state.update(cur_dir.as_os_str().as_bytes());
-        // Null byte marks the end of path and tar headers in the hash space.
+        // Null byte marks the end of path in the hash space.
         hash_state.update(&[0]);
 
         let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
@@ -459,7 +535,7 @@ fn send_dir(
 
         dir_ents.sort_by_key(|a| a.file_name());
 
-        let mut tar_dir_ents = Vec::new();
+        let mut index_ents = Vec::new();
 
         if cur_dir == path {
             let metadata = std::fs::metadata(&path)?;
@@ -469,19 +545,20 @@ fn send_dir(
                     path.display()
                 )));
             }
-            let tar_path = ".".into();
-            let tar_header_bytes = match xtar::dirent_to_tarheader(&metadata, &path, &tar_path) {
-                Ok(hdr) => hdr,
+            let index_path = ".".into();
+
+            let index_ent = match dir_ent_to_index_ent(&path, &index_path, &metadata) {
+                Ok(index_ent) => index_ent,
                 Err(err) if likely_smear_error(&err) => {
                     return Err(SendDirError::FilesystemModified)
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
 
-            hash_state.update(&metadata.ctime().to_le_bytes()[..]);
-            hash_state.update(&metadata.ctime_nsec().to_le_bytes()[..]);
-            hash_state.update(&tar_header_bytes);
-            tar_dir_ents.push((path.clone(), tar_path, metadata, tar_header_bytes));
+            let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
+
+            hash_state.update(&index_bytes);
+            index_ents.push((path.clone(), index_ent));
         }
 
         'collect_dir_ents: for entry in dir_ents {
@@ -500,24 +577,22 @@ fn send_dir(
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
-            let tar_path = ent_path.strip_prefix(&path).unwrap().to_path_buf();
-            let tar_header_bytes = match xtar::dirent_to_tarheader(&metadata, &ent_path, &tar_path)
-            {
-                Ok(hdr) => hdr,
+            let index_path = ent_path.strip_prefix(&path).unwrap().to_path_buf();
+            let index_ent = match dir_ent_to_index_ent(&ent_path, &index_path, &metadata) {
+                Ok(index_ent) => index_ent,
                 Err(err) if likely_smear_error(&err) => {
                     return Err(SendDirError::FilesystemModified)
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
+            let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
 
             if metadata.is_dir() {
                 work_list.push_back(ent_path.clone());
             }
 
-            hash_state.update(&metadata.ctime().to_le_bytes()[..]);
-            hash_state.update(&metadata.ctime_nsec().to_le_bytes()[..]);
-            hash_state.update(&tar_header_bytes);
-            tar_dir_ents.push((ent_path, tar_path, metadata, tar_header_bytes));
+            hash_state.update(&index_bytes);
+            index_ents.push((ent_path, index_ent));
         }
 
         let hash = hash_state.finish();
@@ -547,13 +622,11 @@ fn send_dir(
                 let mut dir_index: Vec<index::VersionedIndexEntry> =
                     serde_bare::from_slice(&cached_index).unwrap();
 
-                for index_entry in dir_index.iter_mut() {
-                    match index_entry {
-                        index::VersionedIndexEntry::V1(ref mut index_entry) => {
-                            index_entry.data_chunk_idx.0 += dir_data_chunk_idx;
-                            index_entry.data_chunk_content_idx.0 += dir_data_chunk_idx;
-                            index_entry.data_chunk_content_end_idx.0 += dir_data_chunk_idx;
-                            index_entry.data_chunk_end_idx.0 += dir_data_chunk_idx;
+                for index_ent in dir_index.iter_mut() {
+                    match index_ent {
+                        index::VersionedIndexEntry::V1(ref mut index_ent) => {
+                            index_ent.data_chunk_idx.0 += dir_data_chunk_idx;
+                            index_ent.data_chunk_end_idx.0 += dir_data_chunk_idx;
                         }
                     }
                     send_chunks(
@@ -561,7 +634,7 @@ fn send_dir(
                         sink,
                         idx_chunker,
                         idx_tw,
-                        &mut std::io::Cursor::new(&serde_bare::to_vec(&index_entry).unwrap()),
+                        &mut std::io::Cursor::new(&serde_bare::to_vec(&index_ent).unwrap()),
                         None,
                     )?;
                 }
@@ -580,33 +653,20 @@ fn send_dir(
                     addresses.extend_from_slice(&addr.bytes[..]);
                 };
 
+                let mut cache_dir_index: Vec<index::VersionedIndexEntry> =
+                    Vec::with_capacity(index_ents.len());
                 let dir_data_chunk_idx = tw.data_chunk_count();
-                let mut dir_index: Vec<index::VersionedIndexEntry> =
-                    Vec::with_capacity(tar_dir_ents.len());
 
-                for (ent_path, tar_path, metadata, header_bytes) in tar_dir_ents.drain(..) {
+                for (ent_path, mut index_ent) in index_ents.drain(..) {
                     ctx.progress.set_message(&ent_path.to_string_lossy());
 
-                    let mut tar_ent_size = header_bytes.len() as u64;
                     let ent_data_chunk_idx = tw.data_chunk_count();
                     let ent_data_chunk_offset = chunker.buffered_count() as u64;
 
-                    total_size += send_chunks(
-                        ctx,
-                        sink,
-                        chunker,
-                        tw,
-                        &mut std::io::Cursor::new(header_bytes),
-                        Some(&mut on_chunk),
-                    )? as u64;
+                    let mut ent_data_chunk_end_idx = ent_data_chunk_idx;
+                    let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
 
-                    let ent_data_chunk_content_idx = tw.data_chunk_count();
-                    let ent_data_chunk_content_offset = chunker.buffered_count() as u64;
-
-                    let mut ent_data_chunk_content_end_idx = ent_data_chunk_content_idx;
-                    let mut ent_data_chunk_content_end_offset = ent_data_chunk_content_offset;
-
-                    if metadata.is_file() {
+                    if index_ent.is_file() && index_ent.size.0 != 0 {
                         let mut f = match std::fs::OpenOptions::new()
                             .read(true)
                             .custom_flags(libc::O_NOATIME)
@@ -633,70 +693,28 @@ fn send_dir(
                         let file_len =
                             send_chunks(ctx, sink, chunker, tw, &mut f, Some(&mut on_chunk))?;
 
-                        tar_ent_size += file_len as u64;
                         total_size += file_len as u64;
 
-                        ent_data_chunk_content_end_idx = tw.data_chunk_count();
-                        ent_data_chunk_content_end_offset = chunker.buffered_count() as u64;
+                        ent_data_chunk_end_idx = tw.data_chunk_count();
+                        ent_data_chunk_end_offset = chunker.buffered_count() as u64;
 
-                        /* Tar entries are rounded to 512 bytes */
-                        let remaining = 512 - (file_len % 512);
-                        if remaining < 512 {
-                            tar_ent_size += remaining as u64;
-                            let buf = [0; 512];
-                            total_size += send_chunks(
-                                ctx,
-                                sink,
-                                chunker,
-                                tw,
-                                &mut std::io::Cursor::new(&buf[..remaining as usize]),
-                                Some(&mut on_chunk),
-                            )? as u64;
-                        }
-
-                        if file_len != metadata.len() as usize {
+                        if file_len != index_ent.size.0 as u64 {
                             return Err(SendDirError::FilesystemModified);
                         }
                     }
 
-                    let ent_data_chunk_end_idx = tw.data_chunk_count();
-                    let ent_data_chunk_end_offset = chunker.buffered_count() as u64;
+                    index_ent.data_chunk_idx =
+                        serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx);
+                    index_ent.data_chunk_end_idx =
+                        serde_bare::Uint(ent_data_chunk_end_idx - dir_data_chunk_idx);
 
-                    let mut index_entry = index::IndexEntry {
-                        path: tar_path.to_string_lossy().to_string(),
-                        mode: serde_bare::Uint(metadata.permissions().mode() as u64),
-                        size: serde_bare::Uint(if metadata.is_file() {
-                            metadata.size()
-                        } else {
-                            0
-                        }),
-                        tar_size: serde_bare::Uint(tar_ent_size as u64),
-                        ctime: serde_bare::Uint(metadata.ctime() as u64),
-                        ctime_nsec: serde_bare::Uint(metadata.ctime_nsec() as u64),
-                        data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
-                        data_chunk_content_idx: serde_bare::Uint(
-                            ent_data_chunk_content_idx - dir_data_chunk_idx,
-                        ),
-                        data_chunk_content_end_idx: serde_bare::Uint(
-                            ent_data_chunk_content_end_idx - dir_data_chunk_idx,
-                        ),
-                        data_chunk_end_idx: serde_bare::Uint(
-                            ent_data_chunk_end_idx - dir_data_chunk_idx,
-                        ),
-                        data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
-                        data_chunk_content_offset: serde_bare::Uint(ent_data_chunk_content_offset),
-                        data_chunk_content_end_offset: serde_bare::Uint(
-                            ent_data_chunk_content_end_offset,
-                        ),
-                        data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
-                    };
+                    index_ent.data_chunk_offset = serde_bare::Uint(ent_data_chunk_offset);
+                    index_ent.data_chunk_end_offset = serde_bare::Uint(ent_data_chunk_end_offset);
 
-                    dir_index.push(index::VersionedIndexEntry::V1(index_entry.clone()));
+                    cache_dir_index.push(index::VersionedIndexEntry::V1(index_ent.clone()));
 
-                    index_entry.data_chunk_idx.0 += dir_data_chunk_idx;
-                    index_entry.data_chunk_content_idx.0 += dir_data_chunk_idx;
-                    index_entry.data_chunk_content_end_idx.0 += dir_data_chunk_idx;
-                    index_entry.data_chunk_end_idx.0 += dir_data_chunk_idx;
+                    index_ent.data_chunk_idx.0 += dir_data_chunk_idx;
+                    index_ent.data_chunk_end_idx.0 += dir_data_chunk_idx;
 
                     send_chunks(
                         ctx,
@@ -704,7 +722,7 @@ fn send_dir(
                         idx_chunker,
                         idx_tw,
                         &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_entry))
+                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_ent))
                                 .unwrap(),
                         ),
                         None,
@@ -730,23 +748,12 @@ fn send_dir(
                             &hash[..],
                             total_size,
                             &addresses,
-                            &serde_bare::to_vec(&dir_index).unwrap(),
+                            &serde_bare::to_vec(&cache_dir_index).unwrap(),
                         )?;
                 }
             }
         }
     }
-
-    // The final entry in a tarball is two null files.
-    let buf = [0; 1024];
-    send_chunks(
-        ctx,
-        sink,
-        chunker,
-        tw,
-        &mut std::io::Cursor::new(&buf[..]),
-        None,
-    )?;
 
     Ok(())
 }
@@ -779,13 +786,14 @@ pub fn request_data_stream(
     id: Xid,
     metadata: &itemset::ItemMetadata,
     pick: Option<index::PickMap>,
+    index: Option<Vec<index::VersionedIndexEntry>>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
     if let Some(ref pick) = pick {
-        if pick.size == 0 {
+        if !pick.is_subtar && pick.data_chunk_ranges.is_empty() {
             return Ok(());
         }
     }
@@ -820,7 +828,12 @@ pub fn request_data_stream(
         None => {
             write_packet(w, &Packet::RequestData(RequestData { id, ranges: None }))?;
 
-            receive_htree(ctx, &hash_key, r, &mut tr, out)?;
+            match index {
+                Some(index) => {
+                    receive_indexed_htree_as_tarball(ctx, &hash_key, r, &mut tr, &index, out)?
+                }
+                None => receive_htree(ctx, &hash_key, r, &mut tr, out)?,
+            }
         }
     }
 
@@ -929,6 +942,107 @@ fn receive_htree(
     Ok(())
 }
 
+fn write_index_as_tarball(
+    read_data: &mut dyn FnMut() -> Result<Option<Vec<u8>>, anyhow::Error>,
+    index: &Vec<index::VersionedIndexEntry>,
+    out: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    let mut buffered = vec![];
+    let mut buffer_index: usize = 0;
+    let mut copy_n = |out: &mut dyn std::io::Write, mut n: u64| -> Result<(), anyhow::Error> {
+        'read: while n != 0 {
+            let mut remaining;
+            loop {
+                remaining = buffered.len() - buffer_index;
+                if remaining != 0 {
+                    break;
+                }
+
+                match read_data()? {
+                    Some(b) => {
+                        buffer_index = 0;
+                        buffered = b;
+                    }
+                    None => {
+                        break 'read;
+                    }
+                }
+            }
+            let write_range =
+                buffer_index..buffer_index + std::cmp::min(remaining as u64, n) as usize;
+            let n_written = out.write(&buffered[write_range])?;
+            buffer_index += n_written;
+            n -= n_written as u64;
+        }
+
+        if n != 0 {
+            anyhow::bail!("data stream corrupt, unexpected end of data");
+        }
+
+        Ok(())
+    };
+
+    for ent in index.iter() {
+        match ent {
+            index::VersionedIndexEntry::V1(ent) => {
+                out.write_all(&xtar::index_entry_to_tarheader(&ent)?)?;
+
+                copy_n(out, ent.size.0)?;
+                /* Tar entries are rounded to 512 bytes */
+                let remaining = 512 - (ent.size.0 % 512);
+                if remaining < 512 {
+                    let buf = [0; 512];
+                    out.write_all(&buf[..remaining as usize])?;
+                }
+            }
+        }
+    }
+
+    let buf = [0; 1024];
+    out.write_all(&buf[..])?;
+
+    out.flush()?;
+    Ok(())
+}
+
+fn receive_indexed_htree_as_tarball(
+    mut ctx: DataRequestContext,
+    hash_key: &crypto::HashKey,
+    r: &mut dyn std::io::Read,
+    tr: &mut htree::TreeReader,
+    index: &Vec<index::VersionedIndexEntry>,
+    out: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
+        while let Some((height, addr)) = tr.next_addr() {
+            if height == 0 {
+                let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::Chunk(chunk) => {
+                        if addr != chunk.address {
+                            return Err(ClientError::CorruptOrTamperedDataError.into());
+                        }
+                        chunk.data
+                    }
+                    _ => anyhow::bail!("protocol error, expected begin chunk packet"),
+                };
+
+                let data = ctx.data_dctx.decrypt_data(data)?;
+                if addr != crypto::keyed_content_address(&data, &hash_key) {
+                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                }
+                return Ok(Some(data));
+            } else {
+                let data = receive_and_authenticate_htree_chunk(r, addr)?;
+                tr.push_level(height - 1, data)?;
+            }
+        }
+
+        Ok(None)
+    };
+
+    write_index_as_tarball(&mut read_data, index, out)
+}
+
 fn receive_partial_htree(
     mut ctx: DataRequestContext,
     hash_key: &crypto::HashKey,
@@ -937,7 +1051,6 @@ fn receive_partial_htree(
     pick: index::PickMap,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    let mut n_written: u64 = 0;
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
 
@@ -945,7 +1058,10 @@ fn receive_partial_htree(
     // on the server side, only the chunks are coming from the remote.
     // We must also verify all the chunk addresses match what we expect.
 
-    let start_chunk_idx = pick.data_chunk_ranges[0].start_idx;
+    let start_chunk_idx = match pick.data_chunk_ranges.get(0) {
+        Some(range) => range.start_idx,
+        None => 0,
+    };
 
     loop {
         let height = match tr.current_height() {
@@ -977,18 +1093,17 @@ fn receive_partial_htree(
 
     if current_data_chunk_idx != start_chunk_idx {
         anyhow::bail!("htree is corrupt, seek went too far");
-    }
+    };
 
-    loop {
-        match tr.current_height() {
-            Some(0) => {
-                let mut chunk_address = Address::default();
-                let level_chunk = tr.pop_level().unwrap();
-                for ent_slice in level_chunk.chunks(8 + ADDRESS_SZ) {
-                    let address_slice = &ent_slice[8..];
+    let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
+        loop {
+            match tr.current_height() {
+                Some(0) => {
+                    let (_, chunk_address) = tr.next_addr().unwrap();
+
                     match pick.data_chunk_ranges.get(range_idx) {
                         Some(current_range) => {
-                            chunk_address.bytes.clone_from_slice(&address_slice);
+                            let mut to_output = None;
 
                             if current_data_chunk_idx >= current_range.start_idx
                                 && current_data_chunk_idx <= current_range.end_idx
@@ -996,9 +1111,7 @@ fn receive_partial_htree(
                                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                                     Packet::Chunk(chunk) => {
                                         if chunk_address != chunk.address {
-                                            return Err(
-                                                ClientError::CorruptOrTamperedDataError.into()
-                                            );
+                                            return Err(ClientError::CorruptOrTamperedDataError.into());
                                         }
                                         chunk.data
                                     }
@@ -1006,23 +1119,25 @@ fn receive_partial_htree(
                                 };
 
                                 let data = ctx.data_dctx.decrypt_data(data)?;
-                                if chunk_address != crypto::keyed_content_address(&data, &hash_key)
-                                {
+                                if chunk_address != crypto::keyed_content_address(&data, &hash_key) {
                                     return Err(ClientError::CorruptOrTamperedDataError.into());
                                 }
 
                                 match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
                                     Some(ranges) => {
+                                        let mut filtered_data = Vec::with_capacity(data.len() / 2);
+
                                         for range in ranges.iter() {
-                                            let data = &data
-                                                [range.start..std::cmp::min(data.len(), range.end)];
-                                            n_written += data.len() as u64;
-                                            out.write_all(data)?;
+                                            filtered_data.extend_from_slice(
+                                                &data
+                                                    [range.start..std::cmp::min(data.len(), range.end)],
+                                            );
                                         }
+
+                                        to_output = Some(filtered_data);
                                     }
                                     None => {
-                                        n_written += data.len() as u64;
-                                        out.write_all(&data)?;
+                                        to_output = Some(data);
                                     }
                                 }
                             }
@@ -1031,31 +1146,36 @@ fn receive_partial_htree(
                             if current_data_chunk_idx > current_range.end_idx {
                                 range_idx += 1;
                             }
+
+                            if to_output.is_some() {
+                                return Ok(to_output)
+                            }
                         }
                         None => break,
                     }
                 }
+                Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
+                    Some((height, address)) => {
+                        let data = receive_and_authenticate_htree_chunk(r, address)?;
+                        tr.push_level(height - 1, data)?;
+                    }
+                    None => break,
+                },
+                _ => break,
             }
-            Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
-                Some((height, address)) => {
-                    let data = receive_and_authenticate_htree_chunk(r, address)?;
-                    tr.push_level(height - 1, data)?;
-                }
-                None => break,
-            },
-            _ => break,
+        }
+
+        Ok(None)
+    };
+
+    if pick.is_subtar {
+        write_index_as_tarball(&mut read_data, &pick.index, out)?;
+    } else {
+        while let Some(data) = read_data()? {
+            out.write_all(&data)?;
         }
     }
 
-    debug_assert!(n_written == pick.size);
-
-    if pick.is_subtar {
-        // The final entry in a tarball is two null files.
-        let buf = [0; 1024];
-        out.write_all(&buf[..])?;
-    }
-
-    out.flush()?;
     Ok(())
 }
 

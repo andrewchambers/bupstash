@@ -942,7 +942,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         itemset::VersionedItemMetadata::V1(metadata) => metadata,
     };
 
-    let content_index = if metadata.plain_text_metadata.index_tree.is_some() {
+    let mut content_index = if metadata.plain_text_metadata.index_tree.is_some() {
         Some(client::request_index(
             client::DataRequestContext {
                 primary_key_id,
@@ -962,7 +962,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let pick = if matches.opt_present("pick") {
         progress.set_message("fetching content index...");
 
-        if let Some(content_index) = content_index {
+        if let Some(ref content_index) = content_index {
             Some(index::pick(
                 &matches.opt_str("pick").unwrap(),
                 &content_index,
@@ -973,6 +973,11 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+
+    // The pick contains a sub-index, explicitly drop the content index.
+    if pick.is_some() {
+        content_index = None;
+    }
 
     progress.finish_and_clear();
 
@@ -986,6 +991,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         id,
         &metadata,
         pick,
+        content_index,
         &mut serve_out,
         &mut serve_in,
         &mut std::io::stdout().lock(),

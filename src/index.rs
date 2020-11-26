@@ -22,16 +22,19 @@ pub struct IndexEntry {
     pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
-    pub tar_size: serde_bare::Uint,
+    pub uid: serde_bare::Uint,
+    pub gid: serde_bare::Uint,
+    pub mtime: serde_bare::Uint,
+    pub mtime_nsec: serde_bare::Uint,
     pub ctime: serde_bare::Uint,
     pub ctime_nsec: serde_bare::Uint,
+    pub link_target: Option<String>,
+    pub dev_major: serde_bare::Uint,
+    pub dev_minor: serde_bare::Uint,
+    pub xattrs: Option<std::collections::BTreeMap<String, String>>,
     pub data_chunk_idx: serde_bare::Uint,
-    pub data_chunk_content_idx: serde_bare::Uint,
-    pub data_chunk_content_end_idx: serde_bare::Uint,
     pub data_chunk_end_idx: serde_bare::Uint,
     pub data_chunk_offset: serde_bare::Uint,
-    pub data_chunk_content_offset: serde_bare::Uint,
-    pub data_chunk_content_end_offset: serde_bare::Uint,
     pub data_chunk_end_offset: serde_bare::Uint,
 }
 
@@ -45,6 +48,13 @@ impl IndexEntry {
             libc::S_IFDIR => IndexEntryKind::Directory,
             libc::S_IFIFO => IndexEntryKind::Fifo,
             _ => IndexEntryKind::Other,
+        }
+    }
+
+    pub fn is_file(&self) -> bool {
+        match self.mode.0 as libc::mode_t & libc::S_IFMT {
+            libc::S_IFREG => true,
+            _ => false,
         }
     }
 
@@ -140,9 +150,9 @@ pub struct HTreeDataRange {
 
 pub struct PickMap {
     pub is_subtar: bool,
-    pub size: u64,
     pub data_chunk_ranges: Vec<HTreeDataRange>,
     pub incomplete_data_chunks: std::collections::HashMap<u64, rangemap::RangeSet<usize>>,
+    pub index: Vec<VersionedIndexEntry>,
 }
 
 pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow::Error> {
@@ -161,12 +171,12 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                     format!("{}/", ent.path)
                 };
 
-                let mut size = 0;
                 let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
                 let mut incomplete_data_chunks: std::collections::HashMap<
                     u64,
                     rangemap::RangeSet<usize>,
                 > = std::collections::HashMap::new();
+                let mut sub_index = vec![];
 
                 for (j, VersionedIndexEntry::V1(ref ent)) in index.iter().enumerate().skip(i) {
                     // Match the directory and its children.
@@ -174,7 +184,11 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                         continue;
                     }
 
-                    size += ent.tar_size.0;
+                    sub_index.push(index[j].clone());
+
+                    if ent.size.0 == 0 {
+                        continue;
+                    }
 
                     // Either coalesce the existing range or insert a new range.
                     if !data_chunk_ranges.is_empty()
@@ -237,9 +251,9 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
 
                 return Ok(PickMap {
                     is_subtar: true,
-                    size,
                     data_chunk_ranges,
                     incomplete_data_chunks,
+                    index: sub_index,
                 });
             }
             IndexEntryKind::Regular => {
@@ -248,35 +262,33 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                 if ent.size.0 == 0 {
                     return Ok(PickMap {
                         is_subtar: false,
-                        size: 0,
                         data_chunk_ranges: vec![],
+                        index: vec![index[i].clone()],
                         incomplete_data_chunks,
                     });
                 }
 
                 let mut range_adjust = 0;
 
-                if ent.data_chunk_content_idx == ent.data_chunk_content_end_idx {
+                if ent.data_chunk_idx == ent.data_chunk_end_idx {
                     let mut range_set = rangemap::RangeSet::new();
 
                     range_set.insert(
-                        ent.data_chunk_content_offset.0 as usize
-                            ..ent.data_chunk_content_end_offset.0 as usize,
+                        ent.data_chunk_offset.0 as usize..ent.data_chunk_end_offset.0 as usize,
                     );
 
-                    incomplete_data_chunks.insert(ent.data_chunk_content_idx.0, range_set);
+                    incomplete_data_chunks.insert(ent.data_chunk_idx.0, range_set);
                 } else {
                     let mut start_range_set = rangemap::RangeSet::new();
-                    start_range_set.insert(ent.data_chunk_content_offset.0 as usize..usize::MAX);
+                    start_range_set.insert(ent.data_chunk_offset.0 as usize..usize::MAX);
 
-                    incomplete_data_chunks.insert(ent.data_chunk_content_idx.0, start_range_set);
+                    incomplete_data_chunks.insert(ent.data_chunk_idx.0, start_range_set);
 
-                    if ent.data_chunk_content_end_offset.0 != 0 {
+                    if ent.data_chunk_end_offset.0 != 0 {
                         let mut end_range_set = rangemap::RangeSet::new();
-                        end_range_set.insert(0..ent.data_chunk_content_end_offset.0 as usize);
+                        end_range_set.insert(0..ent.data_chunk_end_offset.0 as usize);
 
-                        incomplete_data_chunks
-                            .insert(ent.data_chunk_content_end_idx.0, end_range_set);
+                        incomplete_data_chunks.insert(ent.data_chunk_end_idx.0, end_range_set);
                     } else {
                         range_adjust = 1;
                     }
@@ -284,12 +296,12 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
 
                 return Ok(PickMap {
                     is_subtar: false,
-                    size: ent.size.0,
                     data_chunk_ranges: vec![HTreeDataRange {
-                        start_idx: ent.data_chunk_content_idx.0,
-                        end_idx: ent.data_chunk_content_end_idx.0 - range_adjust,
+                        start_idx: ent.data_chunk_idx.0,
+                        end_idx: ent.data_chunk_end_idx.0 - range_adjust,
                     }],
                     incomplete_data_chunks,
+                    index: vec![index[i].clone()],
                 });
             }
             kind => anyhow::bail!(
