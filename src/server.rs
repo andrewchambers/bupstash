@@ -229,8 +229,8 @@ fn send(
     match metadata {
         itemset::VersionedItemMetadata::V1(metadata) => {
             let mut tr = htree::TreeReader::new(
-                metadata.plain_text_metadata.data_tree.height.try_into()?,
-                metadata.plain_text_metadata.data_tree.data_chunk_count,
+                metadata.plain_text_metadata.data_tree.height.0.try_into()?,
+                metadata.plain_text_metadata.data_tree.data_chunk_count.0,
                 &metadata.plain_text_metadata.data_tree.address,
             );
 
@@ -259,8 +259,8 @@ fn send_index(
         itemset::VersionedItemMetadata::V1(metadata) => {
             if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
                 let mut tr = htree::TreeReader::new(
-                    index_tree.height.try_into()?,
-                    index_tree.data_chunk_count,
+                    index_tree.height.0.try_into()?,
+                    index_tree.data_chunk_count.0,
                     &index_tree.address,
                 );
                 send_htree(repo, &mut tr, w)?;
@@ -327,7 +327,6 @@ fn send_partial_htree(
     ranges: Vec<index::HTreeDataRange>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-
     // The ranges are sent from the client, first validate them.
     for (i, r) in ranges.iter().enumerate() {
         if r.start_idx > r.end_idx {

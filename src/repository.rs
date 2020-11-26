@@ -515,8 +515,8 @@ impl Repo {
 
                 for tree in trees {
                     let mut tr = htree::TreeReader::new(
-                        tree.height.try_into()?,
-                        tree.data_chunk_count,
+                        tree.height.0.try_into()?,
+                        tree.data_chunk_count.0,
                         &tree.address,
                     );
                     while let Some((height, addr)) = tr.next_addr() {

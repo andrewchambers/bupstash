@@ -256,8 +256,8 @@ pub fn send(
                             idx_tw.finish(&mut sink)?;
 
                         index_tree = Some(itemset::HTreeMetadata {
-                            height: idx_tree_height as u64,
-                            data_chunk_count: idx_tree_data_chunk_count,
+                            height: serde_bare::Uint(idx_tree_height as u64),
+                            data_chunk_count: serde_bare::Uint(idx_tree_data_chunk_count),
                             address: idx_address,
                         });
                     }
@@ -294,8 +294,8 @@ pub fn send(
         let plain_text_metadata = itemset::PlainTextItemMetadata {
             primary_key_id: ctx.primary_key_id,
             data_tree: itemset::HTreeMetadata {
-                height: data_tree_height as u64,
-                data_chunk_count: data_tree_data_chunk_count,
+                height: serde_bare::Uint(data_tree_height as u64),
+                data_chunk_count: serde_bare::Uint(data_tree_data_chunk_count),
                 address: data_tree_address,
             },
             index_tree,
@@ -809,8 +809,8 @@ pub fn request_data_stream(
         crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
 
     let mut tr = htree::TreeReader::new(
-        plain_text_metadata.data_tree.height.try_into()?,
-        plain_text_metadata.data_tree.data_chunk_count,
+        plain_text_metadata.data_tree.height.0.try_into()?,
+        plain_text_metadata.data_tree.data_chunk_count.0,
         &plain_text_metadata.data_tree.address,
     );
 
@@ -864,8 +864,8 @@ pub fn request_index(
     };
 
     let mut tr = htree::TreeReader::new(
-        index_tree.height.try_into()?,
-        index_tree.data_chunk_count,
+        index_tree.height.0.try_into()?,
+        index_tree.data_chunk_count.0,
         &index_tree.address,
     );
 
@@ -1111,7 +1111,9 @@ fn receive_partial_htree(
                                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                                     Packet::Chunk(chunk) => {
                                         if chunk_address != chunk.address {
-                                            return Err(ClientError::CorruptOrTamperedDataError.into());
+                                            return Err(
+                                                ClientError::CorruptOrTamperedDataError.into()
+                                            );
                                         }
                                         chunk.data
                                     }
@@ -1119,7 +1121,8 @@ fn receive_partial_htree(
                                 };
 
                                 let data = ctx.data_dctx.decrypt_data(data)?;
-                                if chunk_address != crypto::keyed_content_address(&data, &hash_key) {
+                                if chunk_address != crypto::keyed_content_address(&data, &hash_key)
+                                {
                                     return Err(ClientError::CorruptOrTamperedDataError.into());
                                 }
 
@@ -1129,8 +1132,8 @@ fn receive_partial_htree(
 
                                         for range in ranges.iter() {
                                             filtered_data.extend_from_slice(
-                                                &data
-                                                    [range.start..std::cmp::min(data.len(), range.end)],
+                                                &data[range.start
+                                                    ..std::cmp::min(data.len(), range.end)],
                                             );
                                         }
 
@@ -1148,19 +1151,21 @@ fn receive_partial_htree(
                             }
 
                             if to_output.is_some() {
-                                return Ok(to_output)
+                                return Ok(to_output);
                             }
                         }
                         None => break,
                     }
                 }
-                Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => match tr.next_addr() {
-                    Some((height, address)) => {
-                        let data = receive_and_authenticate_htree_chunk(r, address)?;
-                        tr.push_level(height - 1, data)?;
+                Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => {
+                    match tr.next_addr() {
+                        Some((height, address)) => {
+                            let data = receive_and_authenticate_htree_chunk(r, address)?;
+                            tr.push_level(height - 1, data)?;
+                        }
+                        None => break,
                     }
-                    None => break,
-                },
+                }
                 _ => break,
             }
         }
