@@ -3,6 +3,7 @@ pub const CHUNK_MASK: u32 = 0x000f_ffff;
 pub const WINDOW_SIZE: usize = 64;
 
 // An implementation of 'gear hash'.
+#[derive(Copy, Clone)]
 pub struct Rollsum {
     h: u64,
 }
