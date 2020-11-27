@@ -25,7 +25,6 @@ use std::os::unix::io::AsRawFd;
 // XXX TODO these chunk parameters need to be investigated and tuned.
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
 pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
-pub const CHUNK_MASK: u32 = 0x000f_ffff;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -193,14 +192,9 @@ pub fn send(
 
         let min_size = CHUNK_MIN_SIZE;
         let max_size = CHUNK_MAX_SIZE;
-        let chunk_mask = CHUNK_MASK;
 
-        let mut chunker = chunker::RollsumChunker::new(
-            rollsum::Rollsum::new_with_chunk_mask(chunk_mask),
-            min_size,
-            max_size,
-        );
-        let mut tw = htree::TreeWriter::new(max_size, chunk_mask);
+        let mut chunker = chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
+        let mut tw = htree::TreeWriter::new(max_size);
 
         match data {
             DataSource::Subprocess(args) => {
@@ -229,12 +223,9 @@ pub fn send(
                 send_chunks(ctx, &mut sink, &mut chunker, &mut tw, data, None)?;
             }
             DataSource::Directory { path, exclusions } => {
-                let mut idx_chunker = chunker::RollsumChunker::new(
-                    rollsum::Rollsum::new_with_chunk_mask(chunk_mask),
-                    min_size,
-                    max_size,
-                );
-                let mut idx_tw = htree::TreeWriter::new(max_size, chunk_mask);
+                let mut idx_chunker =
+                    chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
+                let mut idx_tw = htree::TreeWriter::new(max_size);
 
                 match send_dir(
                     ctx,

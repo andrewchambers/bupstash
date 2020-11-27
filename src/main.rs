@@ -1445,21 +1445,19 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let min_size = client::CHUNK_MIN_SIZE;
     let max_size = client::CHUNK_MAX_SIZE;
-    let chunk_mask = client::CHUNK_MASK;
 
-    let mut chunker = chunker::RollsumChunker::new(
-        rollsum::Rollsum::new_with_chunk_mask(chunk_mask),
-        min_size,
-        max_size,
-    );
+    let mut chunker = chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
 
-    let mut buf = vec![0; 1024*1024];
+    let mut buf = vec![0; 1024 * 1024];
 
     let (pk, _) = crypto::box_keypair();
     let psk = crypto::BoxPreSharedKey::new();
     let mut ectx = crypto::EncryptionContext::new(&pk, &psk);
 
-    let hk = crypto::derive_hash_key(&crypto::PartialHashKey::new(), &crypto::PartialHashKey::new());
+    let hk = crypto::derive_hash_key(
+        &crypto::PartialHashKey::new(),
+        &crypto::PartialHashKey::new(),
+    );
 
     let inf = std::io::stdin();
     let mut inf = inf.lock();
@@ -1513,12 +1511,10 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
             }
         }
 
-            if do_chunking {
-        process_data(chunker.finish())?;
+        if do_chunking {
+            process_data(chunker.finish())?;
+        }
     }
-
-    }
-
 
     outf.flush()?;
 

@@ -45,7 +45,6 @@ impl Source for HashMap<Address, Vec<u8>> {
 pub struct TreeWriter {
     max_addr_chunk_size: usize,
     tree_blocks: Vec<Vec<u8>>,
-    chunk_mask: u32,
     rollsums: Vec<rollsum::Rollsum>,
     data_chunk_count: u64,
 }
@@ -57,10 +56,9 @@ pub fn tree_block_address(data: &[u8]) -> Address {
 }
 
 impl TreeWriter {
-    pub fn new(max_addr_chunk_size: usize, chunk_mask: u32) -> TreeWriter {
+    pub fn new(max_addr_chunk_size: usize) -> TreeWriter {
         assert!(max_addr_chunk_size >= MINIMUM_ADDR_CHUNK_SIZE);
         TreeWriter {
-            chunk_mask,
             max_addr_chunk_size,
             tree_blocks: Vec::new(),
             rollsums: Vec::new(),
@@ -99,8 +97,7 @@ impl TreeWriter {
 
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
-            self.rollsums
-                .push(rollsum::Rollsum::new_with_chunk_mask(self.chunk_mask));
+            self.rollsums.push(rollsum::Rollsum::new());
         }
 
         self.tree_blocks[level].extend(&leaf_count.to_le_bytes());
@@ -264,6 +261,7 @@ impl TreeReader {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,3 +455,4 @@ mod tests {
         assert_eq!(n_data, leaf_count);
     }
 }
+*/
