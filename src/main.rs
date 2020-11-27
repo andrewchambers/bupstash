@@ -1446,7 +1446,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let min_size = client::CHUNK_MIN_SIZE;
     let max_size = client::CHUNK_MAX_SIZE;
 
-    let mut chunker = chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
+    let mut chunker = chunker::RollsumChunker::new(min_size, max_size);
 
     let mut buf = vec![0; 1024 * 1024];
 

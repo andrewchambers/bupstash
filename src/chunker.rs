@@ -9,7 +9,7 @@ pub struct RollsumChunker {
 }
 
 impl RollsumChunker {
-    pub fn new(mut rs: Rollsum, mut min_sz: usize, mut max_sz: usize) -> RollsumChunker {
+    pub fn new(mut min_sz: usize, mut max_sz: usize) -> RollsumChunker {
         if min_sz == 0 {
             min_sz = 1
         }
@@ -17,9 +17,8 @@ impl RollsumChunker {
             max_sz = min_sz
         }
         let default_chunk_capacity = max_sz / 2;
-        rs.reset();
         RollsumChunker {
-            rs,
+            rs: Rollsum::new(),
             min_sz,
             max_sz,
             default_chunk_capacity,
@@ -128,8 +127,7 @@ mod tests {
 
     #[test]
     fn test_add_bytes() {
-        let rs = Rollsum::new();
-        let mut ch = RollsumChunker::new(rs, 1, 2);
+        let mut ch = RollsumChunker::new(1, 2);
 
         match ch.add_bytes(b"a") {
             (1, None) => (),
@@ -151,8 +149,7 @@ mod tests {
 
     #[test]
     fn test_force_split_bytes() {
-        let rs = Rollsum::new();
-        let mut ch = RollsumChunker::new(rs, 10, 100);
+        let mut ch = RollsumChunker::new(10, 100);
         assert_eq!(ch.force_split(), None);
         ch.add_bytes(b"abc");
 

@@ -9,7 +9,6 @@ use super::itemset;
 use super::protocol::*;
 use super::querycache;
 use super::repository;
-use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
@@ -193,7 +192,7 @@ pub fn send(
         let min_size = CHUNK_MIN_SIZE;
         let max_size = CHUNK_MAX_SIZE;
 
-        let mut chunker = chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
+        let mut chunker = chunker::RollsumChunker::new(min_size, max_size);
         let mut tw = htree::TreeWriter::new(max_size);
 
         match data {
@@ -223,8 +222,7 @@ pub fn send(
                 send_chunks(ctx, &mut sink, &mut chunker, &mut tw, data, None)?;
             }
             DataSource::Directory { path, exclusions } => {
-                let mut idx_chunker =
-                    chunker::RollsumChunker::new(rollsum::Rollsum::new(), min_size, max_size);
+                let mut idx_chunker = chunker::RollsumChunker::new(min_size, max_size);
                 let mut idx_tw = htree::TreeWriter::new(max_size);
 
                 match send_dir(

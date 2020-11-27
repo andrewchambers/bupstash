@@ -1,4 +1,3 @@
-
 pub const WINDOW_SIZE: usize = 64;
 
 // An implementation of 'gear hash'.
