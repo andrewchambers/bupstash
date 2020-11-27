@@ -429,7 +429,7 @@ mod tests {
         let mut ectx1 = EncryptionContext::new(&pk, &psk);
         let mut ectx2 = EncryptionContext::new(&pk, &psk);
         let ct1 = ectx1.encrypt_data(pt1.clone(), compression::Scheme::None);
-        let ct2 = ectx2.encrypt_data(pt1.clone(), compression::Scheme::Zstd);
+        let ct2 = ectx2.encrypt_data(pt1.clone(), compression::Scheme::Lz4);
         let mut dctx = DecryptionContext::new(sk, psk);
         let pt2 = dctx.decrypt_data(ct1).unwrap();
         let pt3 = dctx.decrypt_data(ct2).unwrap();

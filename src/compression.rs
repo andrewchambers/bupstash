@@ -1,12 +1,12 @@
 pub const COMPRESS_FOOTER_NO_COMPRESSION: u8 = 0;
-pub const COMPRESS_FOOTER_ZSTD_COMPRESSED: u8 = 1;
+pub const COMPRESS_FOOTER_LZ4_COMPRESSED: u8 = 1;
 
 pub const COMPRESS_MAX_SIZE: usize = 67108864;
 
 #[derive(Clone, Copy)]
 pub enum Scheme {
     None,
-    Zstd,
+    Lz4,
 }
 
 fn noop_compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
@@ -14,10 +14,10 @@ fn noop_compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
     data
 }
 
-fn zstd_compress_chunk(data: Vec<u8>) -> Vec<u8> {
+fn lz4_compress_chunk(data: Vec<u8>) -> Vec<u8> {
     // Our max chunk and packet sizes means this should never happen.
     assert!(data.len() <= COMPRESS_MAX_SIZE);
-    let mut compressed_data = zstd::block::compress(&data, 0).unwrap();
+    let mut compressed_data = lz4::block::compress(&data, None, false).unwrap();
     if (compressed_data.len() + 4) >= data.len() {
         noop_compress_chunk(data)
     } else {
@@ -27,7 +27,7 @@ fn zstd_compress_chunk(data: Vec<u8>) -> Vec<u8> {
         compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
         compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
         compressed_data.push(((sz & 0xff000000) >> 24) as u8);
-        compressed_data.push(COMPRESS_FOOTER_ZSTD_COMPRESSED);
+        compressed_data.push(COMPRESS_FOOTER_LZ4_COMPRESSED);
         compressed_data
     }
 }
@@ -35,7 +35,7 @@ fn zstd_compress_chunk(data: Vec<u8>) -> Vec<u8> {
 pub fn compress(scheme: Scheme, data: Vec<u8>) -> Vec<u8> {
     match scheme {
         Scheme::None => noop_compress_chunk(data),
-        Scheme::Zstd => zstd_compress_chunk(data),
+        Scheme::Lz4 => lz4_compress_chunk(data),
     }
 }
 
@@ -49,7 +49,7 @@ pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
             data.pop();
             data
         }
-        footer if footer == COMPRESS_FOOTER_ZSTD_COMPRESSED => {
+        footer if footer == COMPRESS_FOOTER_LZ4_COMPRESSED => {
             data.pop();
             if data.len() < 4 {
                 anyhow::bail!("data corrupt - zstd data footer missing decompressed size");
@@ -65,7 +65,7 @@ pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
                 anyhow::bail!("data corrupt - decompressed size is larger than application limits");
             }
             data.truncate(data.len() - 4);
-            zstd::block::decompress(&data, decompressed_sz)?
+            lz4::block::decompress(&data, Some(decompressed_sz as i32))?
         }
         _ => anyhow::bail!("unknown compression type in footer"),
     };

@@ -261,7 +261,6 @@ impl TreeReader {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,8 +269,7 @@ mod tests {
     fn test_write_no_level() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
-        // Split mask is almost never successful.
-        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE);
         let addr = Address::from_bytes(&[1; ADDRESS_SZ]);
         tw.add(&mut chunks, &addr, vec![1, 2, 3]).unwrap();
         let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
@@ -287,7 +285,7 @@ mod tests {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
         // Split mask is almost never successful.
-        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE);
 
         tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -310,8 +308,7 @@ mod tests {
     fn test_write_shape_two_levels() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Chunks that can only fit two addresses.
-        // Split mask always is almost never successful.
-        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+        let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE);
 
         tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -341,8 +338,7 @@ mod tests {
     fn test_write_shape_single_level_content_split() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         // Allow large chunks.
-        // Split mask that is always successful.
-        let mut tw = TreeWriter::new(SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
+        let mut tw = TreeWriter::new(SENSIBLE_ADDR_MAX_CHUNK_SIZE);
 
         tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
             .unwrap();
@@ -362,37 +358,6 @@ mod tests {
     }
 
     #[test]
-    fn test_write_shape_two_levels_content_split() {
-        let mut chunks = HashMap::<Address, Vec<u8>>::new();
-        // Allow large chunks.
-        // Split mask that is always successful.
-        let mut tw = TreeWriter::new(SENSIBLE_ADDR_MAX_CHUNK_SIZE, 0);
-
-        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-            .unwrap();
-        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-            .unwrap();
-        tw.add(
-            &mut chunks,
-            &Address::from_bytes(&[3; ADDRESS_SZ]),
-            vec![1, 2, 3],
-        )
-        .unwrap();
-
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
-
-        // root = [address1 .. address2]
-        // address1 = [chunk0 .. chunk1]
-        // address2 = [chunk3 ]
-        // chunk0, chunk1, chunk3
-        assert_eq!(n_data, 3);
-        assert_eq!(chunks.len(), 6);
-        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
-        let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
-        assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
-    }
-
-    #[test]
     fn test_tree_reader_walk() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
         let height: usize;
@@ -402,7 +367,7 @@ mod tests {
         {
             // Chunks that can only fit two addresses.
             // Split mask is never successful.
-            let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, 0xffffffff);
+            let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE);
             tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
                 .unwrap();
             tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
@@ -455,4 +420,3 @@ mod tests {
         assert_eq!(n_data, leaf_count);
     }
 }
-*/

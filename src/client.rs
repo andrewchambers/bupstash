@@ -312,7 +312,7 @@ pub fn send(
                     plain_text_metadata,
                     encrypted_metadata: ctx
                         .metadata_ectx
-                        .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Zstd),
+                        .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Lz4),
                 }),
             }),
         )?;

@@ -688,7 +688,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let compression = if matches.opt_present("no-compression") {
         compression::Scheme::None
     } else {
-        compression::Scheme::Zstd
+        compression::Scheme::Lz4
     };
 
     let use_stat_cache = !matches.opt_present("no-stat-caching");
@@ -1468,7 +1468,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         let mut process_data = move |mut data| -> Result<(), anyhow::Error> {
             if do_compress {
-                data = compression::compress(compression::Scheme::Zstd, data);
+                data = compression::compress(compression::Scheme::Lz4, data);
             }
 
             if do_address {
