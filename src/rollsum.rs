@@ -1,5 +1,7 @@
 // Should we tune this mask more?
-pub const CHUNK_MASK: u32 = 0x000f_ffff;
+// The chunk mask uses the upper bits, as that has influence from
+// the whole chunk window, where the bottom bits do not.
+pub const CHUNK_MASK: u32 = 0xffff_f000;
 pub const WINDOW_SIZE: usize = 64;
 
 // An implementation of 'gear hash'.
@@ -23,8 +25,7 @@ impl Rollsum {
     #[inline(always)]
     pub fn roll_byte(&mut self, newch: u8) -> bool {
         let mut h = self.h;
-        // The << 1 rolls out previous values after
-        // 64 splits.
+        // The << 1 rolls out previous values after 64 shifts.
         let gv = unsafe { *GEAR_TAB.get_unchecked(newch as usize) };
         h = (h << 1).wrapping_add(gv);
         self.h = h;
