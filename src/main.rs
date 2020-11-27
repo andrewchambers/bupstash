@@ -26,7 +26,7 @@ pub mod xid;
 pub mod xtar;
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 fn die(s: String) -> ! {
     eprintln!("{}", s);
@@ -65,6 +65,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
+        "put-benchmark" => "put-benchmark tool.",
         _ => panic!(),
     };
     let _ = std::io::stdout().write_all(opts.usage(brief).as_bytes());
@@ -1426,6 +1427,104 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    opts.optflag("", "chunk", "Do rollsum chunking.");
+    opts.optflag("", "compress", "Compress chunks.");
+    opts.optflag("", "address", "Compute chunk content addresses.");
+    opts.optflag("", "encrypt", "Encrypt chunks.");
+    opts.optflag("", "print", "Print data to stdout.");
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let do_chunking = matches.opt_present("chunk");
+    let do_compress = matches.opt_present("compress");
+    let do_address = matches.opt_present("address");
+    let do_encrypt = matches.opt_present("encrypt");
+    let do_print = matches.opt_present("print");
+
+    let min_size = client::CHUNK_MIN_SIZE;
+    let max_size = client::CHUNK_MAX_SIZE;
+    let chunk_mask = client::CHUNK_MASK;
+
+    let mut chunker = chunker::RollsumChunker::new(
+        rollsum::Rollsum::new_with_chunk_mask(chunk_mask),
+        min_size,
+        max_size,
+    );
+
+    let mut buf = vec![0; 1024*1024];
+
+    let (pk, _) = crypto::box_keypair();
+    let psk = crypto::BoxPreSharedKey::new();
+    let mut ectx = crypto::EncryptionContext::new(&pk, &psk);
+
+    let hk = crypto::derive_hash_key(&crypto::PartialHashKey::new(), &crypto::PartialHashKey::new());
+
+    let inf = std::io::stdin();
+    let mut inf = inf.lock();
+
+    let mut outf = std::io::stdout();
+    {
+        let mut outf = outf.lock();
+
+        let mut process_data = move |mut data| -> Result<(), anyhow::Error> {
+            if do_compress {
+                data = compression::compress(compression::Scheme::Zstd, data);
+            }
+
+            if do_address {
+                let address = crypto::keyed_content_address(&data, &hk);
+                // use address to ensure compiler can't eliminate it.
+                if address.bytes[0] == 0 {
+                    data[0] = 0;
+                }
+            }
+
+            if do_encrypt {
+                data = ectx.encrypt_data(data, compression::Scheme::None);
+            }
+
+            if do_print {
+                outf.write_all(&data)?;
+            }
+
+            Ok(())
+        };
+
+        loop {
+            match inf.read(&mut buf)? {
+                0 => break,
+                n_read => {
+                    if do_chunking {
+                        let mut tot_n_chunked: usize = 0;
+                        while tot_n_chunked != n_read {
+                            let (n_chunked, data) = chunker.add_bytes(&buf[tot_n_chunked..n_read]);
+                            tot_n_chunked += n_chunked;
+
+                            if let Some(data) = data {
+                                process_data(data)?;
+                            }
+                        }
+                    } else {
+                        process_data(buf[0..n_read].to_vec())?;
+                    }
+                }
+            }
+        }
+
+            if do_chunking {
+        process_data(chunker.finish())?;
+    }
+
+    }
+
+
+    outf.flush()?;
+
+    Ok(())
+}
+
 fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag(
@@ -1526,6 +1625,7 @@ fn main() {
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
         "restore-removed" => restore_removed(args),
+        "put-benchmark" => put_benchmark(args),
         "version" | "--version" => {
             args[0] = "version".to_string();
             version_main(args)

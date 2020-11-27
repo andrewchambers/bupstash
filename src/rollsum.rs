@@ -75,7 +75,6 @@ impl Rollsum {
         // Since this crate is performance critical, and
         // we're in strict control of `wofs`, it is justified
         // to skip bound checking to increase the performance
-        // https://github.com/rust-lang/rfcs/issues/811
         let prevch = unsafe { *self.window.get_unchecked(self.wofs) };
         self.s1 += newch as usize;
         self.s1 -= prevch as usize;
