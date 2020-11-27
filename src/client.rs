@@ -363,7 +363,6 @@ fn send_chunks(
                         tw.add(sink, &addr, encrypted_chunk)?;
                     }
                 }
-                ctx.progress.inc(n_read as u64);
                 n_written += n_read as u64;
             }
             Err(err) => return Err(err.into()),
@@ -603,7 +602,7 @@ fn send_dir(
         };
 
         match cache_lookup {
-            Some((size, cached_addresses, cached_index)) => {
+            Some((total_size, cached_addresses, cached_index)) => {
                 debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
 
                 let dir_data_chunk_idx = tw.data_chunk_count();
@@ -634,13 +633,13 @@ fn send_dir(
                     )?;
                 }
 
-                ctx.progress.inc(size);
-
                 send_log_session
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .add_stat_cache_data(&hash[..], size, &addresses, &cached_index)?;
+                    .add_stat_cache_data(&hash[..], total_size, &addresses, &cached_index)?;
+
+                ctx.progress.inc(total_size);
             }
             None => {
                 let mut total_size: u64 = 0;
@@ -653,8 +652,6 @@ fn send_dir(
                 let dir_data_chunk_idx = tw.data_chunk_count();
 
                 for (ent_path, mut index_ent) in index_ents.drain(..) {
-                    ctx.progress.set_message(&ent_path.to_string_lossy());
-
                     let ent_data_chunk_idx = tw.data_chunk_count();
                     let ent_data_chunk_offset = chunker.buffered_count() as u64;
 
@@ -746,6 +743,8 @@ fn send_dir(
                             &serde_bare::to_vec(&cache_dir_index).unwrap(),
                         )?;
                 }
+
+                ctx.progress.inc(total_size);
             }
         }
     }
