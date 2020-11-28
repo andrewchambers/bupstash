@@ -352,6 +352,7 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
+                        ctx.progress.inc(chunk_data.len() as u64);
                         let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
                         let encrypted_chunk =
                             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression);
@@ -1051,7 +1052,7 @@ fn receive_partial_htree(
     // We must also verify all the chunk addresses match what we expect.
 
     let start_chunk_idx = match pick.data_chunk_ranges.get(0) {
-        Some(range) => range.start_idx,
+        Some(range) => range.start_idx.0,
         None => 0,
     };
 
@@ -1097,8 +1098,8 @@ fn receive_partial_htree(
                         Some(current_range) => {
                             let mut to_output = None;
 
-                            if current_data_chunk_idx >= current_range.start_idx
-                                && current_data_chunk_idx <= current_range.end_idx
+                            if current_data_chunk_idx >= current_range.start_idx.0
+                                && current_data_chunk_idx <= current_range.end_idx.0
                             {
                                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                                     Packet::Chunk(chunk) => {
@@ -1138,7 +1139,7 @@ fn receive_partial_htree(
                             }
 
                             current_data_chunk_idx += 1;
-                            if current_data_chunk_idx > current_range.end_idx {
+                            if current_data_chunk_idx > current_range.end_idx.0 {
                                 range_idx += 1;
                             }
 

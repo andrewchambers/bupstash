@@ -144,8 +144,8 @@ impl IndexEntry {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct HTreeDataRange {
-    pub start_idx: u64,
-    pub end_idx: u64,
+    pub start_idx: serde_bare::Uint,
+    pub end_idx: serde_bare::Uint,
 }
 
 pub struct PickMap {
@@ -192,15 +192,15 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
 
                     // Either coalesce the existing range or insert a new range.
                     if !data_chunk_ranges.is_empty()
-                        && ((data_chunk_ranges.last().unwrap().end_idx == ent.data_chunk_idx.0)
-                            || (data_chunk_ranges.last().unwrap().end_idx + 1
+                        && ((data_chunk_ranges.last().unwrap().end_idx == ent.data_chunk_idx)
+                            || (data_chunk_ranges.last().unwrap().end_idx.0 + 1
                                 == ent.data_chunk_idx.0))
                     {
-                        data_chunk_ranges.last_mut().unwrap().end_idx = ent.data_chunk_end_idx.0
+                        data_chunk_ranges.last_mut().unwrap().end_idx = ent.data_chunk_end_idx
                     } else {
                         data_chunk_ranges.push(HTreeDataRange {
-                            start_idx: ent.data_chunk_idx.0,
-                            end_idx: ent.data_chunk_end_idx.0,
+                            start_idx: ent.data_chunk_idx,
+                            end_idx: ent.data_chunk_end_idx,
                         })
                     }
 
@@ -244,7 +244,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                             assert!(ent.data_chunk_idx != ent.data_chunk_end_idx);
                             assert!(old.is_none());
                         } else {
-                            data_chunk_ranges.last_mut().unwrap().end_idx -= 1;
+                            data_chunk_ranges.last_mut().unwrap().end_idx.0 -= 1;
                         }
                     }
                 }
@@ -297,8 +297,8 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                 return Ok(PickMap {
                     is_subtar: false,
                     data_chunk_ranges: vec![HTreeDataRange {
-                        start_idx: ent.data_chunk_idx.0,
-                        end_idx: ent.data_chunk_end_idx.0 - range_adjust,
+                        start_idx: ent.data_chunk_idx,
+                        end_idx: serde_bare::Uint(ent.data_chunk_end_idx.0 - range_adjust),
                     }],
                     incomplete_data_chunks,
                     index: vec![index[i].clone()],

@@ -73,7 +73,7 @@ impl RollsumChunker {
         // a lot of things out of it manually, at the time
         // of writing, this unsafe hoisting made the chunker 3x faster.
         //
-        // (200MB/s up to 600MB/s)
+        // (200MB/s up to 600MB/s), though its faster than that now.
         //
         // We use unsafe here to avoid self checks on self.cur_vec.
         // This unsafe code is on the upload path, so is less dangerous

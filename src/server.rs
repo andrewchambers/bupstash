@@ -349,7 +349,7 @@ fn send_partial_htree(
     let mut current_data_chunk_idx: u64 = 0;
     let start_chunk_idx = match ranges.get(0) {
         Some(range) => range.start_idx,
-        None => 0,
+        None => serde_bare::Uint(0),
     };
 
     // Use the offset data in the htree to efficiently seek to the first data chunk.
@@ -373,7 +373,7 @@ fn send_partial_htree(
         let mut skip_count = 0;
         for ent_slice in chunk_data.chunks(8 + address::ADDRESS_SZ) {
             let data_chunk_count = u64::from_le_bytes(ent_slice[..8].try_into()?);
-            if level_data_chunk_idx + data_chunk_count > start_chunk_idx {
+            if level_data_chunk_idx + data_chunk_count > start_chunk_idx.0 {
                 break;
             }
             level_data_chunk_idx += data_chunk_count;
@@ -384,7 +384,7 @@ fn send_partial_htree(
         tr.push_level(height - 1, chunk_data)?;
     }
 
-    if current_data_chunk_idx != start_chunk_idx {
+    if current_data_chunk_idx != start_chunk_idx.0 {
         anyhow::bail!("htree is corrupt, seek went too far");
     }
 
@@ -400,8 +400,8 @@ fn send_partial_htree(
                     match ranges.get(range_idx) {
                         Some(current_range) => {
                             chunk_address.bytes.clone_from_slice(&address_slice);
-                            if current_data_chunk_idx >= current_range.start_idx
-                                && current_data_chunk_idx <= current_range.end_idx
+                            if current_data_chunk_idx >= current_range.start_idx.0
+                                && current_data_chunk_idx <= current_range.end_idx.0
                             {
                                 pipeline.push_back((
                                     chunk_address,
@@ -415,7 +415,7 @@ fn send_partial_htree(
                             }
 
                             current_data_chunk_idx += 1;
-                            if current_data_chunk_idx > current_range.end_idx {
+                            if current_data_chunk_idx > current_range.end_idx.0 {
                                 range_idx += 1;
                             }
                         }
