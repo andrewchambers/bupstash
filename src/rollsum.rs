@@ -27,7 +27,7 @@ impl Rollsum {
         self.h = h;
         // The chunk mask uses the upper bits, as that has influence from
         // the whole chunk window, where the bottom bits do not.
-        h.leading_ones() == 40
+        h.leading_ones() == 20
     }
 
     #[inline]
