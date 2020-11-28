@@ -966,7 +966,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         if let Some(ref content_index) = content_index {
             Some(index::pick(
                 &matches.opt_str("pick").unwrap(),
-                &content_index,
+                content_index,
             )?)
         } else {
             anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)")
@@ -1109,7 +1109,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     progress.set_message("fetching content index...");
-    let mut content_index = client::request_index(
+    let compressed_index = client::request_index(
         client::DataRequestContext {
             primary_key_id,
             hash_key_part_1,
@@ -1127,13 +1127,6 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    // Due to how 'put' works, our tarballs are not ordered in a way that is pleasant by default.
-    content_index.sort_by(|a, b| match (a, b) {
-        (index::VersionedIndexEntry::V1(ref a), index::VersionedIndexEntry::V1(ref b)) => {
-            a.path.cmp(&b.path)
-        }
-    });
-
     let utc_timestamps = matches.opt_present("utc-timestamps");
 
     let out = std::io::stdout();
@@ -1141,22 +1134,41 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     match list_format {
         ListFormat::Human => {
+            // XXX It is inefficient to immediately decompress the index, however
+            // for printing we sort the entries to make it more pleasant to view.
+            let mut content_index = {
+                let mut v = Vec::new();
+                for ent in compressed_index.iter() {
+                    v.push(ent?);
+                }
+                v
+            };
+
+            std::mem::drop(compressed_index);
+
+            // Due to how 'put' works, our tarballs are not ordered in a way that is pleasant by default.
+            content_index.sort_by(|a, b| match (a, b) {
+                (index::VersionedIndexEntry::V1(ref a), index::VersionedIndexEntry::V1(ref b)) => {
+                    a.path.cmp(&b.path)
+                }
+            });
+
             let mut max_size_digits = 0;
-            for item in content_index.iter() {
-                match item {
-                    index::VersionedIndexEntry::V1(item) => {
+            for ent in content_index.iter() {
+                match ent {
+                    index::VersionedIndexEntry::V1(ent) => {
                         max_size_digits =
-                            std::cmp::max(item.size.0.to_string().len(), max_size_digits)
+                            std::cmp::max(ent.size.0.to_string().len(), max_size_digits)
                     }
                 }
             }
 
-            for item in content_index.iter() {
-                match item {
-                    index::VersionedIndexEntry::V1(item) => {
+            for ent in content_index.iter() {
+                match ent {
+                    index::VersionedIndexEntry::V1(ent) => {
                         let ts = chrono::NaiveDateTime::from_timestamp(
-                            item.ctime.0 as i64,
-                            item.ctime_nsec.0 as u32,
+                            ent.ctime.0 as i64,
+                            ent.ctime_nsec.0 as u32,
                         );
                         let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
 
@@ -1170,7 +1182,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                                 .to_string()
                         };
 
-                        let size = format!("{}", item.size.0);
+                        let size = format!("{}", ent.size.0);
                         let size_padding: String = std::iter::repeat(' ')
                             .take(max_size_digits - size.len())
                             .collect();
@@ -1178,29 +1190,29 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         writeln!(
                             out,
                             "{} {}{} {} {}",
-                            item.display_mode(),
+                            ent.display_mode(),
                             size,
                             size_padding,
                             ts,
-                            item.path,
+                            ent.path,
                         )?;
                     }
                 }
             }
         }
         ListFormat::Jsonl => {
-            for item in content_index.iter() {
-                match item {
-                    index::VersionedIndexEntry::V1(item) => {
+            for ent in compressed_index.iter() {
+                match ent? {
+                    index::VersionedIndexEntry::V1(ent) => {
                         write!(out, "{{")?;
-                        write!(out, "\"mode\":{},", serde_json::to_string(&item.mode.0)?)?;
-                        write!(out, "\"size\":{},", item.size.0)?;
-                        write!(out, "\"path\":{},", serde_json::to_string(&item.path)?)?;
-                        write!(out, "\"ctime\":{},", serde_json::to_string(&item.ctime.0)?)?;
+                        write!(out, "\"mode\":{},", serde_json::to_string(&ent.mode.0)?)?;
+                        write!(out, "\"size\":{},", ent.size.0)?;
+                        write!(out, "\"path\":{},", serde_json::to_string(&ent.path)?)?;
+                        write!(out, "\"ctime\":{},", serde_json::to_string(&ent.ctime.0)?)?;
                         write!(
                             out,
                             "\"ctime_nsec\":{}",
-                            serde_json::to_string(&item.ctime_nsec.0)?
+                            serde_json::to_string(&ent.ctime_nsec.0)?
                         )?;
                         writeln!(out, "}}")?;
                     }

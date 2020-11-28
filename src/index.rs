@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -152,12 +153,14 @@ pub struct PickMap {
     pub is_subtar: bool,
     pub data_chunk_ranges: Vec<HTreeDataRange>,
     pub incomplete_data_chunks: std::collections::HashMap<u64, rangemap::RangeSet<usize>>,
-    pub index: Vec<VersionedIndexEntry>,
+    pub index: CompressedIndex,
 }
 
-pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow::Error> {
-    for i in 0..index.len() {
-        let VersionedIndexEntry::V1(ent) = &index[i];
+pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Error> {
+    let mut iter = index.iter();
+    while let Some(versioned_ent) = iter.next() {
+        let versioned_ent = versioned_ent?;
+        let VersionedIndexEntry::V1(ref ent) = versioned_ent;
 
         if ent.path != path {
             continue;
@@ -176,15 +179,19 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                     u64,
                     rangemap::RangeSet<usize>,
                 > = std::collections::HashMap::new();
-                let mut sub_index = vec![];
 
-                for (j, VersionedIndexEntry::V1(ref ent)) in index.iter().enumerate().skip(i) {
+                let mut sub_index_writer = CompressedIndexWriter::new();
+                sub_index_writer.add(&versioned_ent);
+
+                for versioned_ent in iter {
+                    let versioned_ent = versioned_ent?;
+                    let VersionedIndexEntry::V1(ref ent) = versioned_ent;
                     // Match the directory and its children.
-                    if !(j == i || ent.path.starts_with(&prefix)) {
+                    if !ent.path.starts_with(&prefix) {
                         continue;
                     }
 
-                    sub_index.push(index[j].clone());
+                    sub_index_writer.add(&versioned_ent);
 
                     if ent.size.0 == 0 {
                         continue;
@@ -253,17 +260,21 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                     is_subtar: true,
                     data_chunk_ranges,
                     incomplete_data_chunks,
-                    index: sub_index,
+                    index: sub_index_writer.finish(),
                 });
             }
             IndexEntryKind::Regular => {
                 let mut incomplete_data_chunks = std::collections::HashMap::new();
 
+                let mut sub_index_writer = CompressedIndexWriter::new();
+                sub_index_writer.add(&versioned_ent);
+                let sub_index = sub_index_writer.finish();
+
                 if ent.size.0 == 0 {
                     return Ok(PickMap {
                         is_subtar: false,
                         data_chunk_ranges: vec![],
-                        index: vec![index[i].clone()],
+                        index: sub_index,
                         incomplete_data_chunks,
                     });
                 }
@@ -301,7 +312,7 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
                         end_idx: serde_bare::Uint(ent.data_chunk_end_idx.0 - range_adjust),
                     }],
                     incomplete_data_chunks,
-                    index: vec![index[i].clone()],
+                    index: sub_index,
                 });
             }
             kind => anyhow::bail!(
@@ -313,4 +324,68 @@ pub fn pick(path: &str, index: &[VersionedIndexEntry]) -> Result<PickMap, anyhow
     }
 
     anyhow::bail!("{} not found in content index", path)
+}
+
+// The index can get huge when we have millions of files, so we use a compressed index in memory.
+pub struct CompressedIndex {
+    compressed_ents: Vec<u8>,
+}
+
+impl CompressedIndex {
+    pub fn from_vec(compressed_ents: Vec<u8>) -> Self {
+        CompressedIndex { compressed_ents }
+    }
+
+    pub fn iter(&self) -> CompressedIndexIterator {
+        CompressedIndexIterator {
+            reader: lz4::Decoder::new(std::io::Cursor::new(&self.compressed_ents)).unwrap(),
+        }
+    }
+}
+
+pub struct CompressedIndexIterator<'a> {
+    reader: lz4::Decoder<std::io::Cursor<&'a Vec<u8>>>,
+}
+
+impl<'a> Iterator for CompressedIndexIterator<'a> {
+    type Item = Result<VersionedIndexEntry, anyhow::Error>;
+
+    fn next(&mut self) -> Option<Result<VersionedIndexEntry, anyhow::Error>> {
+        match serde_bare::from_reader(&mut self.reader) {
+            Ok(v) => Some(Ok(v)),
+            Err(serde_bare::error::Error::Io(err))
+                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                None
+            }
+            Err(err) => Some(Err(err.into())),
+        }
+    }
+}
+
+pub struct CompressedIndexWriter {
+    encoder: lz4::Encoder<std::io::Cursor<Vec<u8>>>,
+}
+
+impl CompressedIndexWriter {
+    pub fn new() -> Self {
+        CompressedIndexWriter {
+            encoder: lz4::EncoderBuilder::new()
+                .checksum(lz4::ContentChecksum::NoChecksum)
+                .build(std::io::Cursor::new(Vec::new()))
+                .unwrap(),
+        }
+    }
+
+    pub fn add(&mut self, ent: &VersionedIndexEntry) -> () {
+        self.encoder
+            .write_all(&serde_bare::to_vec(ent).unwrap())
+            .unwrap();
+    }
+
+    pub fn finish(self) -> CompressedIndex {
+        let (index_cursor, compress_result) = self.encoder.finish();
+        compress_result.unwrap();
+        CompressedIndex::from_vec(index_cursor.into_inner())
+    }
 }

@@ -779,7 +779,7 @@ pub fn request_data_stream(
     id: Xid,
     metadata: &itemset::ItemMetadata,
     pick: Option<index::PickMap>,
-    index: Option<Vec<index::VersionedIndexEntry>>,
+    index: Option<index::CompressedIndex>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
@@ -840,7 +840,7 @@ pub fn request_index(
     metadata: &itemset::ItemMetadata,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<Vec<index::VersionedIndexEntry>, anyhow::Error> {
+) -> Result<index::CompressedIndex, anyhow::Error> {
     if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
         anyhow::bail!("decryption key does not match master key used for encryption");
     }
@@ -862,23 +862,17 @@ pub fn request_index(
         &index_tree.address,
     );
 
-    let mut index_data = std::io::Cursor::new(Vec::new());
+    let mut index_data = lz4::EncoderBuilder::new()
+        .checksum(lz4::ContentChecksum::NoChecksum)
+        .build(std::io::Cursor::new(Vec::new()))?;
 
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
     receive_htree(ctx, &hash_key, r, &mut tr, &mut index_data)?;
 
-    let mut index: Vec<index::VersionedIndexEntry> = Vec::new();
+    let (index_cursor, compress_result) = index_data.finish();
+    compress_result?;
 
-    let index_data_size = index_data.position();
-    index_data.set_position(0);
-    while index_data.position() != index_data_size {
-        match serde_bare::from_reader(&mut index_data) {
-            Ok(index_entry) => index.push(index_entry),
-            Err(err) => anyhow::bail!("error deserializing index: {}", err),
-        }
-    }
-
-    Ok(index)
+    Ok(index::CompressedIndex::from_vec(index_cursor.into_inner()))
 }
 
 fn receive_and_authenticate_htree_chunk(
@@ -937,7 +931,7 @@ fn receive_htree(
 
 fn write_index_as_tarball(
     read_data: &mut dyn FnMut() -> Result<Option<Vec<u8>>, anyhow::Error>,
-    index: &Vec<index::VersionedIndexEntry>,
+    index: &index::CompressedIndex,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let mut buffered = vec![];
@@ -976,7 +970,7 @@ fn write_index_as_tarball(
     };
 
     for ent in index.iter() {
-        match ent {
+        match ent? {
             index::VersionedIndexEntry::V1(ent) => {
                 out.write_all(&xtar::index_entry_to_tarheader(&ent)?)?;
 
@@ -1003,7 +997,7 @@ fn receive_indexed_htree_as_tarball(
     hash_key: &crypto::HashKey,
     r: &mut dyn std::io::Read,
     tr: &mut htree::TreeReader,
-    index: &Vec<index::VersionedIndexEntry>,
+    index: &index::CompressedIndex,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
