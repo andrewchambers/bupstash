@@ -350,7 +350,7 @@ fn send_hdr(w: &mut dyn std::io::Write, kind: u8, sz: u32) -> Result<(), anyhow:
 pub fn write_chunk(
     w: &mut dyn std::io::Write,
     address: &Address,
-    data: &Vec<u8>,
+    data: &[u8],
 ) -> Result<(), anyhow::Error> {
     send_hdr(w, PACKET_KIND_CHUNK, (data.len() + ADDRESS_SZ).try_into()?)?;
     write_to_remote(w, &address.bytes)?;

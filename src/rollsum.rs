@@ -32,6 +32,12 @@ impl Rollsum {
     }
 }
 
+impl Default for Rollsum {
+    fn default() -> Self {
+        Rollsum::new()
+    }
+}
+
 #[cfg(test)]
 pub static TEST_GEAR_TAB: [u32; 256] = [
     0x67ed26b7, 0x32da500c, 0x53d0fee0, 0xce387dc7, 0xcd406d90, 0x2e83a4d4, 0x9fc9a38d, 0xb67259dc,

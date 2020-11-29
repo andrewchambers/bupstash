@@ -54,9 +54,9 @@ pub enum Query {
 }
 
 fn is_tag_char(c: char) -> bool {
-    (c >= 'a' && c <= 'z')
-        || (c >= 'A' && c <= 'Z')
-        || (c >= '0' && c <= '9')
+    ('a'..='z').contains(&c)
+        || ('A'..='Z').contains(&c)
+        || ('0'..='9').contains(&c)
         || c == '-'
         || c == '_'
 }
@@ -276,12 +276,12 @@ impl Parser {
         Ok(v)
     }
 
-    fn parse_value(&mut self) -> Result<String, ParseError> {
+    fn parse_value(&mut self) -> String {
         let (c, _) = self.peek();
 
         if c == '•' {
             self.advance(1);
-            return Ok("".to_string());
+            return "".to_string();
         }
 
         self.get();
@@ -298,7 +298,7 @@ impl Parser {
             }
         }
         self.consume_if_matches("•");
-        Ok(v)
+        v
     }
 
     fn parse_eq(&mut self) -> Result<Query, ParseError> {
@@ -320,7 +320,7 @@ impl Parser {
             });
         }
 
-        let raw_pattern = self.parse_value()?;
+        let raw_pattern = self.parse_value();
         let (_, end_pos) = self.peek();
 
         let pattern = if escape {

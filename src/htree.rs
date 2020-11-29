@@ -204,7 +204,7 @@ impl TreeReader {
         Ok(())
     }
 
-    fn prune_empty(&mut self) -> () {
+    fn prune_empty(&mut self) {
         loop {
             if self.tree_blocks.is_empty() {
                 return;

@@ -194,7 +194,7 @@ pub fn send(
         let min_size = CHUNK_MIN_SIZE;
         let max_size = CHUNK_MAX_SIZE;
 
-        let mut chunker = chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size);
+        let mut chunker = chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size);
         let mut tw = htree::TreeWriter::new(min_size, max_size);
 
         match data {
@@ -225,7 +225,7 @@ pub fn send(
             }
             DataSource::Directory { path, exclusions } => {
                 let mut idx_chunker =
-                    chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size);
+                    chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size);
                 let mut idx_tw = htree::TreeWriter::new(min_size, max_size);
 
                 match send_dir(

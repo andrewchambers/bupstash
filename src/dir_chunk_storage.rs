@@ -51,7 +51,7 @@ pub struct DirStorage {
 }
 
 impl DirStorage {
-    fn add_write_worker_thread(&mut self) -> Result<(), anyhow::Error> {
+    fn add_write_worker_thread(&mut self) {
         let mut data_path = self.dir_path.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
@@ -172,10 +172,9 @@ impl DirStorage {
 
         self.write_worker_handles.push(worker);
         self.write_worker_tx.push(write_worker_tx);
-        Ok(())
     }
 
-    fn add_read_worker_thread(&mut self) -> Result<(), anyhow::Error> {
+    fn add_read_worker_thread(&mut self) {
         let mut data_path = self.dir_path.clone();
         let read_worker_rx = self.read_worker_rx.clone();
 
@@ -200,7 +199,6 @@ impl DirStorage {
             })
             .unwrap();
         self.read_worker_handles.push(worker);
-        Ok(())
     }
 
     fn stop_workers(&mut self) {
@@ -228,7 +226,7 @@ impl DirStorage {
             match self.read_worker_tx.try_send(msg) {
                 Ok(_) => Ok(()),
                 Err(crossbeam_channel::TrySendError::Full(msg)) => {
-                    self.add_read_worker_thread()?;
+                    self.add_read_worker_thread();
                     Ok(self.read_worker_tx.send(msg)?)
                 }
                 Err(err) => Err(err.into()),
@@ -307,7 +305,7 @@ impl Engine for DirStorage {
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
         // Lazily start our write threads.
         while self.write_worker_handles.len() < 2 {
-            self.add_write_worker_thread()?;
+            self.add_write_worker_thread();
         }
 
         self.check_write_worker_io_errors()?;

@@ -53,10 +53,7 @@ impl IndexEntry {
     }
 
     pub fn is_file(&self) -> bool {
-        match self.mode.0 as libc::mode_t & libc::S_IFMT {
-            libc::S_IFREG => true,
-            _ => false,
-        }
+        matches!(self.mode.0 as libc::mode_t & libc::S_IFMT, libc::S_IFREG)
     }
 
     pub fn display_mode(&self) -> String {
@@ -377,7 +374,7 @@ impl CompressedIndexWriter {
         }
     }
 
-    pub fn add(&mut self, ent: &VersionedIndexEntry) -> () {
+    pub fn add(&mut self, ent: &VersionedIndexEntry) {
         self.encoder
             .write_all(&serde_bare::to_vec(ent).unwrap())
             .unwrap();
@@ -387,5 +384,11 @@ impl CompressedIndexWriter {
         let (index_cursor, compress_result) = self.encoder.finish();
         compress_result.unwrap();
         CompressedIndex::from_vec(index_cursor.into_inner())
+    }
+}
+
+impl Default for CompressedIndexWriter {
+    fn default() -> Self {
+        CompressedIndexWriter::new()
     }
 }

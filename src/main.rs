@@ -385,7 +385,7 @@ fn cli_to_serve_process(
 fn cli_to_progress_bar(
     matches: &getopts::Matches,
     style: indicatif::ProgressStyle,
-) -> Result<indicatif::ProgressBar, anyhow::Error> {
+) -> indicatif::ProgressBar {
     let want_visible_progress = !matches.opt_present("quiet")
         && atty::is(atty::Stream::Stderr)
         && atty::is(atty::Stream::Stdout);
@@ -403,13 +403,12 @@ fn cli_to_progress_bar(
         progress.enable_steady_tick(250)
     };
     progress.tick();
-    Ok(progress)
+    progress
 }
 
-fn help_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn help_main(args: Vec<String>) {
     let opts = default_cli_opts();
     print_help_and_exit(&args[0], &opts);
-    Ok(())
 }
 
 fn version_main(args: Vec<String>) -> Result<(), anyhow::Error> {
@@ -447,7 +446,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
@@ -531,7 +530,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let mut query_cache = cli_to_query_cache(&matches)?;
 
@@ -749,7 +748,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &matches,
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
-    )?;
+    );
 
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
@@ -884,7 +883,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
@@ -942,9 +941,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     progress.set_message("fetching item metadata...");
-    let metadata = match client::request_metadata(id, &mut serve_out, &mut serve_in)? {
-        itemset::VersionedItemMetadata::V1(metadata) => metadata,
-    };
+    let itemset::VersionedItemMetadata::V1(metadata) =
+        client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
     let mut content_index = if metadata.plain_text_metadata.index_tree.is_some() {
         Some(client::request_index(
@@ -1045,7 +1043,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
@@ -1103,9 +1101,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     progress.set_message("fetching item metadata...");
-    let metadata = match client::request_metadata(id, &mut serve_out, &mut serve_in)? {
-        itemset::VersionedItemMetadata::V1(metadata) => metadata,
-    };
+    let itemset::VersionedItemMetadata::V1(metadata) =
+        client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
     if metadata.plain_text_metadata.index_tree.is_none() {
         anyhow::bail!("list-contents is only supported for tarballs created by bupstash");
@@ -1254,7 +1251,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let n_removed;
 
@@ -1380,7 +1377,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
@@ -1423,7 +1420,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    )?;
+    );
 
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
@@ -1644,7 +1641,8 @@ fn main() {
         }
         "help" | "--help" | "-h" => {
             args[0] = "help".to_string();
-            help_main(args)
+            help_main(args);
+            Ok(())
         }
         _ => die(format!(
             "Unknown subcommand '{}', try  '{} help'.",

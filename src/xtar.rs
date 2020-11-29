@@ -53,28 +53,25 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
         }
     };
 
-    match ustar_hdr.entry_type() {
-        tar::EntryType::Symlink => {
-            match &ent.link_target {
-                Some(target) => {
-                    match ustar_hdr.set_link_name(&target) {
-                        Ok(()) => (),
-                        Err(err) => {
-                            /* 100 is more than ustar can handle as a link parget */
-                            if target.len() > 100 {
-                                let target_record =
-                                    format_pax_extended_record(b"linkpath", target.as_bytes());
-                                pax_ext_records.extend_from_slice(&target_record);
-                            } else {
-                                return Err(err.into());
-                            }
+    if let tar::EntryType::Symlink = ustar_hdr.entry_type() {
+        match &ent.link_target {
+            Some(target) => {
+                match ustar_hdr.set_link_name(&target) {
+                    Ok(()) => (),
+                    Err(err) => {
+                        /* 100 is more than ustar can handle as a link parget */
+                        if target.len() > 100 {
+                            let target_record =
+                                format_pax_extended_record(b"linkpath", target.as_bytes());
+                            pax_ext_records.extend_from_slice(&target_record);
+                        } else {
+                            return Err(err.into());
                         }
                     }
                 }
-                None => ustar_hdr.set_link_name("")?,
             }
+            None => ustar_hdr.set_link_name("")?,
         }
-        _ => (),
     }
 
     ustar_hdr.set_cksum();
