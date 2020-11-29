@@ -1,5 +1,6 @@
 use super::address::*;
 use super::compression;
+use super::rollsum;
 use super::sodium;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -18,6 +19,8 @@ pub const BOX_MACBYTES: usize = sodium::crypto_box_curve25519xchacha20poly1305_M
 
 pub const BOX_PRE_SHARED_KEY_BYTES: usize = 32;
 
+pub const RANDOM_SEED_BYTES: usize = 32;
+
 pub fn init() {
     unsafe {
         sodium::sodium_init();
@@ -28,6 +31,17 @@ pub fn init() {
 pub fn randombytes(buf: &mut [u8]) {
     unsafe {
         sodium::randombytes_buf(buf.as_mut_ptr() as *mut std::ffi::c_void, buf.len());
+    }
+}
+
+#[inline(always)]
+pub fn randombytes_buf_deterministic(seed: &[u8; RANDOM_SEED_BYTES], buf: &mut [u8]) {
+    unsafe {
+        sodium::randombytes_buf_deterministic(
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            buf.len(),
+            seed.as_ptr() as *const u8,
+        );
     }
 }
 
@@ -296,7 +310,7 @@ pub struct PartialHashKey {
 
 impl PartialHashKey {
     pub fn new() -> Self {
-        let mut bytes: [u8; 32] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut bytes = [0; 32];
         randombytes(&mut bytes[..]);
         PartialHashKey { bytes }
     }
@@ -359,6 +373,41 @@ pub struct HashKey {
 }
 
 impl Drop for HashKey {
+    fn drop(&mut self) {
+        memzero(&mut self.bytes[..]);
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+pub struct RollsumKey {
+    pub bytes: [u8; RANDOM_SEED_BYTES],
+}
+
+impl RollsumKey {
+    pub fn new() -> Self {
+        let mut bytes = [0; RANDOM_SEED_BYTES];
+        randombytes(&mut bytes[..]);
+        RollsumKey { bytes }
+    }
+
+    pub fn gear_tab(&self) -> rollsum::GearTab {
+        let mut tab_bytes = [0; 256 * (rollsum::WINDOW_SIZE / 8)];
+        randombytes_buf_deterministic(&self.bytes, &mut tab_bytes[..]);
+        let mut tab = [0; 256];
+        for (i, sl) in tab_bytes.chunks(rollsum::WINDOW_SIZE / 8).enumerate() {
+            tab[i] = u32::from_le_bytes(sl.try_into().unwrap());
+        }
+        tab
+    }
+}
+
+impl Default for RollsumKey {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for RollsumKey {
     fn drop(&mut self) {
         memzero(&mut self.bytes[..]);
     }
@@ -455,5 +504,14 @@ mod tests {
         for b in nonce.bytes.iter() {
             assert_eq!(*b, 0);
         }
+    }
+
+    #[test]
+    fn random_seed_bytes_size() {
+        init();
+        assert_eq!(
+            unsafe { sodium::randombytes_seedbytes() },
+            RANDOM_SEED_BYTES
+        );
     }
 }

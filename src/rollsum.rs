@@ -1,28 +1,24 @@
 pub const WINDOW_SIZE: usize = 32;
 
+pub type GearTab = [u32; 256];
+
 // An implementation of 'gear hash'.
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct Rollsum {
     h: u32,
 }
 
-impl Default for Rollsum {
-    fn default() -> Self {
-        Rollsum { h: 0 }
-    }
-}
-
 impl Rollsum {
-    /// Create new Rollsum engine with default chunking settings
+    /// Create new Rollsum engine.
     pub fn new() -> Self {
-        Default::default()
+        Rollsum { h: 0 }
     }
 
     #[inline(always)]
-    pub fn roll_byte(&mut self, newch: u8) -> bool {
+    pub fn roll_byte(&mut self, tab: &GearTab, newch: u8) -> bool {
         let mut h = self.h;
-        // The << 1 rolls out previous values after 32 shifts.
-        let gv = unsafe { *GEAR_TAB.get_unchecked(newch as usize) };
+        // The << 1 rolls out previous values after WINDOW_SIZE shifts.
+        let gv = unsafe { *tab.get_unchecked(newch as usize) };
         h = (h << 1).wrapping_add(gv);
         self.h = h;
         // The chunk mask uses the upper bits, as that has influence from
@@ -32,41 +28,12 @@ impl Rollsum {
 
     #[inline]
     pub fn reset(&mut self) {
-        *self = Default::default()
+        self.h = 0
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rollsum_rolls() {
-        let mut rs = Rollsum::new();
-        for i in 0..WINDOW_SIZE {
-            rs.roll_byte(i as u8);
-        }
-        let h1 = rs.h;
-        for _i in 0..WINDOW_SIZE {
-            rs.roll_byte(0xff);
-        }
-        let h2 = rs.h;
-        for i in 0..WINDOW_SIZE {
-            rs.roll_byte(i as u8);
-        }
-        let h3 = rs.h;
-        for _i in 0..WINDOW_SIZE {
-            rs.roll_byte(0xff);
-        }
-        let h4 = rs.h;
-
-        assert_eq!(h1, h3);
-        assert_eq!(h2, h4);
-    }
-}
-
-// generated with support/geartab.janet
-static GEAR_TAB: [u32; 256] = [
+pub static TEST_GEAR_TAB: [u32; 256] = [
     0x67ed26b7, 0x32da500c, 0x53d0fee0, 0xce387dc7, 0xcd406d90, 0x2e83a4d4, 0x9fc9a38d, 0xb67259dc,
     0xca6b1722, 0x6d2ea08c, 0x235cea2e, 0x3149bb5f, 0x1beda787, 0x2a6b77d5, 0x2f22d9ac, 0x91fc0544,
     0xe413acfa, 0x5a30ff7a, 0xad6fdde0, 0x444fd0f5, 0x7ad87864, 0x58c5ff05, 0x8d2ec336, 0x2371f853,
@@ -100,3 +67,32 @@ static GEAR_TAB: [u32; 256] = [
     0x61bad754, 0x9fd03061, 0xe09df1af, 0x3bc9eb73, 0x85878413, 0x9889aaf2, 0x3f5a9e46, 0x42c9f01f,
     0x9984a4f4, 0xd5de43cc, 0xd294daed, 0xbecba2d2, 0xf1f6e72c, 0x5551128a, 0x83af87e2, 0x6f0342ba,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollsum_rolls() {
+        let mut rs = Rollsum::new();
+        for i in 0..WINDOW_SIZE {
+            rs.roll_byte(&TEST_GEAR_TAB, i as u8);
+        }
+        let h1 = rs.h;
+        for _i in 0..WINDOW_SIZE {
+            rs.roll_byte(&TEST_GEAR_TAB, 0xff);
+        }
+        let h2 = rs.h;
+        for i in 0..WINDOW_SIZE {
+            rs.roll_byte(&TEST_GEAR_TAB, i as u8);
+        }
+        let h3 = rs.h;
+        for _i in 0..WINDOW_SIZE {
+            rs.roll_byte(&TEST_GEAR_TAB, 0xff);
+        }
+        let h4 = rs.h;
+
+        assert_eq!(h1, h3);
+        assert_eq!(h2, h4);
+    }
+}

@@ -183,7 +183,7 @@ fn new_send_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let k = cli_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
-            let send_key = keys::Key::PutKeyV1(keys::SendKey::gen(&primary_key));
+            let send_key = keys::Key::PutKeyV1(keys::PutKey::gen(&primary_key));
             send_key.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => anyhow::bail!("key is not a primary key"),
@@ -723,18 +723,20 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let send_key_id = key.id();
-    let (hash_key, data_ectx, metadata_ectx) = match key {
+    let (hash_key, gear_tab, data_ectx, metadata_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let gear_tab = k.rollsum_key.gear_tab();
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
-            (hash_key, data_ectx, metadata_ectx)
+            (hash_key, gear_tab, data_ectx, metadata_ectx)
         }
         keys::Key::PutKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
+            let gear_tab = k.rollsum_key.gear_tab();
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
-            (hash_key, data_ectx, metadata_ectx)
+            (hash_key, gear_tab, data_ectx, metadata_ectx)
         }
         _ => anyhow::bail!("can only send data with a primary-key or put-key."),
     };
@@ -829,6 +831,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         primary_key_id,
         send_key_id,
         hash_key,
+        gear_tab,
         data_ectx,
         metadata_ectx,
     };
@@ -1458,7 +1461,8 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let min_size = client::CHUNK_MIN_SIZE;
     let max_size = client::CHUNK_MAX_SIZE;
 
-    let mut chunker = chunker::RollsumChunker::new(min_size, max_size);
+    let mut chunker =
+        chunker::RollsumChunker::new(crypto::RollsumKey::new().gear_tab(), min_size, max_size);
 
     let mut buf = vec![0; 1024 * 1024];
 

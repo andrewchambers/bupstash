@@ -23,6 +23,8 @@ pub struct PrimaryKey {
     */
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
+    /* key used to make the rollsum unique. */
+    pub rollsum_key: crypto::RollsumKey,
     /* Key set used for encrypting data/ */
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
@@ -34,11 +36,12 @@ pub struct PrimaryKey {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct SendKey {
+pub struct PutKey {
     pub id: Xid,
     pub primary_key_id: Xid,
     pub hash_key_part_1: crypto::PartialHashKey,
     pub hash_key_part_2: crypto::PartialHashKey,
+    pub rollsum_key: crypto::RollsumKey,
     pub data_pk: crypto::BoxPublicKey,
     pub data_psk: crypto::BoxPreSharedKey,
     pub metadata_pk: crypto::BoxPublicKey,
@@ -57,7 +60,7 @@ pub struct MetadataKey {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     PrimaryKeyV1(PrimaryKey),
-    PutKeyV1(SendKey),
+    PutKeyV1(PutKey),
     MetadataKeyV1(MetadataKey),
 }
 
@@ -151,6 +154,7 @@ impl PrimaryKey {
         let id = Xid::new();
         let hash_key_part_1 = crypto::PartialHashKey::new();
         let hash_key_part_2 = crypto::PartialHashKey::new();
+        let rollsum_key = crypto::RollsumKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
         let data_psk = crypto::BoxPreSharedKey::new();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
@@ -159,6 +163,7 @@ impl PrimaryKey {
             id,
             hash_key_part_1,
             hash_key_part_2,
+            rollsum_key,
             data_pk,
             data_sk,
             data_psk,
@@ -169,14 +174,16 @@ impl PrimaryKey {
     }
 }
 
-impl SendKey {
-    pub fn gen(mk: &PrimaryKey) -> SendKey {
+impl PutKey {
+    pub fn gen(mk: &PrimaryKey) -> PutKey {
         let hash_key_part_2 = crypto::PartialHashKey::new();
-        SendKey {
+        let rollsum_key = crypto::RollsumKey::new();
+        PutKey {
             id: Xid::new(),
             primary_key_id: mk.id,
             hash_key_part_1: mk.hash_key_part_1.clone(),
             hash_key_part_2,
+            rollsum_key,
             data_pk: mk.data_pk.clone(),
             data_psk: mk.data_psk.clone(),
             metadata_pk: mk.metadata_pk.clone(),

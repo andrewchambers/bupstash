@@ -1,6 +1,7 @@
-use super::rollsum::{Rollsum, WINDOW_SIZE};
+use super::rollsum::{GearTab, Rollsum, WINDOW_SIZE};
 
 pub struct RollsumChunker {
+    gear_tab: GearTab,
     rs: Rollsum,
     min_sz: usize,
     max_sz: usize,
@@ -9,7 +10,7 @@ pub struct RollsumChunker {
 }
 
 impl RollsumChunker {
-    pub fn new(mut min_sz: usize, mut max_sz: usize) -> RollsumChunker {
+    pub fn new(gear_tab: GearTab, mut min_sz: usize, mut max_sz: usize) -> RollsumChunker {
         if min_sz == 0 {
             min_sz = 1
         }
@@ -19,6 +20,7 @@ impl RollsumChunker {
         let default_chunk_capacity = max_sz / 2;
         RollsumChunker {
             rs: Rollsum::new(),
+            gear_tab,
             min_sz,
             max_sz,
             default_chunk_capacity,
@@ -82,7 +84,8 @@ impl RollsumChunker {
             let mut n_added = 0;
             let mut cur_vec_len = self.cur_vec.len();
             let mut vp = self.cur_vec.as_mut_ptr().add(cur_vec_len);
-            let mut rs = self.rs;
+            let mut rs = self.rs.clone();
+            let gear_tab = &self.gear_tab;
             let min_sz = self.min_sz;
             let max_sz = self.max_sz;
             for b in buf[0..std::cmp::min(self.spare_capacity(), n_bytes)].iter() {
@@ -90,7 +93,7 @@ impl RollsumChunker {
                 vp = vp.offset(1);
                 n_added += 1;
                 cur_vec_len += 1;
-                if (rs.roll_byte(*b) && cur_vec_len > min_sz) || cur_vec_len == max_sz {
+                if (rs.roll_byte(gear_tab, *b) && cur_vec_len > min_sz) || cur_vec_len == max_sz {
                     self.rs = rs;
                     self.cur_vec.set_len(cur_vec_len);
                     return (n_added, Some(self.swap_vec()));
@@ -123,11 +126,12 @@ impl RollsumChunker {
 
 #[cfg(test)]
 mod tests {
+    use super::super::rollsum::TEST_GEAR_TAB;
     use super::*;
 
     #[test]
     fn test_add_bytes() {
-        let mut ch = RollsumChunker::new(1, 2);
+        let mut ch = RollsumChunker::new(TEST_GEAR_TAB, 1, 2);
 
         match ch.add_bytes(b"a") {
             (1, None) => (),
@@ -149,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_force_split_bytes() {
-        let mut ch = RollsumChunker::new(10, 100);
+        let mut ch = RollsumChunker::new(TEST_GEAR_TAB, 10, 100);
         assert_eq!(ch.force_split(), None);
         ch.add_bytes(b"abc");
 
