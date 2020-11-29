@@ -94,3 +94,86 @@ pub fn read_dirents(path: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     }
     Ok(dir_ents)
 }
+
+/* Common path:
+
+Copyright 2018 Paul Woolcock <paul@woolcock.us>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+pub fn common_path_all<'a>(paths: &[PathBuf]) -> Option<PathBuf> {
+    let mut path_iter = paths.iter();
+    let mut result = path_iter.next()?.to_path_buf();
+    for path in path_iter {
+        if let Some(r) = common_path(&result, &path) {
+            result = r;
+        } else {
+            return None;
+        }
+    }
+    Some(result.to_path_buf())
+}
+
+pub fn common_path<P, Q>(one: P, two: Q) -> Option<PathBuf>
+where
+    P: AsRef<Path>,
+    Q: AsRef<Path>,
+{
+    let one = one.as_ref();
+    let two = two.as_ref();
+    let one = one.components();
+    let two = two.components();
+    let mut final_path = PathBuf::new();
+    let mut found = false;
+    let paths = one.zip(two);
+    for (l, r) in paths {
+        if l == r {
+            final_path.push(l.as_os_str());
+            found = true;
+        } else {
+            break;
+        }
+    }
+    if found {
+        Some(final_path)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_paths() {
+        let one = Path::new("/foo/bar/baz/one.txt");
+        let two = Path::new("/foo/bar/quux/quuux/two.txt");
+        let result = Path::new("/foo/bar");
+        assert_eq!(common_path(&one, &two).unwrap(), result.to_path_buf())
+    }
+
+    #[test]
+    fn no_common_path() {
+        let one = Path::new("/foo/bar");
+        let two = Path::new("./baz/quux");
+        assert!(common_path(&one, &two).is_none());
+    }
+}

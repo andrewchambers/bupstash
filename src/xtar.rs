@@ -31,6 +31,19 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
     let mut pax_ext_records = Vec::new();
     let mut ustar_hdr = tar::Header::new_ustar();
 
+    let tar_type = match ent.kind() {
+        index::IndexEntryKind::Other => {
+            anyhow::bail!("index entry {} has an unknown type", ent.path)
+        }
+        index::IndexEntryKind::Regular => tar::EntryType::Regular,
+        index::IndexEntryKind::Symlink => tar::EntryType::Symlink,
+        index::IndexEntryKind::Char => tar::EntryType::Char,
+        index::IndexEntryKind::Block => tar::EntryType::Block,
+        index::IndexEntryKind::Directory => tar::EntryType::Directory,
+        index::IndexEntryKind::Fifo => tar::EntryType::Fifo,
+    };
+
+    ustar_hdr.set_entry_type(tar_type);
     ustar_hdr.set_mode(ent.mode.0 as u32);
     ustar_hdr.set_mtime(ent.mtime.0);
     ustar_hdr.set_uid(ent.uid.0);
@@ -53,7 +66,7 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
         }
     };
 
-    if let tar::EntryType::Symlink = ustar_hdr.entry_type() {
+    if let tar::EntryType::Symlink = tar_type {
         match &ent.link_target {
             Some(target) => {
                 match ustar_hdr.set_link_name(&target) {

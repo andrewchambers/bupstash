@@ -141,8 +141,9 @@ pub enum DataSource {
         description: String,
         data: Box<dyn std::io::Read>,
     },
-    Directory {
-        path: std::path::PathBuf,
+    Filesystem {
+        base: std::path::PathBuf,
+        paths: Vec<std::path::PathBuf>,
         exclusions: Vec<glob::Pattern>,
     },
 }
@@ -223,7 +224,11 @@ pub fn send(
                 ctx.progress.set_message(&description);
                 send_chunks(ctx, &mut sink, &mut chunker, &mut tw, data, None)?;
             }
-            DataSource::Directory { path, exclusions } => {
+            DataSource::Filesystem {
+                base,
+                paths,
+                exclusions,
+            } => {
                 let mut idx_chunker =
                     chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size);
                 let mut idx_tw = htree::TreeWriter::new(min_size, max_size);
@@ -236,7 +241,8 @@ pub fn send(
                     &mut idx_chunker,
                     &mut idx_tw,
                     &send_log_session,
-                    &path,
+                    &base,
+                    paths,
                     &exclusions,
                 ) {
                     Ok(()) => {
@@ -505,16 +511,18 @@ fn send_dir(
     idx_chunker: &mut chunker::RollsumChunker,
     idx_tw: &mut htree::TreeWriter,
     send_log_session: &Option<std::cell::RefCell<sendlog::SendLogSession>>,
-    path: &std::path::PathBuf,
+    base: &std::path::PathBuf,
+    paths: &[std::path::PathBuf],
     exclusions: &[glob::Pattern],
 ) -> Result<(), SendDirError> {
-    let path = fsutil::absolute_path(&path)?;
-
     let mut addresses: Vec<u8> = Vec::new();
-    let mut work_list = std::collections::VecDeque::new();
-    work_list.push_back(path.clone());
+    let mut work_list = Vec::new();
 
-    while let Some(cur_dir) = work_list.pop_front() {
+    for p in paths {
+        work_list.push(p.clone());
+    }
+
+    while let Some(cur_dir) = work_list.pop() {
         ctx.progress.set_message(&cur_dir.to_string_lossy());
         addresses.clear();
         let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
@@ -529,21 +537,22 @@ fn send_dir(
             Err(err) => return Err(SendDirError::Other(err.into())),
         };
 
+        // XXX sorting by extension or reverse filename might give better compression.
         dir_ents.sort_by_key(|a| a.file_name());
 
         let mut index_ents = Vec::new();
 
-        if cur_dir == path {
-            let metadata = std::fs::metadata(&path)?;
+        if &cur_dir == base {
+            let metadata = std::fs::metadata(&cur_dir)?;
             if !metadata.is_dir() {
                 return Err(SendDirError::Other(anyhow::format_err!(
                     "{} is not a directory",
-                    path.display()
+                    cur_dir.display()
                 )));
             }
             let index_path = ".".into();
 
-            let index_ent = match dir_ent_to_index_ent(&path, &index_path, &metadata) {
+            let index_ent = match dir_ent_to_index_ent(&cur_dir, &index_path, &metadata) {
                 Ok(index_ent) => index_ent,
                 Err(err) if likely_smear_error(&err) => {
                     return Err(SendDirError::FilesystemModified)
@@ -554,7 +563,7 @@ fn send_dir(
             let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
 
             hash_state.update(&index_bytes);
-            index_ents.push((path.clone(), index_ent));
+            index_ents.push((cur_dir.clone(), index_ent));
         }
 
         'collect_dir_ents: for entry in dir_ents {
@@ -573,7 +582,7 @@ fn send_dir(
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
-            let index_path = ent_path.strip_prefix(&path).unwrap().to_path_buf();
+            let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
             let index_ent = match dir_ent_to_index_ent(&ent_path, &index_path, &metadata) {
                 Ok(index_ent) => index_ent,
                 Err(err) if likely_smear_error(&err) => {
@@ -584,7 +593,7 @@ fn send_dir(
             let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
 
             if metadata.is_dir() {
-                work_list.push_back(ent_path.clone());
+                work_list.push(ent_path.clone());
             }
 
             hash_state.update(&index_bytes);

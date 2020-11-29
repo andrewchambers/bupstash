@@ -692,6 +692,16 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let use_stat_cache = !matches.opt_present("no-stat-caching");
 
+    let mut exclusions = Vec::new();
+    for e in matches.opt_strs("exclude") {
+        match glob::Pattern::new(&e) {
+            Ok(pattern) => exclusions.push(pattern),
+            Err(err) => {
+                anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
+            }
+        }
+    }
+
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {
             Ok(v) => v,
@@ -754,11 +764,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         data_source = client::DataSource::Subprocess(source_args)
     } else if source_args.is_empty() {
         anyhow::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
-    } else {
-        if !source_args.len() == 1 {
-            anyhow::bail!("expected a single data source, got {:?}", source_args);
-        }
-
+    } else if source_args.len() == 1 {
         if source_args[0] == "-" {
             data_source = client::DataSource::Readable {
                 description: "<stdin>".to_string(),
@@ -770,7 +776,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
-                Err(err) => anyhow::bail!("unable to open input source {:?}: {}", input_path, err),
+                Err(err) => anyhow::bail!("unable to put {:?}: {}", input_path, err),
             };
 
             let name = match input_path.file_name() {
@@ -778,24 +784,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 None => "rootfs".to_string(),
             };
 
-            let mut exclusions = Vec::new();
-
-            for e in matches.opt_strs("exclude") {
-                match glob::Pattern::new(&e) {
-                    Ok(pattern) => exclusions.push(pattern),
-                    Err(err) => {
-                        anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
-                    }
-                }
-            }
-
             if md.is_dir() {
                 if default_tags {
                     tags.insert("name".to_string(), name + ".tar");
                 }
 
-                data_source = client::DataSource::Directory {
-                    path: input_path,
+                data_source = client::DataSource::Filesystem {
+                    base: input_path.clone(),
+                    paths: vec![input_path],
                     exclusions,
                 };
             } else if md.is_file() {
@@ -811,6 +807,56 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 anyhow::bail!("{} is not a file or a directory", source_args[0]);
             }
         }
+    } else {
+        // Gather absolute paths.
+        let mut canonicalized = Vec::new();
+        for input_path in source_args.iter() {
+            let input_path = match std::fs::canonicalize(input_path) {
+                Ok(p) => p,
+                Err(err) => anyhow::bail!("unable to put {:?}: {}", input_path, err),
+            };
+            canonicalized.push(input_path)
+        }
+
+        // Prune away paths that encapsulate eachother, for example
+        // 'put /a /a/b'  is really just 'put /a'.
+        canonicalized.sort();
+        let mut pruned_paths = Vec::new();
+        let mut i = 0;
+        while i < canonicalized.len() {
+            let mut j = i + 1;
+            loop {
+                match (&canonicalized[i], canonicalized.get(j)) {
+                    (_, None) => break,
+                    (a, Some(b)) => {
+                        if fsutil::common_path(a, b).unwrap() != *a {
+                            break;
+                        }
+                    }
+                }
+                j += 1;
+            }
+            pruned_paths.push(canonicalized[i].clone());
+            i = j;
+        }
+
+        // We should always have at least "/" in common.
+        let base_path = fsutil::common_path_all(&pruned_paths).unwrap();
+
+        if default_tags {
+            let name = match base_path.file_name() {
+                Some(name) => name.to_string_lossy().to_string() + ".tar",
+                None => "rootfs.tar".to_string(),
+            };
+
+            tags.insert("name".to_string(), name);
+        }
+
+        data_source = client::DataSource::Filesystem {
+            base: base_path,
+            paths: pruned_paths,
+            exclusions,
+        };
     };
 
     // No easy way to compute the tag set length without actually encoding it due
@@ -1109,7 +1155,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     progress.set_message("fetching content index...");
-    let compressed_index = client::request_index(
+    let content_index = client::request_index(
         client::DataRequestContext {
             primary_key_id,
             hash_key_part_1,
@@ -1134,28 +1180,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     match list_format {
         ListFormat::Human => {
-            // XXX It is inefficient to immediately decompress the index, however
-            // for printing we sort the entries to make it more pleasant to view.
-            let mut content_index = {
-                let mut v = Vec::new();
-                for ent in compressed_index.iter() {
-                    v.push(ent?);
-                }
-                v
-            };
-
-            std::mem::drop(compressed_index);
-
-            // Due to how 'put' works, our tarballs are not ordered in a way that is pleasant by default.
-            content_index.sort_by(|a, b| match (a, b) {
-                (index::VersionedIndexEntry::V1(ref a), index::VersionedIndexEntry::V1(ref b)) => {
-                    a.path.cmp(&b.path)
-                }
-            });
-
             let mut max_size_digits = 0;
             for ent in content_index.iter() {
-                match ent {
+                match ent? {
                     index::VersionedIndexEntry::V1(ent) => {
                         max_size_digits =
                             std::cmp::max(ent.size.0.to_string().len(), max_size_digits)
@@ -1164,7 +1191,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             }
 
             for ent in content_index.iter() {
-                match ent {
+                match ent? {
                     index::VersionedIndexEntry::V1(ent) => {
                         let ts = chrono::NaiveDateTime::from_timestamp(
                             ent.ctime.0 as i64,
@@ -1201,7 +1228,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             }
         }
         ListFormat::Jsonl => {
-            for ent in compressed_index.iter() {
+            for ent in content_index.iter() {
                 match ent? {
                     index::VersionedIndexEntry::V1(ent) => {
                         write!(out, "{{")?;
