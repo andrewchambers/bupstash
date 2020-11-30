@@ -33,6 +33,11 @@ pub struct IndexEntry {
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<std::collections::BTreeMap<String, String>>,
+    pub offsets: IndexEntryOffsets,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndexEntryOffsets {
     pub data_chunk_idx: serde_bare::Uint,
     pub data_chunk_end_idx: serde_bare::Uint,
     pub data_chunk_offset: serde_bare::Uint,
@@ -196,56 +201,60 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
 
                     // Either coalesce the existing range or insert a new range.
                     if !data_chunk_ranges.is_empty()
-                        && ((data_chunk_ranges.last().unwrap().end_idx == ent.data_chunk_idx)
+                        && ((data_chunk_ranges.last().unwrap().end_idx
+                            == ent.offsets.data_chunk_idx)
                             || (data_chunk_ranges.last().unwrap().end_idx.0 + 1
-                                == ent.data_chunk_idx.0))
+                                == ent.offsets.data_chunk_idx.0))
                     {
-                        data_chunk_ranges.last_mut().unwrap().end_idx = ent.data_chunk_end_idx
+                        data_chunk_ranges.last_mut().unwrap().end_idx =
+                            ent.offsets.data_chunk_end_idx
                     } else {
                         data_chunk_ranges.push(HTreeDataRange {
-                            start_idx: ent.data_chunk_idx,
-                            end_idx: ent.data_chunk_end_idx,
+                            start_idx: ent.offsets.data_chunk_idx,
+                            end_idx: ent.offsets.data_chunk_end_idx,
                         })
                     }
 
-                    if ent.data_chunk_idx == ent.data_chunk_end_idx {
-                        let range =
-                            ent.data_chunk_offset.0 as usize..ent.data_chunk_end_offset.0 as usize;
+                    if ent.offsets.data_chunk_idx == ent.offsets.data_chunk_end_idx {
+                        let range = ent.offsets.data_chunk_offset.0 as usize
+                            ..ent.offsets.data_chunk_end_offset.0 as usize;
 
-                        match incomplete_data_chunks.get_mut(&ent.data_chunk_idx.0) {
+                        match incomplete_data_chunks.get_mut(&ent.offsets.data_chunk_idx.0) {
                             Some(range_set) => {
                                 range_set.insert(range);
                             }
                             None => {
                                 let mut range_set = rangemap::RangeSet::new();
                                 range_set.insert(range);
-                                incomplete_data_chunks.insert(ent.data_chunk_idx.0, range_set);
+                                incomplete_data_chunks
+                                    .insert(ent.offsets.data_chunk_idx.0, range_set);
                             }
                         }
                     } else {
-                        let start_range = ent.data_chunk_offset.0 as usize..usize::MAX;
-                        let end_range = 0..ent.data_chunk_end_offset.0 as usize;
+                        let start_range = ent.offsets.data_chunk_offset.0 as usize..usize::MAX;
+                        let end_range = 0..ent.offsets.data_chunk_end_offset.0 as usize;
 
-                        match incomplete_data_chunks.get_mut(&ent.data_chunk_idx.0) {
+                        match incomplete_data_chunks.get_mut(&ent.offsets.data_chunk_idx.0) {
                             Some(range_set) => {
                                 range_set.insert(start_range);
                             }
                             None => {
                                 let mut range_set = rangemap::RangeSet::new();
                                 range_set.insert(start_range);
-                                incomplete_data_chunks.insert(ent.data_chunk_idx.0, range_set);
+                                incomplete_data_chunks
+                                    .insert(ent.offsets.data_chunk_idx.0, range_set);
                             }
                         }
 
-                        if ent.data_chunk_end_offset.0 != 0 {
+                        if ent.offsets.data_chunk_end_offset.0 != 0 {
                             let mut range_set = rangemap::RangeSet::new();
                             range_set.insert(end_range);
-                            let old =
-                                incomplete_data_chunks.insert(ent.data_chunk_end_idx.0, range_set);
+                            let old = incomplete_data_chunks
+                                .insert(ent.offsets.data_chunk_end_idx.0, range_set);
 
                             // Because our end chunk is a never before seen index, this
                             // range set should must be none.
-                            assert!(ent.data_chunk_idx != ent.data_chunk_end_idx);
+                            assert!(ent.offsets.data_chunk_idx != ent.offsets.data_chunk_end_idx);
                             assert!(old.is_none());
                         } else {
                             data_chunk_ranges.last_mut().unwrap().end_idx.0 -= 1;
@@ -278,25 +287,27 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
 
                 let mut range_adjust = 0;
 
-                if ent.data_chunk_idx == ent.data_chunk_end_idx {
+                if ent.offsets.data_chunk_idx == ent.offsets.data_chunk_end_idx {
                     let mut range_set = rangemap::RangeSet::new();
 
                     range_set.insert(
-                        ent.data_chunk_offset.0 as usize..ent.data_chunk_end_offset.0 as usize,
+                        ent.offsets.data_chunk_offset.0 as usize
+                            ..ent.offsets.data_chunk_end_offset.0 as usize,
                     );
 
-                    incomplete_data_chunks.insert(ent.data_chunk_idx.0, range_set);
+                    incomplete_data_chunks.insert(ent.offsets.data_chunk_idx.0, range_set);
                 } else {
                     let mut start_range_set = rangemap::RangeSet::new();
-                    start_range_set.insert(ent.data_chunk_offset.0 as usize..usize::MAX);
+                    start_range_set.insert(ent.offsets.data_chunk_offset.0 as usize..usize::MAX);
 
-                    incomplete_data_chunks.insert(ent.data_chunk_idx.0, start_range_set);
+                    incomplete_data_chunks.insert(ent.offsets.data_chunk_idx.0, start_range_set);
 
-                    if ent.data_chunk_end_offset.0 != 0 {
+                    if ent.offsets.data_chunk_end_offset.0 != 0 {
                         let mut end_range_set = rangemap::RangeSet::new();
-                        end_range_set.insert(0..ent.data_chunk_end_offset.0 as usize);
+                        end_range_set.insert(0..ent.offsets.data_chunk_end_offset.0 as usize);
 
-                        incomplete_data_chunks.insert(ent.data_chunk_end_idx.0, end_range_set);
+                        incomplete_data_chunks
+                            .insert(ent.offsets.data_chunk_end_idx.0, end_range_set);
                     } else {
                         range_adjust = 1;
                     }
@@ -305,8 +316,8 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
                 return Ok(PickMap {
                     is_subtar: false,
                     data_chunk_ranges: vec![HTreeDataRange {
-                        start_idx: ent.data_chunk_idx,
-                        end_idx: serde_bare::Uint(ent.data_chunk_end_idx.0 - range_adjust),
+                        start_idx: ent.offsets.data_chunk_idx,
+                        end_idx: serde_bare::Uint(ent.offsets.data_chunk_end_idx.0 - range_adjust),
                     }],
                     incomplete_data_chunks,
                     index: sub_index,

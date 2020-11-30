@@ -496,10 +496,12 @@ fn dir_ent_to_index_ent(
         dev_major: serde_bare::Uint(dev_major as u64),
         dev_minor: serde_bare::Uint(dev_minor as u64),
         xattrs: None,
-        data_chunk_idx: serde_bare::Uint(0),
-        data_chunk_end_idx: serde_bare::Uint(0),
-        data_chunk_offset: serde_bare::Uint(0),
-        data_chunk_end_offset: serde_bare::Uint(0),
+        offsets: index::IndexEntryOffsets {
+            data_chunk_idx: serde_bare::Uint(0),
+            data_chunk_end_idx: serde_bare::Uint(0),
+            data_chunk_offset: serde_bare::Uint(0),
+            data_chunk_end_offset: serde_bare::Uint(0),
+        },
     })
 }
 
@@ -523,7 +525,8 @@ fn send_dir(
                 base.display()
             )));
         }
-        let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &".".into(), &metadata)?);
+        let ent =
+            index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &".".into(), &metadata)?);
         send_chunks(
             ctx,
             sink,
@@ -560,7 +563,11 @@ fn send_dir(
                 )));
             }
             let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-            let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &index_path, &metadata)?);
+            let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(
+                &base,
+                &index_path,
+                &metadata,
+            )?);
             send_chunks(
                 ctx,
                 sink,
@@ -654,8 +661,8 @@ fn send_dir(
                 for index_ent in dir_index.iter_mut() {
                     match index_ent {
                         index::VersionedIndexEntry::V1(ref mut index_ent) => {
-                            index_ent.data_chunk_idx.0 += dir_data_chunk_idx;
-                            index_ent.data_chunk_end_idx.0 += dir_data_chunk_idx;
+                            index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
+                            index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
                         }
                     }
                     send_chunks(
@@ -730,18 +737,19 @@ fn send_dir(
                         }
                     }
 
-                    index_ent.data_chunk_idx =
+                    index_ent.offsets.data_chunk_idx =
                         serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx);
-                    index_ent.data_chunk_end_idx =
+                    index_ent.offsets.data_chunk_end_idx =
                         serde_bare::Uint(ent_data_chunk_end_idx - dir_data_chunk_idx);
 
-                    index_ent.data_chunk_offset = serde_bare::Uint(ent_data_chunk_offset);
-                    index_ent.data_chunk_end_offset = serde_bare::Uint(ent_data_chunk_end_offset);
+                    index_ent.offsets.data_chunk_offset = serde_bare::Uint(ent_data_chunk_offset);
+                    index_ent.offsets.data_chunk_end_offset =
+                        serde_bare::Uint(ent_data_chunk_end_offset);
 
                     cache_dir_index.push(index::VersionedIndexEntry::V1(index_ent.clone()));
 
-                    index_ent.data_chunk_idx.0 += dir_data_chunk_idx;
-                    index_ent.data_chunk_end_idx.0 += dir_data_chunk_idx;
+                    index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
+                    index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
 
                     send_chunks(
                         ctx,
