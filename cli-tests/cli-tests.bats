@@ -510,6 +510,18 @@ _concurrent_modify_worker () {
   done
 }
 
+@test "multi dir put" {
+  mkdir "$SCRATCH/foo"
+  mkdir "$SCRATCH/foo/bar"
+  mkdir "$SCRATCH/foo/bar/baz"
+  mkdir "$SCRATCH/foo/bang"
+  echo foo > "$SCRATCH/foo/bar/baz/a.txt"
+
+  id=$(bupstash put :: "$SCRATCH/foo/bar" "$SCRATCH/foo/bar/baz" "$SCRATCH/foo/bang")
+  bupstash get id=$id | tar -tf -
+  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+}
+
 @test "pick torture" {
   if test -z "$PICK_TORTURE_DIR"
   then

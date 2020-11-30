@@ -817,10 +817,10 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
             canonicalized.push(input_path)
         }
-
+        canonicalized.sort();
+        canonicalized.dedup();
         // Prune away paths that encapsulate eachother, for example
         // 'put /a /a/b'  is really just 'put /a'.
-        canonicalized.sort();
         let mut pruned_paths = Vec::new();
         let mut i = 0;
         while i < canonicalized.len() {

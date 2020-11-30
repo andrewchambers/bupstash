@@ -515,17 +515,65 @@ fn send_dir(
     paths: &[std::path::PathBuf],
     exclusions: &[glob::Pattern],
 ) -> Result<(), SendDirError> {
+    {
+        let metadata = std::fs::metadata(&base)?;
+        if !metadata.is_dir() {
+            return Err(SendDirError::Other(anyhow::format_err!(
+                "{} is not a directory",
+                base.display()
+            )));
+        }
+        let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &".".into(), &metadata)?);
+        send_chunks(
+            ctx,
+            sink,
+            idx_chunker,
+            idx_tw,
+            &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
+            None,
+        )?;
+    }
+
     let mut addresses: Vec<u8> = Vec::new();
     let mut work_list = Vec::new();
 
+    let mut initial_paths = std::collections::HashSet::new();
     for p in paths {
         work_list.push(p.clone());
+        if p != base {
+            initial_paths.insert(p.clone());
+        }
     }
 
     while let Some(cur_dir) = work_list.pop() {
         ctx.progress.set_message(&cur_dir.to_string_lossy());
+
+        // These inital paths do not have a parent who will add an index entry
+        // for them, so we add before we process the dir contents.
+        if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
+            initial_paths.remove(&cur_dir);
+            let metadata = std::fs::metadata(&base)?;
+            if !metadata.is_dir() {
+                return Err(SendDirError::Other(anyhow::format_err!(
+                    "{} is not a directory",
+                    cur_dir.display()
+                )));
+            }
+            let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
+            let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &index_path, &metadata)?);
+            send_chunks(
+                ctx,
+                sink,
+                idx_chunker,
+                idx_tw,
+                &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
+                None,
+            )?;
+        }
+
         addresses.clear();
         let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
+
         // Incorporate the absolute dir in our cache key.
         hash_state.update(cur_dir.as_os_str().as_bytes());
         // Null byte marks the end of path in the hash space.
@@ -541,30 +589,6 @@ fn send_dir(
         dir_ents.sort_by_key(|a| a.file_name());
 
         let mut index_ents = Vec::new();
-
-        if &cur_dir == base {
-            let metadata = std::fs::metadata(&cur_dir)?;
-            if !metadata.is_dir() {
-                return Err(SendDirError::Other(anyhow::format_err!(
-                    "{} is not a directory",
-                    cur_dir.display()
-                )));
-            }
-            let index_path = ".".into();
-
-            let index_ent = match dir_ent_to_index_ent(&cur_dir, &index_path, &metadata) {
-                Ok(index_ent) => index_ent,
-                Err(err) if likely_smear_error(&err) => {
-                    return Err(SendDirError::FilesystemModified)
-                }
-                Err(err) => return Err(SendDirError::Other(err.into())),
-            };
-
-            let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
-
-            hash_state.update(&index_bytes);
-            index_ents.push((cur_dir.clone(), index_ent));
-        }
 
         'collect_dir_ents: for entry in dir_ents {
             let ent_path = entry.path();

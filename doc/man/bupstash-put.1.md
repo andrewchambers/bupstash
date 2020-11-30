@@ -6,7 +6,7 @@ bupstash-put(1)
 Put data into a bupstash repository.
 
 `bupstash put [OPTIONS] [TAG=VAL...] FILE`<br>
-`bupstash put [OPTIONS] [TAG=VAL...] DIR`<br>
+`bupstash put [OPTIONS] [TAG=VAL...] DIRS...`<br>
 `bupstash put --exec [OPTIONS] [TAG=VAL...] COMMAND`<br>
 
 ## DESCRIPTION
@@ -15,8 +15,8 @@ Put data into a bupstash repository.
 such that only the decryption key can decrypt it.
 
 For files, the data is saved directly, for directories, the data
-is converted to a tar archive, and for commands the command is executed, and
-stdout is sent to the database.
+is converted to a tar archive containing each of the specified directories,
+and for commands the command is executed, and stdout is sent to the database.
 
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots take minimal additional disk space.
