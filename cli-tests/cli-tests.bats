@@ -528,19 +528,24 @@ _concurrent_modify_worker () {
     skip "Set PICK_TORTURE_DIR to run this test."
   fi
 
-  id=$(bupstash put :: "$PICK_TORTURE_DIR")
+  # Put twice so we test caching code paths.
+  id1=$(bupstash put :: "$PICK_TORTURE_DIR")
+  id2=$(bupstash put :: "$PICK_TORTURE_DIR")
 
-  for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
+  for id in $(echo $id1 $id2)
   do
-    echo file "'$f'"
-    cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
-  done
+    for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
+    do
+      echo file "'$f'"
+      cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
+    done
 
-  for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
-  do
-    echo dir "'$d'"
-    diff -u \
-      <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
-      <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
+    for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
+    do
+      echo dir "'$d'"
+      diff -u \
+        <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
+        <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
+    done
   done
 }
