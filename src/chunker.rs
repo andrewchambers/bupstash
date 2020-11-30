@@ -72,12 +72,15 @@ impl RollsumChunker {
         }
 
         // This is perhaps the hottest loop in bupstash, hoist
-        // a lot of things out of it manually, at the time
+        // a lot of things out of it manually. At the time
         // of writing, this unsafe hoisting made the chunker 3x faster.
         //
-        // (200MB/s up to 600MB/s), though its faster than that now.
+        // (200MB/s up to +700MB/s), though its faster than that now.
+        // We can measure this function with:
         //
-        // We use unsafe here to avoid self checks on self.cur_vec.
+        // yes | pv | bupstash put-benchmark --chunk
+        //
+        // We use unsafe here to avoid bounds checks.
         // This unsafe code is on the upload path, so is less dangerous
         // than using unsafe on the download path.
         unsafe {
@@ -85,15 +88,19 @@ impl RollsumChunker {
             let mut cur_vec_len = self.cur_vec.len();
             let mut vp = self.cur_vec.as_mut_ptr().add(cur_vec_len);
             let mut rs = self.rs.clone();
+            let mut buf = buf.as_ptr();
+            let n_to_add = std::cmp::min(self.spare_capacity(), n_bytes);
             let gear_tab = &self.gear_tab;
             let min_sz = self.min_sz;
             let max_sz = self.max_sz;
-            for b in buf[0..std::cmp::min(self.spare_capacity(), n_bytes)].iter() {
-                *vp = *b;
-                vp = vp.offset(1);
+            while n_added < n_to_add {
+                let b = *buf;
+                *vp = b;
+                vp = vp.add(1);
+                buf = buf.add(1);
                 n_added += 1;
                 cur_vec_len += 1;
-                if (rs.roll_byte(gear_tab, *b) && cur_vec_len > min_sz) || cur_vec_len == max_sz {
+                if (rs.roll_byte(gear_tab, b) && cur_vec_len > min_sz) || cur_vec_len == max_sz {
                     self.rs = rs;
                     self.cur_vec.set_len(cur_vec_len);
                     return (n_added, Some(self.swap_vec()));
