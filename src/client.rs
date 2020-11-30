@@ -644,7 +644,7 @@ fn send_dir(
         };
 
         match cache_lookup {
-            Some((total_size, cached_addresses, cached_index)) => {
+            Some((total_size, cached_addresses, cached_index_offsets_buf)) => {
                 debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
 
                 let dir_data_chunk_idx = tw.data_chunk_count();
@@ -655,31 +655,41 @@ fn send_dir(
                     tw.add_addr(sink, 0, 1, &address)?;
                 }
 
-                let mut dir_index: Vec<index::VersionedIndexEntry> =
-                    serde_bare::from_slice(&cached_index).unwrap();
+                let cached_index_offsets: Vec<index::IndexEntryOffsets> =
+                    serde_bare::from_slice(&cached_index_offsets_buf).unwrap();
 
-                for index_ent in dir_index.iter_mut() {
-                    match index_ent {
-                        index::VersionedIndexEntry::V1(ref mut index_ent) => {
-                            index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
-                            index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
-                        }
-                    }
+                assert!(index_ents.len() == cached_index_offsets.len());
+
+                for ((_, mut index_ent), base_offsets) in
+                    index_ents.drain(..).zip(cached_index_offsets.iter())
+                {
+                    index_ent.offsets = *base_offsets;
+                    index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
+                    index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
                     send_chunks(
                         ctx,
                         sink,
                         idx_chunker,
                         idx_tw,
-                        &mut std::io::Cursor::new(&serde_bare::to_vec(&index_ent).unwrap()),
+                        &mut std::io::Cursor::new(
+                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_ent))
+                                .unwrap(),
+                        ),
                         None,
                     )?;
                 }
 
+                // Re-add the cache entry so it isn't invalidated.
                 send_log_session
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .add_stat_cache_data(&hash[..], total_size, &addresses, &cached_index)?;
+                    .add_stat_cache_data(
+                        &hash[..],
+                        total_size,
+                        &addresses,
+                        &cached_index_offsets_buf,
+                    )?;
 
                 ctx.progress.inc(total_size);
             }
@@ -689,8 +699,9 @@ fn send_dir(
                     addresses.extend_from_slice(&addr.bytes[..]);
                 };
 
-                let mut cache_dir_index: Vec<index::VersionedIndexEntry> =
+                let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
                     Vec::with_capacity(index_ents.len());
+
                 let dir_data_chunk_idx = tw.data_chunk_count();
 
                 for (ent_path, mut index_ent) in index_ents.drain(..) {
@@ -737,17 +748,18 @@ fn send_dir(
                         }
                     }
 
-                    index_ent.offsets.data_chunk_idx =
-                        serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx);
-                    index_ent.offsets.data_chunk_end_idx =
-                        serde_bare::Uint(ent_data_chunk_end_idx - dir_data_chunk_idx);
+                    let cur_offsets = index::IndexEntryOffsets {
+                        data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
+                        data_chunk_end_idx: serde_bare::Uint(
+                            ent_data_chunk_end_idx - dir_data_chunk_idx,
+                        ),
+                        data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
+                        data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
+                    };
 
-                    index_ent.offsets.data_chunk_offset = serde_bare::Uint(ent_data_chunk_offset);
-                    index_ent.offsets.data_chunk_end_offset =
-                        serde_bare::Uint(ent_data_chunk_end_offset);
+                    dir_index_offsets.push(cur_offsets);
 
-                    cache_dir_index.push(index::VersionedIndexEntry::V1(index_ent.clone()));
-
+                    index_ent.offsets = cur_offsets;
                     index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
                     index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
 
@@ -783,7 +795,7 @@ fn send_dir(
                             &hash[..],
                             total_size,
                             &addresses,
-                            &serde_bare::to_vec(&cache_dir_index).unwrap(),
+                            &serde_bare::to_vec(&dir_index_offsets).unwrap(),
                         )?;
                 }
 

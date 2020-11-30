@@ -40,13 +40,13 @@ impl SendLog {
             },
         ) {
             Ok(v) => {
-                if v != 1 {
+                if v != 2 {
                     anyhow::bail!("send log at {:?} is from a different version of the software and must be removed manually", &p);
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute(
-                    "insert into LogMeta(Key, Value) values('schema-version', 1);",
+                    "insert into LogMeta(Key, Value) values('schema-version', 2);",
                     rusqlite::NO_PARAMS,
                 )?;
             }
@@ -81,7 +81,7 @@ impl SendLog {
         )?;
 
         tx.execute(
-            "create table if not exists StatCache(Hash primary key, Addresses, DirIndex, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+            "create table if not exists StatCache(Hash primary key, Addresses, IndexOffsets, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
             rusqlite::NO_PARAMS,
         )?;
 
@@ -212,7 +212,7 @@ impl<'a> SendLogSession<'a> {
         hash: &[u8],
         size: u64,
         addresses: &[u8],
-        index: &[u8],
+        index_offsets: &[u8],
     ) -> Result<(), anyhow::Error> {
         if !self.tx_active {
             anyhow::bail!("no active transaction");
@@ -220,7 +220,7 @@ impl<'a> SendLogSession<'a> {
 
         // We update and not replace so we can keep an old item id if it exists.
         let mut stmt = self.log.tmp_conn.prepare_cached(
-            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, DirIndex, Size) Values($1, $2, $3, $4, $5, $6) \
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, IndexOffsets, Size) Values($1, $2, $3, $4, $5, $6) \
             on conflict(Hash) do update set LatestSessionId = $2;"
         )?;
 
@@ -229,7 +229,7 @@ impl<'a> SendLogSession<'a> {
             self.session_id,
             hash,
             addresses,
-            index,
+            index_offsets,
             size as i64
         ])?;
 
@@ -250,10 +250,9 @@ impl<'a> SendLogSession<'a> {
         &self,
         hash: &[u8],
     ) -> Result<Option<(u64, Vec<u8>, Vec<u8>)>, anyhow::Error> {
-        let mut stmt = self
-            .log
-            .tmp_conn
-            .prepare_cached("select Size, Addresses, DirIndex from StatCache where Hash = $1;")?;
+        let mut stmt = self.log.tmp_conn.prepare_cached(
+            "select Size, Addresses, IndexOffsets from StatCache where Hash = $1;",
+        )?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
             let sz: i64 = r.get(0)?;

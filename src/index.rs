@@ -36,7 +36,7 @@ pub struct IndexEntry {
     pub offsets: IndexEntryOffsets,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct IndexEntryOffsets {
     pub data_chunk_idx: serde_bare::Uint,
     pub data_chunk_end_idx: serde_bare::Uint,
