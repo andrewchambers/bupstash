@@ -34,7 +34,7 @@ pub struct IndexEntry {
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<std::collections::BTreeMap<String, String>>,
+    pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
     pub offsets: IndexEntryOffsets,
 }
 

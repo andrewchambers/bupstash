@@ -43,6 +43,7 @@ nix = "0.17"
 indicatif = "0.15"
 rangemap = "0.1.7"
 blake3 = "0.3"
+xattr = "0.2"
 
 [dev-dependencies]
 

@@ -133,6 +133,7 @@ pub struct SendContext {
     pub metadata_ectx: crypto::EncryptionContext,
     pub gear_tab: rollsum::GearTab,
     pub checkpoint_bytes: u64,
+    pub want_xattrs: bool,
 }
 
 pub enum DataSource {
@@ -458,7 +459,8 @@ fn dir_ent_to_index_ent(
     full_path: &std::path::PathBuf,
     short_path: &std::path::PathBuf,
     metadata: &std::fs::Metadata,
-) -> Result<index::IndexEntry, std::io::Error> {
+    want_xattrs: bool,
+) -> Result<index::IndexEntry, SendDirError> {
     // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
     // how best to handle this?
 
@@ -469,6 +471,31 @@ fn dir_ent_to_index_ent(
     } else {
         (0, 0)
     };
+
+    let mut xattrs = None;
+
+    if want_xattrs {
+        let attrs = match xattr::list(full_path) {
+            Ok(attrs) => attrs,
+            Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
+            Err(err) => return Err(err.into()),
+        };
+        for attr in attrs {
+            if let Some(value) = xattr::get(full_path, &attr)? {
+                if xattrs.is_none() {
+                    xattrs = Some(std::collections::BTreeMap::new())
+                }
+                match xattrs {
+                    Some(ref mut xattrs) => {
+                        xattrs.insert(attr.to_string_lossy().to_string(), value);
+                    }
+                    _ => unreachable!(),
+                }
+            } else {
+                return Err(SendDirError::FilesystemModified);
+            }
+        }
+    }
 
     Ok(index::IndexEntry {
         path: short_path.to_string_lossy().to_string(),
@@ -497,7 +524,7 @@ fn dir_ent_to_index_ent(
         dev_minor: serde_bare::Uint(dev_minor as u64),
         dev: serde_bare::Uint(metadata.dev()),
         ino: serde_bare::Uint(metadata.ino()),
-        xattrs: None,
+        xattrs,
         offsets: index::IndexEntryOffsets {
             data_chunk_idx: serde_bare::Uint(0),
             data_chunk_end_idx: serde_bare::Uint(0),
@@ -527,8 +554,12 @@ fn send_dir(
                 base.display()
             )));
         }
-        let ent =
-            index::VersionedIndexEntry::V1(dir_ent_to_index_ent(&base, &".".into(), &metadata)?);
+        let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(
+            &base,
+            &".".into(),
+            &metadata,
+            ctx.want_xattrs,
+        )?);
         send_chunks(
             ctx,
             sink,
@@ -569,6 +600,7 @@ fn send_dir(
                 &base,
                 &index_path,
                 &metadata,
+                ctx.want_xattrs,
             )?);
             send_chunks(
                 ctx,
@@ -616,13 +648,8 @@ fn send_dir(
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
             let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
-            let index_ent = match dir_ent_to_index_ent(&ent_path, &index_path, &metadata) {
-                Ok(index_ent) => index_ent,
-                Err(err) if likely_smear_error(&err) => {
-                    return Err(SendDirError::FilesystemModified)
-                }
-                Err(err) => return Err(SendDirError::Other(err.into())),
-            };
+            let index_ent =
+                dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs)?;
             let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
 
             if metadata.is_dir() {

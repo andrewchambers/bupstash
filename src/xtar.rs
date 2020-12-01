@@ -92,7 +92,10 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
     match &ent.xattrs {
         Some(xattrs) => {
             for (k, v) in xattrs.iter() {
-                format_pax_extended_record(format!("SCHILY.xattr.{}", k).as_bytes(), v.as_bytes());
+                pax_ext_records.extend_from_slice(&format_pax_extended_record(
+                    format!("SCHILY.xattr.{}", k).as_bytes(),
+                    v,
+                ));
             }
         }
         None => (),

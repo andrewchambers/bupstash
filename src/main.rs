@@ -626,7 +626,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag(
         "e",
         "exec",
-        "Treat all arguments after '::' as a command to run, ensuring it succeeds before committing the send.",
+        "Treat arguments as a command to run, ensuring it succeeds before committing the item.",
     );
     opts.optflag(
         "",
@@ -638,6 +638,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "no-send-log",
         "Disable logging of previously sent data, implies --no-stat-caching.",
     );
+    opts.optflag("", "xattrs", "Save directory entry xattrs.");
     opts.optopt(
         "",
         "send-log",
@@ -683,6 +684,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             }
         }
     }
+
+    let want_xattrs = matches.opt_present("xattrs");
 
     let compression = if matches.opt_present("no-compression") {
         compression::Scheme::None
@@ -879,6 +882,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         gear_tab,
         data_ectx,
         metadata_ectx,
+        want_xattrs,
     };
 
     progress.set_message(&"acquiring repository lock...");
