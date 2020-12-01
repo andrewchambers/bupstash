@@ -29,6 +29,8 @@ pub struct IndexEntry {
     pub mtime_nsec: serde_bare::Uint,
     pub ctime: serde_bare::Uint,
     pub ctime_nsec: serde_bare::Uint,
+    pub dev: serde_bare::Uint,
+    pub ino: serde_bare::Uint,
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,

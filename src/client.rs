@@ -495,6 +495,8 @@ fn dir_ent_to_index_ent(
         },
         dev_major: serde_bare::Uint(dev_major as u64),
         dev_minor: serde_bare::Uint(dev_minor as u64),
+        dev: serde_bare::Uint(metadata.dev()),
+        ino: serde_bare::Uint(metadata.ino()),
         xattrs: None,
         offsets: index::IndexEntryOffsets {
             data_chunk_idx: serde_bare::Uint(0),
