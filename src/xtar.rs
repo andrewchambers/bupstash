@@ -89,6 +89,15 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
 
     ustar_hdr.set_cksum();
 
+    match &ent.xattrs {
+        Some(xattrs) => {
+            for (k, v) in xattrs.iter() {
+                format_pax_extended_record(format!("SCHILY.xattr.{}", k).as_bytes(), v.as_bytes());
+            }
+        }
+        None => (),
+    }
+
     let mut hdr_bytes = Vec::new();
 
     if !pax_ext_records.is_empty() {
