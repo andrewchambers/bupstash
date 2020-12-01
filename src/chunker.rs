@@ -74,7 +74,7 @@ impl RollsumChunker {
         // This is perhaps the hottest loop in bupstash, hoist
         // a lot of things out of it manually. At the time
         // of writing, this unsafe hoisting made the chunker faster.
-        // (200MB/s up to ~1GB/s).
+        // (200MiB/s up to ~1GiB/s).
         //
         // We can measure this function with:
         //
