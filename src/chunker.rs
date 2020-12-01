@@ -73,9 +73,9 @@ impl RollsumChunker {
 
         // This is perhaps the hottest loop in bupstash, hoist
         // a lot of things out of it manually. At the time
-        // of writing, this unsafe hoisting made the chunker 3x faster.
+        // of writing, this unsafe hoisting made the chunker faster.
+        // (200MB/s up to ~1GB/s).
         //
-        // (200MB/s up to +700MB/s), though its faster than that now.
         // We can measure this function with:
         //
         // yes | pv | bupstash put-benchmark --chunk
@@ -84,31 +84,41 @@ impl RollsumChunker {
         // This unsafe code is on the upload path, so is less dangerous
         // than using unsafe on the download path.
         unsafe {
-            let mut n_added = 0;
-            let mut cur_vec_len = self.cur_vec.len();
-            let mut vp = self.cur_vec.as_mut_ptr().add(cur_vec_len);
-            let mut rs = self.rs.clone();
-            let mut buf = buf.as_ptr();
-            let n_to_add = std::cmp::min(self.spare_capacity(), n_bytes);
+            let start_vec_len = self.cur_vec.len();
             let gear_tab = &self.gear_tab;
             let min_sz = self.min_sz;
             let max_sz = self.max_sz;
+            let bufp = buf.as_ptr();
+            let vp = self.cur_vec.as_mut_ptr().add(start_vec_len);
+            // rs is small, cloning is fast.
+            let mut n_added = 0;
+            let mut rs = self.rs.clone();
+            let mut n_to_add = std::cmp::min(self.spare_capacity(), n_bytes);
+            // iterate only as far as max_sz, we can check for max_sz at the end.
+            if start_vec_len + n_to_add > max_sz {
+                let overshoot = start_vec_len + n_to_add - max_sz;
+                n_to_add = n_to_add - overshoot;
+            }
             while n_added < n_to_add {
-                let b = *buf;
-                *vp = b;
-                vp = vp.add(1);
-                buf = buf.add(1);
+                let b = *bufp.add(n_added);
+                *vp.add(n_added) = b;
                 n_added += 1;
-                cur_vec_len += 1;
-                if (rs.roll_byte(gear_tab, b) && cur_vec_len > min_sz) || cur_vec_len == max_sz {
-                    self.rs = rs;
-                    self.cur_vec.set_len(cur_vec_len);
-                    return (n_added, Some(self.swap_vec()));
+                if rs.roll_byte(gear_tab, b) {
+                    let vec_len = start_vec_len + n_added;
+                    if vec_len > min_sz {
+                        self.rs = rs;
+                        self.cur_vec.set_len(vec_len);
+                        return (n_added, Some(self.swap_vec()));
+                    }
                 }
             }
             self.rs = rs;
-            self.cur_vec.set_len(cur_vec_len);
-            (n_added, None)
+            self.cur_vec.set_len(start_vec_len + n_added);
+            if self.cur_vec.len() == max_sz {
+                return (n_added, Some(self.swap_vec()));
+            } else {
+                (n_added, None)
+            }
         }
     }
 

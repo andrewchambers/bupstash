@@ -1473,6 +1473,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag("", "address", "Compute chunk content addresses.");
     opts.optflag("", "encrypt", "Encrypt chunks.");
     opts.optflag("", "print", "Print data to stdout.");
+    opts.optflag("", "print-chunk-size", "Print chunk sizes.");
 
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -1481,6 +1482,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let do_address = matches.opt_present("address");
     let do_encrypt = matches.opt_present("encrypt");
     let do_print = matches.opt_present("print");
+    let do_print_chunk_size = matches.opt_present("print-chunk-size");
 
     let min_size = client::CHUNK_MIN_SIZE;
     let max_size = client::CHUNK_MAX_SIZE;
@@ -1506,7 +1508,11 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     {
         let mut outf = outf.lock();
 
-        let mut process_data = move |mut data| -> Result<(), anyhow::Error> {
+        let mut process_data = move |mut data: Vec<u8>| -> Result<(), anyhow::Error> {
+            if do_print_chunk_size {
+                writeln!(outf, "{}", data.len())?;
+            }
+
             if do_compress {
                 data = compression::compress(compression::Scheme::Lz4, data);
             }
