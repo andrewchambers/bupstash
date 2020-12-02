@@ -27,20 +27,39 @@ fn format_pax_extended_record(key: &[u8], value: &[u8]) -> Vec<u8> {
     record
 }
 
-pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyhow::Error> {
+pub fn index_entry_to_tarheader(
+    ent: &index::IndexEntry,
+    hard_link: Option<&String>,
+) -> Result<Vec<u8>, anyhow::Error> {
     let mut pax_ext_records = Vec::new();
     let mut ustar_hdr = tar::Header::new_ustar();
 
-    let tar_type = match ent.kind() {
-        index::IndexEntryKind::Other => {
-            anyhow::bail!("index entry {} has an unknown type", ent.path)
-        }
-        index::IndexEntryKind::Regular => tar::EntryType::Regular,
-        index::IndexEntryKind::Symlink => tar::EntryType::Symlink,
-        index::IndexEntryKind::Char => tar::EntryType::Char,
-        index::IndexEntryKind::Block => tar::EntryType::Block,
-        index::IndexEntryKind::Directory => tar::EntryType::Directory,
-        index::IndexEntryKind::Fifo => tar::EntryType::Fifo,
+    let tar_type = match &hard_link {
+        Some(hard_link) => match ent.kind() {
+            index::IndexEntryKind::Other => {
+                anyhow::bail!("index entry {} has an unknown type", ent.path)
+            }
+            index::IndexEntryKind::Directory => {
+                anyhow::bail!(
+                    "index entry {} is a directory, so can't have a hard link to {}",
+                    ent.path,
+                    hard_link,
+                )
+            }
+            _ => tar::EntryType::Link,
+        },
+
+        None => match ent.kind() {
+            index::IndexEntryKind::Other => {
+                anyhow::bail!("index entry {} has an unknown type", ent.path)
+            }
+            index::IndexEntryKind::Regular => tar::EntryType::Regular,
+            index::IndexEntryKind::Symlink => tar::EntryType::Symlink,
+            index::IndexEntryKind::Char => tar::EntryType::Char,
+            index::IndexEntryKind::Block => tar::EntryType::Block,
+            index::IndexEntryKind::Directory => tar::EntryType::Directory,
+            index::IndexEntryKind::Fifo => tar::EntryType::Fifo,
+        },
     };
 
     ustar_hdr.set_entry_type(tar_type);
@@ -48,7 +67,7 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
     ustar_hdr.set_mtime(ent.mtime.0);
     ustar_hdr.set_uid(ent.uid.0);
     ustar_hdr.set_gid(ent.gid.0);
-    ustar_hdr.set_size(ent.size.0);
+    ustar_hdr.set_size(if hard_link.is_none() { ent.size.0 } else { 0 });
     ustar_hdr.set_device_major(ent.dev_major.0 as u32)?;
     ustar_hdr.set_device_minor(ent.dev_minor.0 as u32)?;
 
@@ -66,24 +85,24 @@ pub fn index_entry_to_tarheader(ent: &index::IndexEntry) -> Result<Vec<u8>, anyh
         }
     };
 
-    if let tar::EntryType::Symlink = tar_type {
-        match &ent.link_target {
-            Some(target) => {
-                match ustar_hdr.set_link_name(&target) {
-                    Ok(()) => (),
-                    Err(err) => {
-                        /* 100 is more than ustar can handle as a link parget */
-                        if target.len() > 100 {
-                            let target_record =
-                                format_pax_extended_record(b"linkpath", target.as_bytes());
-                            pax_ext_records.extend_from_slice(&target_record);
-                        } else {
-                            return Err(err.into());
-                        }
-                    }
+    if matches!(tar_type, tar::EntryType::Symlink | tar::EntryType::Link) {
+        let target = if hard_link.is_some() {
+            hard_link.unwrap()
+        } else {
+            ent.link_target.as_ref().unwrap()
+        };
+
+        match ustar_hdr.set_link_name(&target) {
+            Ok(()) => (),
+            Err(err) => {
+                /* 100 is more than ustar can handle as a link target */
+                if target.len() > 100 {
+                    let target_record = format_pax_extended_record(b"linkpath", target.as_bytes());
+                    pax_ext_records.extend_from_slice(&target_record);
+                } else {
+                    return Err(err.into());
                 }
             }
-            None => ustar_hdr.set_link_name("")?,
         }
     }
 

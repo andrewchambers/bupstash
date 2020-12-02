@@ -522,6 +522,47 @@ _concurrent_modify_worker () {
   test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
 }
 
+@test "hard link short path" {
+  mkdir "$SCRATCH/foo"
+  touch "$SCRATCH/foo/a"
+  ln "$SCRATCH/foo/a" "$SCRATCH/foo/b"
+
+  id=$(bupstash put :: "$SCRATCH/foo")
+  mkdir "$SCRATCH/restore"
+  bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
+
+  echo -n 'x' >> "$SCRATCH/restore/a"
+  test "x" = $(cat "$SCRATCH/restore/b")
+}
+
+@test "long hard link target" {
+  name="$(yes | head -c 200)"
+  mkdir "$SCRATCH/foo"
+  touch "$SCRATCH/foo/$name"
+  ln "$SCRATCH/foo/$name" "$SCRATCH/foo/b"
+
+  id=$(bupstash put :: "$SCRATCH/foo")
+  mkdir "$SCRATCH/restore"
+  bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
+
+  echo -n 'x' >> "$SCRATCH/restore/$name"
+  test "x" = $(cat "$SCRATCH/restore/b")
+}
+
+@test "hard link to symlink" {
+  mkdir "$SCRATCH/foo"
+  touch "$SCRATCH/foo/a"
+  ln -s "$SCRATCH/foo/a" "$SCRATCH/foo/b"
+  ln "$SCRATCH/foo/b" "$SCRATCH/foo/c"
+
+  id=$(bupstash put :: "$SCRATCH/foo")
+  mkdir "$SCRATCH/restore"
+  bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
+
+  readlink "$SCRATCH/restore/c"
+}
+
+
 @test "pick torture" {
   if test -z "$PICK_TORTURE_DIR"
   then

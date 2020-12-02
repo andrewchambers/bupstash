@@ -511,6 +511,7 @@ fn dir_ent_to_index_ent(
         ctime_nsec: serde_bare::Uint(metadata.ctime_nsec() as u64),
         mtime: serde_bare::Uint(metadata.mtime() as u64),
         mtime_nsec: serde_bare::Uint(metadata.mtime_nsec() as u64),
+        nlink: serde_bare::Uint(metadata.nlink()),
         link_target: if t.is_symlink() {
             Some(
                 std::fs::read_link(&full_path)?
@@ -1054,17 +1055,38 @@ fn write_index_as_tarball(
         Ok(())
     };
 
+    let mut hardlinks: std::collections::HashMap<(u64, u64), String> =
+        std::collections::HashMap::new();
+
     for ent in index.iter() {
         match ent? {
             index::VersionedIndexEntry::V1(ent) => {
-                out.write_all(&xtar::index_entry_to_tarheader(&ent)?)?;
+                let hardlink = if !ent.is_dir() && ent.nlink.0 > 1 {
+                    let dev_ino = (ent.dev.0, ent.ino.0);
+                    match hardlinks.get(&dev_ino) {
+                        None => {
+                            hardlinks.insert(dev_ino, ent.path.clone());
+                            None
+                        }
+                        l => l,
+                    }
+                } else {
+                    None
+                };
 
-                copy_n(out, ent.size.0)?;
-                /* Tar entries are rounded to 512 bytes */
-                let remaining = 512 - (ent.size.0 % 512);
-                if remaining < 512 {
-                    let buf = [0; 512];
-                    out.write_all(&buf[..remaining as usize])?;
+                out.write_all(&xtar::index_entry_to_tarheader(&ent, hardlink)?)?;
+
+                if hardlink.is_none() {
+                    copy_n(out, ent.size.0)?;
+                    /* Tar entries are rounded to 512 bytes */
+                    let remaining = 512 - (ent.size.0 % 512);
+                    if remaining < 512 {
+                        let buf = [0; 512];
+                        out.write_all(&buf[..remaining as usize])?;
+                    }
+                } else {
+                    /* Hardlinks are uploaded as normal files, so we just skip the data. */
+                    copy_n(&mut std::io::sink(), ent.size.0)?;
                 }
             }
         }

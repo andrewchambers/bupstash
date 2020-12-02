@@ -31,6 +31,7 @@ pub struct IndexEntry {
     pub ctime_nsec: serde_bare::Uint,
     pub dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
+    pub nlink: serde_bare::Uint,
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
@@ -61,6 +62,10 @@ impl IndexEntry {
 
     pub fn is_file(&self) -> bool {
         matches!(self.mode.0 as libc::mode_t & libc::S_IFMT, libc::S_IFREG)
+    }
+
+    pub fn is_dir(&self) -> bool {
+        matches!(self.mode.0 as libc::mode_t & libc::S_IFMT, libc::S_IFDIR)
     }
 
     pub fn display_mode(&self) -> String {
