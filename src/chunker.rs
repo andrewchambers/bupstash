@@ -97,7 +97,7 @@ impl RollsumChunker {
             // iterate only as far as max_sz, we can check for max_sz at the end.
             if start_vec_len + n_to_add > max_sz {
                 let overshoot = start_vec_len + n_to_add - max_sz;
-                n_to_add = n_to_add - overshoot;
+                n_to_add -= overshoot;
             }
             while n_added < n_to_add {
                 let b = *bufp.add(n_added);
@@ -115,7 +115,7 @@ impl RollsumChunker {
             self.rs = rs;
             self.cur_vec.set_len(start_vec_len + n_added);
             if self.cur_vec.len() == max_sz {
-                return (n_added, Some(self.swap_vec()));
+                (n_added, Some(self.swap_vec()))
             } else {
                 (n_added, None)
             }

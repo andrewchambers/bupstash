@@ -86,8 +86,8 @@ pub fn index_entry_to_tarheader(
     };
 
     if matches!(tar_type, tar::EntryType::Symlink | tar::EntryType::Link) {
-        let target = if hard_link.is_some() {
-            hard_link.unwrap()
+        let target = if let Some(ref hard_link) = hard_link {
+            hard_link
         } else {
             ent.link_target.as_ref().unwrap()
         };

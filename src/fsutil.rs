@@ -118,7 +118,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-pub fn common_path_all<'a>(paths: &[PathBuf]) -> Option<PathBuf> {
+pub fn common_path_all(paths: &[PathBuf]) -> Option<PathBuf> {
     let mut path_iter = paths.iter();
     let mut result = path_iter.next()?.to_path_buf();
     for path in path_iter {
@@ -128,7 +128,7 @@ pub fn common_path_all<'a>(paths: &[PathBuf]) -> Option<PathBuf> {
             return None;
         }
     }
-    Some(result.to_path_buf())
+    Some(result)
 }
 
 pub fn common_path<P, Q>(one: P, two: Q) -> Option<PathBuf>
