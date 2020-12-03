@@ -1159,7 +1159,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             (idx_hash_key_part_1, metadata_dctx, idx_dctx)
         }
         keys::Key::SubKeyV1(k) => {
-            let idx_hash_key_part_1 = k.idx_hash_key_part_1.unwrap().clone();
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.unwrap();
             let metadata_dctx =
                 crypto::DecryptionContext::new(k.metadata_sk.unwrap(), k.metadata_psk.unwrap());
             let idx_dctx = crypto::DecryptionContext::new(k.idx_sk.unwrap(), k.idx_psk.unwrap());
