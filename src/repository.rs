@@ -349,6 +349,23 @@ impl Repo {
             LockMode::Write | LockMode::Exclusive => (),
         }
 
+        const MAX_HTREE_HEIGHT: u64 = 10;
+
+        match item {
+            itemset::VersionedItemMetadata::V1(ref item) => {
+                if item.plain_text_metadata.data_tree.height.0 > MAX_HTREE_HEIGHT {
+                    anyhow::bail!("refusing to add data hash tree taller than application limit");
+                }
+                if let Some(index_tree) = &item.plain_text_metadata.index_tree {
+                    if index_tree.height.0 > MAX_HTREE_HEIGHT {
+                        anyhow::bail!(
+                            "refusing to add index hash tree taller than application limit"
+                        );
+                    }
+                }
+            }
+        }
+
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
