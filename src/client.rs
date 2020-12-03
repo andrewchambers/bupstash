@@ -171,6 +171,7 @@ pub fn send(
 
     'retry: for _i in 0..256 {
         let mut index_tree = None;
+        let mut index_size = 0;
 
         let send_log_session = match send_log {
             Some(ref mut send_log) => Some(std::cell::RefCell::new(
@@ -248,21 +249,24 @@ pub fn send(
                 ) {
                     Ok(()) => {
                         let chunk_data = idx_chunker.finish();
-                        let idx_addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                        let data_len = chunk_data.len() as u64;
+                        let chunk_addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
                         idx_tw.add(
                             &mut sink,
-                            &idx_addr,
+                            &chunk_addr,
+                            data_len,
                             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
                         )?;
 
-                        let (idx_tree_height, idx_tree_data_chunk_count, idx_address) =
+                        let (i_tree_height, i_tree_data_chunk_count, i_size, i_address) =
                             idx_tw.finish(&mut sink)?;
 
                         index_tree = Some(itemset::HTreeMetadata {
-                            height: serde_bare::Uint(idx_tree_height as u64),
-                            data_chunk_count: serde_bare::Uint(idx_tree_data_chunk_count),
-                            address: idx_address,
+                            height: serde_bare::Uint(i_tree_height as u64),
+                            data_chunk_count: serde_bare::Uint(i_tree_data_chunk_count),
+                            address: i_address,
                         });
+                        index_size = i_size;
                     }
                     Err(SendDirError::FilesystemModified) => {
                         ctx.progress.println(
@@ -285,13 +289,15 @@ pub fn send(
         }
 
         let chunk_data = chunker.finish();
+        let data_len = chunk_data.len() as u64;
         let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
         tw.add(
             &mut sink,
             &addr,
+            data_len,
             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
         )?;
-        let (data_tree_height, data_tree_data_chunk_count, data_tree_address) =
+        let (data_tree_height, data_tree_data_chunk_count, data_sz, data_tree_address) =
             tw.finish(&mut sink)?;
 
         let plain_text_metadata = itemset::PlainTextItemMetadata {
@@ -309,6 +315,8 @@ pub fn send(
             send_key_id: ctx.send_key_id,
             hash_key_part_2: ctx.hash_key.part2.clone(),
             timestamp: chrono::Utc::now(),
+            data_size: serde_bare::Uint(data_sz),
+            index_size: serde_bare::Uint(index_size),
             tags,
         };
 
@@ -362,14 +370,15 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        ctx.progress.inc(chunk_data.len() as u64);
+                        let data_len = chunk_data.len() as u64;
+                        ctx.progress.inc(data_len);
                         let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
                         let encrypted_chunk =
                             ctx.data_ectx.encrypt_data(chunk_data, ctx.compression);
                         if let Some(ref mut on_chunk) = on_chunk {
                             on_chunk(&addr);
                         }
-                        tw.add(sink, &addr, encrypted_chunk)?;
+                        tw.add(sink, &addr, data_len, encrypted_chunk)?;
                     }
                 }
                 n_written += n_read as u64;
@@ -682,8 +691,9 @@ fn send_dir(
                 let mut address = Address::default();
                 for cached_address in cached_addresses.chunks(ADDRESS_SZ) {
                     address.bytes[..].clone_from_slice(cached_address);
-                    tw.add_addr(sink, 0, 1, &address)?;
+                    tw.add_data_addr(sink, &address)?;
                 }
+                tw.add_stream_size(total_size);
 
                 let cached_index_offsets: Vec<index::IndexEntryOffsets> =
                     serde_bare::from_slice(&cached_index_offsets_buf).unwrap();
@@ -807,11 +817,13 @@ fn send_dir(
                 }
 
                 if let Some(chunk_data) = chunker.force_split() {
+                    let data_len = chunk_data.len() as u64;
                     let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
                     on_chunk(&addr);
                     tw.add(
                         sink,
                         &addr,
+                        data_len,
                         ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
                     )?
                 }

@@ -46,6 +46,7 @@ pub struct TreeWriter {
     max_addr_chunk_size: usize,
     tree_blocks: Vec<Vec<u8>>,
     data_chunk_count: u64,
+    stream_size: u64,
 }
 
 pub fn tree_block_address(data: &[u8]) -> Address {
@@ -64,6 +65,7 @@ impl TreeWriter {
             max_addr_chunk_size,
             tree_blocks: Vec::new(),
             data_chunk_count: 0,
+            stream_size: 0,
         }
     }
 
@@ -84,17 +86,13 @@ impl TreeWriter {
         Ok(())
     }
 
-    pub fn add_addr(
+    fn add_addr(
         &mut self,
         sink: &mut dyn Sink,
         level: usize,
         leaf_count: u64,
         addr: &Address,
     ) -> Result<(), anyhow::Error> {
-        if level == 0 {
-            self.data_chunk_count += 1;
-        }
-
         if self.tree_blocks.len() < level + 1 {
             self.tree_blocks.push(Vec::new());
         }
@@ -117,15 +115,31 @@ impl TreeWriter {
         Ok(())
     }
 
+    pub fn add_data_addr(
+        &mut self,
+        sink: &mut dyn Sink,
+        addr: &Address,
+    ) -> Result<(), anyhow::Error> {
+        self.data_chunk_count += 1;
+        self.add_addr(sink, 0, 1, addr)?;
+        Ok(())
+    }
+
     pub fn add(
         &mut self,
         sink: &mut dyn Sink,
         addr: &Address,
+        real_sz: u64,
         data: Vec<u8>,
     ) -> Result<(), anyhow::Error> {
         sink.add_chunk(addr, data)?;
-        self.add_addr(sink, 0, 1, addr)?;
+        self.add_data_addr(sink, addr)?;
+        self.add_stream_size(real_sz);
         Ok(())
+    }
+
+    pub fn add_stream_size(&mut self, sz: u64) {
+        self.stream_size += sz;
     }
 
     pub fn data_chunk_count(&self) -> u64 {
@@ -153,7 +167,10 @@ impl TreeWriter {
         Ok(self.finish_level(sink, level + 1)?)
     }
 
-    pub fn finish(mut self, sink: &mut dyn Sink) -> Result<(usize, u64, Address), anyhow::Error> {
+    pub fn finish(
+        mut self,
+        sink: &mut dyn Sink,
+    ) -> Result<(usize, u64, u64, Address), anyhow::Error> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
@@ -162,7 +179,7 @@ impl TreeWriter {
                 || ((self.tree_blocks.len() == 1) && self.tree_blocks[0].len() >= (8 + ADDRESS_SZ))
         );
         let (height, address) = self.finish_level(sink, 0)?;
-        Ok((height, self.data_chunk_count, address))
+        Ok((height, self.data_chunk_count, self.stream_size, address))
     }
 }
 
@@ -264,10 +281,11 @@ mod tests {
         // Chunks that can only fit two addresses.
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
         let addr = Address::from_bytes(&[1; ADDRESS_SZ]);
-        tw.add(&mut chunks, &addr, vec![1, 2, 3]).unwrap();
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
+        tw.add(&mut chunks, &addr, 3, vec![1, 2, 3]).unwrap();
+        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
         // root = chunk1
         assert_eq!(n_data, 1);
+        assert_eq!(data_sz, 3);
         assert_eq!(chunks.len(), 1);
         let addr_chunk = chunks.get_mut(&result).unwrap();
         assert_eq!(addr_chunk.len(), 3);
@@ -279,17 +297,28 @@ mod tests {
         // Chunks that can only fit two addresses.
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
 
-        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-            .unwrap();
-        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[1; ADDRESS_SZ]),
+            0,
+            vec![],
+        )
+        .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[2; ADDRESS_SZ]),
+            1,
+            vec![0],
+        )
+        .unwrap();
 
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
+        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2]
         // chunk1, chunk2
         assert_eq!(n_data, 2);
+        assert_eq!(data_sz, 1);
         assert_eq!(chunks.len(), 3);
         let addr_chunk = chunks.get_mut(&result).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
@@ -302,24 +331,36 @@ mod tests {
         // Chunks that can only fit two addresses.
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
 
-        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-            .unwrap();
-        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[1; ADDRESS_SZ]),
+            0,
+            vec![],
+        )
+        .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[2; ADDRESS_SZ]),
+            1,
+            vec![0],
+        )
+        .unwrap();
         tw.add(
             &mut chunks,
             &Address::from_bytes(&[3; ADDRESS_SZ]),
+            3,
             vec![1, 2, 3],
         )
         .unwrap();
 
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
+        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0 .. chunk1]
         // address2 = [chunk3]
         // chunk0, chunk1, chunk3
         assert_eq!(n_data, 3);
+        assert_eq!(data_sz, 4);
         assert_eq!(chunks.len(), 6);
         let addr_chunk = chunks.get_mut(&result).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
@@ -332,17 +373,28 @@ mod tests {
         // Allow large chunks.
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, SENSIBLE_ADDR_MAX_CHUNK_SIZE);
 
-        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-            .unwrap();
-        tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[1; ADDRESS_SZ]),
+            0,
+            vec![],
+        )
+        .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[2; ADDRESS_SZ]),
+            1,
+            vec![0],
+        )
+        .unwrap();
 
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
+        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2 ]
         // chunk1, chunk2
         assert_eq!(n_data, 2);
+        assert_eq!(data_sz, 1);
         assert_eq!(chunks.len(), 3);
         let addr_chunk = chunks.get_mut(&result).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
@@ -355,28 +407,36 @@ mod tests {
         // Allow large chunks.
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, SENSIBLE_ADDR_MAX_CHUNK_SIZE);
 
-        tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-            .unwrap();
+        tw.add(
+            &mut chunks,
+            &Address::from_bytes(&[1; ADDRESS_SZ]),
+            0,
+            vec![],
+        )
+        .unwrap();
         tw.add(
             &mut chunks,
             &Address::from_bytes(&[0xff; ADDRESS_SZ]),
+            1,
             vec![0],
         )
         .unwrap();
         tw.add(
             &mut chunks,
             &Address::from_bytes(&[2; ADDRESS_SZ]),
+            3,
             vec![1, 2, 3],
         )
         .unwrap();
 
-        let (_, n_data, result) = tw.finish(&mut chunks).unwrap();
+        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0, chunk1]
         // address2 = [chunk3]
         // chunk0, chunk1, chunk3
         assert_eq!(n_data, 3);
+        assert_eq!(data_sz, 4);
         assert_eq!(chunks.len(), 6);
         let addr_chunk = chunks.get_mut(&result).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
@@ -393,13 +453,24 @@ mod tests {
         {
             // Chunks that can only fit two addresses.
             let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
-            tw.add(&mut chunks, &Address::from_bytes(&[1; ADDRESS_SZ]), vec![])
-                .unwrap();
-            tw.add(&mut chunks, &Address::from_bytes(&[2; ADDRESS_SZ]), vec![0])
-                .unwrap();
+            tw.add(
+                &mut chunks,
+                &Address::from_bytes(&[1; ADDRESS_SZ]),
+                0,
+                vec![],
+            )
+            .unwrap();
+            tw.add(
+                &mut chunks,
+                &Address::from_bytes(&[2; ADDRESS_SZ]),
+                1,
+                vec![0],
+            )
+            .unwrap();
             tw.add(
                 &mut chunks,
                 &Address::from_bytes(&[3; ADDRESS_SZ]),
+                3,
                 vec![1, 2, 3],
             )
             .unwrap();
@@ -407,7 +478,7 @@ mod tests {
             let result = tw.finish(&mut chunks).unwrap();
             height = result.0;
             n_data = result.1;
-            addr = result.2;
+            addr = result.3;
         }
 
         let mut tr = TreeReader::new(height, n_data, &addr);

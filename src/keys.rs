@@ -25,7 +25,7 @@ pub struct PrimaryKey {
     pub hash_key_part_2: crypto::PartialHashKey,
     /* key used to make the rollsum unique. */
     pub rollsum_key: crypto::RollsumKey,
-    /* Key set used for encrypting data/ */
+    /* Key set used for encrypting data. */
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
     pub data_psk: crypto::BoxPreSharedKey,

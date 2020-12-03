@@ -260,7 +260,7 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
                                 .insert(ent.offsets.data_chunk_end_idx.0, range_set);
 
                             // Because our end chunk is a never before seen index, this
-                            // range set should must be none.
+                            // range set must be none.
                             assert!(ent.offsets.data_chunk_idx != ent.offsets.data_chunk_end_idx);
                             assert!(old.is_none());
                         } else {

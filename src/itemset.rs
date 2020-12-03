@@ -37,6 +37,9 @@ pub struct EncryptedItemMetadata {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     // We want ordered serialization.
     pub tags: std::collections::BTreeMap<String, String>,
+    pub data_size: serde_bare::Uint,
+    // 0 if we have no index.
+    pub index_size: serde_bare::Uint,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
