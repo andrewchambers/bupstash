@@ -214,11 +214,22 @@ pub fn box_decrypt(pt: &mut [u8], bt: &[u8], bk: &BoxKey) -> bool {
     true
 }
 
-#[derive(Clone)]
 pub struct EncryptionContext {
     nonce: BoxNonce,
     ephemeral_pk: BoxPublicKey,
     ephemeral_bk: BoxKey,
+}
+
+impl Clone for EncryptionContext {
+    fn clone(&self) -> Self {
+        Self {
+            // We don't want to accidentally reuse a nonce
+            // by cloning an encryption context.
+            nonce: BoxNonce::new(),
+            ephemeral_pk: self.ephemeral_pk.clone(),
+            ephemeral_bk: self.ephemeral_bk.clone(),
+        }
+    }
 }
 
 impl EncryptionContext {

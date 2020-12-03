@@ -29,6 +29,12 @@ pub struct PrimaryKey {
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
     pub data_psk: crypto::BoxPreSharedKey,
+
+    /* Key set used for encrypting indicies. */
+    pub idx_pk: crypto::BoxPublicKey,
+    pub idx_sk: crypto::BoxSecretKey,
+    pub idx_psk: crypto::BoxPreSharedKey,
+
     /* Key set used for encrypting metadata. */
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_sk: crypto::BoxSecretKey,
@@ -44,6 +50,8 @@ pub struct PutKey {
     pub rollsum_key: crypto::RollsumKey,
     pub data_pk: crypto::BoxPublicKey,
     pub data_psk: crypto::BoxPreSharedKey,
+    pub idx_pk: crypto::BoxPublicKey,
+    pub idx_psk: crypto::BoxPreSharedKey,
     pub metadata_pk: crypto::BoxPublicKey,
     pub metadata_psk: crypto::BoxPreSharedKey,
 }
@@ -157,6 +165,8 @@ impl PrimaryKey {
         let rollsum_key = crypto::RollsumKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
         let data_psk = crypto::BoxPreSharedKey::new();
+        let (idx_pk, idx_sk) = crypto::box_keypair();
+        let idx_psk = crypto::BoxPreSharedKey::new();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
         let metadata_psk = crypto::BoxPreSharedKey::new();
         PrimaryKey {
@@ -167,6 +177,9 @@ impl PrimaryKey {
             data_pk,
             data_sk,
             data_psk,
+            idx_pk,
+            idx_sk,
+            idx_psk,
             metadata_pk,
             metadata_sk,
             metadata_psk,
@@ -175,31 +188,33 @@ impl PrimaryKey {
 }
 
 impl PutKey {
-    pub fn gen(mk: &PrimaryKey) -> PutKey {
+    pub fn gen(k: &PrimaryKey) -> PutKey {
         let hash_key_part_2 = crypto::PartialHashKey::new();
         let rollsum_key = crypto::RollsumKey::new();
         PutKey {
             id: Xid::new(),
-            primary_key_id: mk.id,
-            hash_key_part_1: mk.hash_key_part_1.clone(),
+            primary_key_id: k.id,
+            hash_key_part_1: k.hash_key_part_1.clone(),
             hash_key_part_2,
             rollsum_key,
-            data_pk: mk.data_pk.clone(),
-            data_psk: mk.data_psk.clone(),
-            metadata_pk: mk.metadata_pk.clone(),
-            metadata_psk: mk.metadata_psk.clone(),
+            data_pk: k.data_pk.clone(),
+            data_psk: k.data_psk.clone(),
+            idx_pk: k.idx_pk.clone(),
+            idx_psk: k.idx_psk.clone(),
+            metadata_pk: k.metadata_pk.clone(),
+            metadata_psk: k.metadata_psk.clone(),
         }
     }
 }
 
 impl MetadataKey {
-    pub fn gen(mk: &PrimaryKey) -> MetadataKey {
+    pub fn gen(k: &PrimaryKey) -> MetadataKey {
         MetadataKey {
             id: Xid::new(),
-            primary_key_id: mk.id,
-            metadata_pk: mk.metadata_pk.clone(),
-            metadata_sk: mk.metadata_sk.clone(),
-            metadata_psk: mk.metadata_psk.clone(),
+            primary_key_id: k.id,
+            metadata_pk: k.metadata_pk.clone(),
+            metadata_sk: k.metadata_sk.clone(),
+            metadata_psk: k.metadata_psk.clone(),
         }
     }
 }

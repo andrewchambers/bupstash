@@ -735,20 +735,22 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
     let send_key_id = key.id();
-    let (hash_key, gear_tab, data_ectx, metadata_ectx) = match key {
+    let (hash_key, gear_tab, data_ectx, metadata_ectx, idx_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
             let gear_tab = k.rollsum_key.gear_tab();
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
-            (hash_key, gear_tab, data_ectx, metadata_ectx)
+            let idx_ectx = crypto::EncryptionContext::new(&k.idx_pk, &k.idx_psk);
+            (hash_key, gear_tab, data_ectx, metadata_ectx, idx_ectx)
         }
         keys::Key::PutKeyV1(k) => {
             let hash_key = crypto::derive_hash_key(&k.hash_key_part_1, &k.hash_key_part_2);
             let gear_tab = k.rollsum_key.gear_tab();
             let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
             let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
-            (hash_key, gear_tab, data_ectx, metadata_ectx)
+            let idx_ectx = crypto::EncryptionContext::new(&k.idx_pk, &k.idx_psk);
+            (hash_key, gear_tab, data_ectx, metadata_ectx, idx_ectx)
         }
         _ => anyhow::bail!("can only send data with a primary-key or put-key."),
     };
@@ -882,6 +884,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         gear_tab,
         data_ectx,
         metadata_ectx,
+        idx_ectx,
         want_xattrs,
     };
 
@@ -920,12 +923,13 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
-    let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
+    let (hash_key_part_1, data_dctx, metadata_dctx, idx_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
             let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
-            (hash_key_part_1, data_dctx, metadata_dctx)
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
+            (hash_key_part_1, data_dctx, metadata_dctx, idx_dctx)
         }
         _ => anyhow::bail!("provided key is not a decryption key"),
     };
@@ -999,8 +1003,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             client::DataRequestContext {
                 primary_key_id,
                 hash_key_part_1: hash_key_part_1.clone(),
-                data_dctx: data_dctx.clone(),
+                data_dctx: idx_dctx.clone(),
                 metadata_dctx: metadata_dctx.clone(),
+                idx_dctx: idx_dctx.clone(),
             },
             id,
             &metadata,
@@ -1039,6 +1044,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             hash_key_part_1,
             data_dctx,
             metadata_dctx,
+            idx_dctx,
         },
         id,
         &metadata,
@@ -1080,12 +1086,13 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
-    let (hash_key_part_1, data_dctx, metadata_dctx) = match key {
+    let (hash_key_part_1, data_dctx, metadata_dctx, idx_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let hash_key_part_1 = k.hash_key_part_1.clone();
             let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
             let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
-            (hash_key_part_1, data_dctx, metadata_dctx)
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
+            (hash_key_part_1, data_dctx, metadata_dctx, idx_dctx)
         }
         _ => anyhow::bail!("provided key is not a decryption key"),
     };
@@ -1165,6 +1172,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             hash_key_part_1,
             data_dctx,
             metadata_dctx,
+            idx_dctx,
         },
         id,
         &metadata,
