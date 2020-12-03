@@ -44,43 +44,35 @@ pub struct PrimaryKey {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct PutKey {
+pub struct SubKey {
     pub id: Xid,
     pub primary_key_id: Xid,
-    pub rollsum_key: crypto::RollsumKey,
-    pub data_hash_key_part_1: crypto::PartialHashKey,
-    pub data_hash_key_part_2: crypto::PartialHashKey,
-    pub data_pk: crypto::BoxPublicKey,
-    pub data_psk: crypto::BoxPreSharedKey,
-    pub idx_hash_key_part_1: crypto::PartialHashKey,
-    pub idx_hash_key_part_2: crypto::PartialHashKey,
-    pub idx_pk: crypto::BoxPublicKey,
-    pub idx_psk: crypto::BoxPreSharedKey,
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_psk: crypto::BoxPreSharedKey,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct MetadataKey {
-    pub id: Xid,
-    pub primary_key_id: Xid,
-    pub metadata_pk: crypto::BoxPublicKey,
-    pub metadata_sk: crypto::BoxSecretKey,
-    pub metadata_psk: crypto::BoxPreSharedKey,
+    pub rollsum_key: Option<crypto::RollsumKey>,
+    pub data_hash_key_part_1: Option<crypto::PartialHashKey>,
+    pub data_hash_key_part_2: Option<crypto::PartialHashKey>,
+    pub data_pk: Option<crypto::BoxPublicKey>,
+    pub data_sk: Option<crypto::BoxSecretKey>,
+    pub data_psk: Option<crypto::BoxPreSharedKey>,
+    pub idx_hash_key_part_1: Option<crypto::PartialHashKey>,
+    pub idx_hash_key_part_2: Option<crypto::PartialHashKey>,
+    pub idx_pk: Option<crypto::BoxPublicKey>,
+    pub idx_sk: Option<crypto::BoxSecretKey>,
+    pub idx_psk: Option<crypto::BoxPreSharedKey>,
+    pub metadata_pk: Option<crypto::BoxPublicKey>,
+    pub metadata_sk: Option<crypto::BoxSecretKey>,
+    pub metadata_psk: Option<crypto::BoxPreSharedKey>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum Key {
     PrimaryKeyV1(PrimaryKey),
-    PutKeyV1(PutKey),
-    MetadataKeyV1(MetadataKey),
+    SubKeyV1(SubKey),
 }
 
 fn pem_tag(k: &Key) -> &str {
     match k {
         Key::PrimaryKeyV1(_) => "BUPSTASH KEY",
-        Key::PutKeyV1(_) => "BUPSTASH PUT KEY",
-        Key::MetadataKeyV1(_) => "BUPSTASH METADATA KEY",
+        Key::SubKeyV1(_) => "BUPSTASH SUB KEY",
     }
 }
 
@@ -101,13 +93,18 @@ impl Key {
 
         match self {
             Key::PrimaryKeyV1(_) => (),
-            Key::PutKeyV1(_) | Key::MetadataKeyV1(_) => {
+            Key::SubKeyV1(_) => {
                 f.write_all(
                     format!(
                         "# derived-from-key-id={}\n",
                         self.primary_key_id().to_string(),
                     )
                     .as_bytes(),
+                )?;
+                f.write_all(format!("# is-put-key={}\n", self.is_put_key()).as_bytes())?;
+                f.write_all(format!("# is-list-key={}\n", self.is_list_key()).as_bytes())?;
+                f.write_all(
+                    format!("# is-list-contents-key={}\n", self.is_list_contents_key()).as_bytes(),
                 )?;
             }
         }
@@ -147,16 +144,64 @@ impl Key {
     pub fn primary_key_id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::PutKeyV1(k) => k.primary_key_id,
-            Key::MetadataKeyV1(k) => k.primary_key_id,
+            Key::SubKeyV1(k) => k.primary_key_id,
         }
     }
 
     pub fn id(&self) -> Xid {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
-            Key::PutKeyV1(k) => k.id,
-            Key::MetadataKeyV1(k) => k.id,
+            Key::SubKeyV1(k) => k.id,
+        }
+    }
+
+    pub fn is_put_key(&self) -> bool {
+        match self {
+            Key::PrimaryKeyV1(_) => true,
+            Key::SubKeyV1(k) => {
+                k.rollsum_key.is_some()
+                    && k.data_hash_key_part_1.is_some()
+                    && k.data_hash_key_part_2.is_some()
+                    && k.idx_hash_key_part_1.is_some()
+                    && k.idx_hash_key_part_2.is_some()
+                    && k.data_pk.is_some()
+                    && k.data_psk.is_some()
+                    && k.idx_pk.is_some()
+                    && k.idx_psk.is_some()
+                    && k.metadata_pk.is_some()
+                    && k.metadata_psk.is_some()
+            }
+        }
+    }
+
+    pub fn is_list_key(&self) -> bool {
+        match self {
+            Key::PrimaryKeyV1(_) => true,
+            Key::SubKeyV1(k) => {
+                k.metadata_pk.is_some() && k.metadata_sk.is_some() && k.metadata_psk.is_some()
+            }
+        }
+    }
+
+    pub fn is_list_contents_key(&self) -> bool {
+        match self {
+            Key::PrimaryKeyV1(_) => true,
+            Key::SubKeyV1(k) => {
+                k.idx_hash_key_part_1.is_some()
+                    && k.idx_pk.is_some()
+                    && k.idx_sk.is_some()
+                    && k.idx_psk.is_some()
+                    && k.metadata_pk.is_some()
+                    && k.metadata_sk.is_some()
+                    && k.metadata_psk.is_some()
+            }
+        }
+    }
+
+    pub fn is_get_key(&self) -> bool {
+        match self {
+            Key::PrimaryKeyV1(_) => true,
+            Key::SubKeyV1(_) => false,
         }
     }
 }
@@ -195,37 +240,84 @@ impl PrimaryKey {
     }
 }
 
-impl PutKey {
-    pub fn gen(k: &PrimaryKey) -> PutKey {
-        let data_hash_key_part_2 = crypto::PartialHashKey::new();
-        let idx_hash_key_part_2 = crypto::PartialHashKey::new();
-        let rollsum_key = crypto::RollsumKey::new();
-        PutKey {
+impl SubKey {
+    pub fn gen(k: &PrimaryKey, put: bool, list: bool, list_contents: bool) -> SubKey {
+        SubKey {
             id: Xid::new(),
             primary_key_id: k.id,
-            rollsum_key,
-            data_hash_key_part_1: k.data_hash_key_part_1.clone(),
-            data_hash_key_part_2,
-            data_pk: k.data_pk.clone(),
-            data_psk: k.data_psk.clone(),
-            idx_hash_key_part_1: k.idx_hash_key_part_1.clone(),
-            idx_hash_key_part_2,
-            idx_pk: k.idx_pk.clone(),
-            idx_psk: k.idx_psk.clone(),
-            metadata_pk: k.metadata_pk.clone(),
-            metadata_psk: k.metadata_psk.clone(),
-        }
-    }
-}
 
-impl MetadataKey {
-    pub fn gen(k: &PrimaryKey) -> MetadataKey {
-        MetadataKey {
-            id: Xid::new(),
-            primary_key_id: k.id,
-            metadata_pk: k.metadata_pk.clone(),
-            metadata_sk: k.metadata_sk.clone(),
-            metadata_psk: k.metadata_psk.clone(),
+            rollsum_key: if put {
+                Some(crypto::RollsumKey::new())
+            } else {
+                None
+            },
+
+            data_hash_key_part_1: if put {
+                Some(k.data_hash_key_part_1.clone())
+            } else {
+                None
+            },
+
+            data_hash_key_part_2: if put {
+                Some(crypto::PartialHashKey::new())
+            } else {
+                None
+            },
+
+            idx_hash_key_part_1: if put || list_contents {
+                Some(k.idx_hash_key_part_1.clone())
+            } else {
+                None
+            },
+
+            idx_hash_key_part_2: if put {
+                Some(crypto::PartialHashKey::new())
+            } else {
+                None
+            },
+
+            data_pk: if put { Some(k.data_pk.clone()) } else { None },
+
+            // For now no sub keys have the secret key.
+            data_sk: None,
+
+            data_psk: if put { Some(k.data_psk.clone()) } else { None },
+
+            idx_pk: if list_contents || put {
+                Some(k.idx_pk.clone())
+            } else {
+                None
+            },
+
+            idx_sk: if list_contents {
+                Some(k.idx_sk.clone())
+            } else {
+                None
+            },
+
+            idx_psk: if list_contents || put {
+                Some(k.idx_psk.clone())
+            } else {
+                None
+            },
+
+            metadata_pk: if list_contents || list || put {
+                Some(k.metadata_pk.clone())
+            } else {
+                None
+            },
+
+            metadata_sk: if list_contents || list {
+                Some(k.metadata_sk.clone())
+            } else {
+                None
+            },
+
+            metadata_psk: if list_contents || list || put {
+                Some(k.metadata_psk.clone())
+            } else {
+                None
+            },
         }
     }
 }

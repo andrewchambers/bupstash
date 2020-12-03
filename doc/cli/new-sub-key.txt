@@ -1,0 +1,10 @@
+bupstash new-sub-key [OPTIONS]
+
+Create a new sub-key capable of a limited set of
+operations the original key can.
+
+Examples:
+  $ bupstash new-key -o ./backups.key
+  $ bupstash new-sub-key --put -k ./backups.key -o ./put.key
+  $ bupstash new-sub-key --list -k ./backups.key -o ./list.key
+  $ bupstash new-sub-key --list-contents -k ./backups.key -o ./list.key

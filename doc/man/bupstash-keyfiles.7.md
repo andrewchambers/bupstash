@@ -10,8 +10,7 @@ Overview of the bupstash key format.
 Bupstash key files are PEM encoded with one of the following tags:
 
 - BUPSTASH KEY
-- BUPSTASH METADATA KEY
-- BUPSTASH PUT KEY
+- BUPSTASH SUB KEY
 
 The binary data after decoding the PEM data consists of [bare](https://baremessages.org/) key structures, described below.
 
@@ -19,38 +18,47 @@ The binary data after decoding the PEM data consists of [bare](https://baremessa
 Binary encoding of keys:
 
 ```
+
 type PrimaryKey {
-  id: Data<16>,
-  hash_key_part_1: Data<16>,
-  hash_key_part_2: Data<16>,
-  data_pk: Data<32>,
-  data_sk: Data<32>,
-  data_psk: Data<32>,
-  metadata_pk: Data<32>,
-  metadata_sk: Data<32>,
-  metadata_psk: Data<32>,
+    id: Data<16>,
+    rollsum_key: Data<32>,
+    data_hash_key_part_1: Data<32>,
+    data_hash_key_part_2: Data<32>,
+    data_pk: Data<32>,
+    data_sk: Data<32>,
+    data_psk: Data<32>,
+    idx_hash_key_part_1: Data<32>,
+    idx_hash_key_part_2: Data<32>,
+    idx_pk: Data<32>,
+    idx_sk: Data<32>,
+    idx_psk: Data<32>,
+    metadata_pk: Data<32>,
+    metadata_sk: Data<32>,
+    metadata_psk: Data<32>,
 }
 
-type PutKey {
-  id: Data<16>,
-  primary_key_id: Data<16>,
-  hash_key_part_1: Data<16>,
-  hash_key_part_2: Data<16>,
-  data_pk: Data<32>,
-  data_psk: Data<32>,
-  metadata_pk: Data<32>,
-  metadata_psk: Data<32>,
+type SubKey {
+    id: Data<16>,
+    primary_key_id: Data<16>,
+    rollsum_key: Option<Data<32>>,
+    data_hash_key_part_1: Option<Data<32>>,
+    data_hash_key_part_2: Option<Data<32>>,
+    data_pk: Option<Data<32>>,
+    data_sk: Option<Data<32>>,
+    data_psk: Option<Data<32>>,
+    idx_hash_key_part_1: Option<Data<32>>,
+    idx_hash_key_part_2: Option<Data<32>>,
+    idx_pk: Option<Data<32>>,
+    idx_sk: Option<Data<32>>,
+    idx_psk: Option<Data<32>>,
+    metadata_pk: Option<Data<32>>,
+    metadata_sk: Option<Data<32>>,
+    metadata_psk: Option<Data<32>>,
 }
 
-type MetadataKey {
-  id: Data<16>,
-  primary_key_id: Data<16>,
-  metadata_pk: Data<32>,
-  metadata_sk: Data<32>,
-  metadata_psk: Data<32>,
-}
 
-type Key (PrimaryKey | PutKey | MetadataKey)
+
+type Key (PrimaryKey | SubKey)
 ```
 
 # EXAMPLE

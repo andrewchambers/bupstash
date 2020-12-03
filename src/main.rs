@@ -54,8 +54,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
         "new-key" => include_str!("../doc/cli/new-key.txt"),
-        "new-put-key" => include_str!("../doc/cli/new-put-key.txt"),
-        "new-metadata-key" => include_str!("../doc/cli/new-metadata-key.txt"),
+        "new-sub-key" => include_str!("../doc/cli/new-sub-key.txt"),
         "put" => include_str!("../doc/cli/put.txt"),
         "list" => include_str!("../doc/cli/list.txt"),
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
@@ -175,36 +174,50 @@ fn new_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     primary_key.write_to_file(&matches.opt_str("o").unwrap())
 }
 
-fn new_send_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn new_sub_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    opts.optopt("k", "key", "primary key to derive put-key from.", "PATH");
-    opts.reqopt("o", "output", "output file.", "PATH");
-    let matches = parse_cli_opts(opts, &args[..]);
-    let k = cli_to_key(&matches)?;
-    match k {
-        keys::Key::PrimaryKeyV1(primary_key) => {
-            let send_key = keys::Key::PutKeyV1(keys::PutKey::gen(&primary_key));
-            send_key.write_to_file(&matches.opt_str("o").unwrap())
-        }
-        _ => anyhow::bail!("key is not a primary key"),
-    }
-}
 
-fn new_metadata_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let mut opts = default_cli_opts();
     opts.optopt(
         "k",
         "key",
         "primary key to derive metadata key from.",
         "PATH",
     );
+
     opts.reqopt("o", "output", "output file.", "PATH");
+
+    opts.optflag(
+        "",
+        "put",
+        "The key is able to encrypt data for put operations.",
+    );
+    opts.optflag(
+        "",
+        "list",
+        "The key will be able to decrypt metadata and perform queries.",
+    );
+    opts.optflag(
+        "",
+        "list-contents",
+        "The key will be able to list item contents with 'list-contents' (implies --list).",
+    );
+
     let matches = parse_cli_opts(opts, &args[..]);
+
+    let allow_put = matches.opt_present("put");
+    let allow_list = matches.opt_present("list");
+    let allow_list_contents = matches.opt_present("list-contents");
+
     let k = cli_to_key(&matches)?;
     match k {
         keys::Key::PrimaryKeyV1(primary_key) => {
-            let send_key = keys::Key::MetadataKeyV1(keys::MetadataKey::gen(&primary_key));
-            send_key.write_to_file(&matches.opt_str("o").unwrap())
+            let subk = keys::Key::SubKeyV1(keys::SubKey::gen(
+                &primary_key,
+                allow_put,
+                allow_list,
+                allow_list_contents,
+            ));
+            subk.write_to_file(&matches.opt_str("o").unwrap())
         }
         _ => anyhow::bail!("key is not a primary key"),
     }
@@ -494,15 +507,20 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let (primary_key_id, metadata_dctx) = match cli_to_opt_key(&matches)? {
         Some(key) => {
+            if !key.is_list_key() {
+                anyhow::bail!(
+                    "only primary keys and sub keys created with '--list' can be used for listing"
+                )
+            }
+
             let primary_key_id = key.primary_key_id();
             let metadata_dctx = match key {
                 keys::Key::PrimaryKeyV1(k) => {
                     crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
                 }
-                keys::Key::MetadataKeyV1(k) => {
-                    crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                keys::Key::SubKeyV1(k) => {
+                    crypto::DecryptionContext::new(k.metadata_sk.unwrap(), k.metadata_psk.unwrap())
                 }
-                _ => anyhow::bail!("provided key is not valid for metadata decryption"),
             };
 
             (Some(primary_key_id), Some(metadata_dctx))
@@ -733,8 +751,16 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     let key = cli_to_key(&matches)?;
+
+    if !key.is_put_key() {
+        anyhow::bail!(
+            "can only send data with a primary key or a sub key created with '--allow-put'."
+        );
+    }
+
     let primary_key_id = key.primary_key_id();
     let send_key_id = key.id();
+
     let (idx_hash_key, data_hash_key, gear_tab, data_ectx, metadata_ectx, idx_ectx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
             let idx_hash_key =
@@ -754,15 +780,21 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 idx_ectx,
             )
         }
-        keys::Key::PutKeyV1(k) => {
-            let idx_hash_key =
-                crypto::derive_hash_key(&k.idx_hash_key_part_1, &k.idx_hash_key_part_2);
-            let data_hash_key =
-                crypto::derive_hash_key(&k.data_hash_key_part_1, &k.data_hash_key_part_2);
-            let gear_tab = k.rollsum_key.gear_tab();
-            let data_ectx = crypto::EncryptionContext::new(&k.data_pk, &k.data_psk);
-            let metadata_ectx = crypto::EncryptionContext::new(&k.metadata_pk, &k.metadata_psk);
-            let idx_ectx = crypto::EncryptionContext::new(&k.idx_pk, &k.idx_psk);
+        keys::Key::SubKeyV1(k) => {
+            let idx_hash_key = crypto::derive_hash_key(
+                &k.idx_hash_key_part_1.unwrap(),
+                &k.idx_hash_key_part_2.unwrap(),
+            );
+            let data_hash_key = crypto::derive_hash_key(
+                &k.data_hash_key_part_1.unwrap(),
+                &k.data_hash_key_part_2.unwrap(),
+            );
+            let gear_tab = k.rollsum_key.unwrap().gear_tab();
+            let data_ectx =
+                crypto::EncryptionContext::new(&k.data_pk.unwrap(), &k.data_psk.unwrap());
+            let metadata_ectx =
+                crypto::EncryptionContext::new(&k.metadata_pk.unwrap(), &k.metadata_psk.unwrap());
+            let idx_ectx = crypto::EncryptionContext::new(&k.idx_pk.unwrap(), &k.idx_psk.unwrap());
             (
                 idx_hash_key,
                 data_hash_key,
@@ -772,7 +804,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 idx_ectx,
             )
         }
-        _ => anyhow::bail!("can only send data with a primary-key or put-key."),
     };
 
     let default_tags = !matches.opt_present("no-default-tags");
@@ -960,7 +991,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 idx_dctx,
             )
         }
-        _ => anyhow::bail!("provided key is not a decryption key"),
+        _ => anyhow::bail!("provided key is not a data decryption key"),
     };
 
     let progress = cli_to_progress_bar(
@@ -1112,6 +1143,13 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     let key = cli_to_key(&matches)?;
+
+    if !key.is_list_key() || !key.is_list_contents_key() {
+        anyhow::bail!(
+            "only primary keys and sub keys created with '--list-contents' can list contents"
+        );
+    }
+
     let primary_key_id = key.primary_key_id();
     let (idx_hash_key_part_1, metadata_dctx, idx_dctx) = match key {
         keys::Key::PrimaryKeyV1(k) => {
@@ -1120,7 +1158,13 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
             (idx_hash_key_part_1, metadata_dctx, idx_dctx)
         }
-        _ => anyhow::bail!("provided key is not a decryption key"),
+        keys::Key::SubKeyV1(k) => {
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.unwrap().clone();
+            let metadata_dctx =
+                crypto::DecryptionContext::new(k.metadata_sk.unwrap(), k.metadata_psk.unwrap());
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk.unwrap(), k.idx_psk.unwrap());
+            (idx_hash_key_part_1, metadata_dctx, idx_dctx)
+        }
     };
 
     let progress = cli_to_progress_bar(
@@ -1366,15 +1410,19 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
                 let (primary_key_id, metadata_dctx) = match cli_to_opt_key(&matches)? {
                     Some(key) => {
+                        if !key.is_list_key() {
+                            anyhow::bail!("only primary keys and sub keys created with '--list' can be used for listing")
+                        }
+
                         let primary_key_id = key.primary_key_id();
                         let metadata_dctx = match key {
                             keys::Key::PrimaryKeyV1(k) => {
                                 crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
                             }
-                            keys::Key::MetadataKeyV1(k) => {
-                                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
-                            }
-                            _ => anyhow::bail!("provided key is not valid for metadata decryption"),
+                            keys::Key::SubKeyV1(k) => crypto::DecryptionContext::new(
+                                k.metadata_sk.unwrap(),
+                                k.metadata_psk.unwrap(),
+                            ),
                         };
 
                         (Some(primary_key_id), Some(metadata_dctx))
@@ -1694,8 +1742,7 @@ fn main() {
     let result = match subcommand.as_str() {
         "init" => init_main(args),
         "new-key" => new_key_main(args),
-        "new-put-key" => new_send_key_main(args),
-        "new-metadata-key" => new_metadata_key_main(args),
+        "new-sub-key" => new_sub_key_main(args),
         "list" => list_main(args),
         "list-contents" => list_contents_main(args),
         "put" => put_main(args),

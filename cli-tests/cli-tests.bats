@@ -7,8 +7,9 @@ unset BUPSTASH_KEY_COMMAND
 
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
 export BUPSTASH_KEY="$SCRATCH/bupstash-test-primary.key"
-export SEND_KEY="$SCRATCH/bupstash-test-send.key"
+export PUT_KEY="$SCRATCH/bupstash-test-put.key"
 export METADATA_KEY="$SCRATCH/bupstash-test-metadata.key"
+export LIST_CONTENTS_KEY="$SCRATCH/bupstash-test-list-contents.key"
 export BUPSTASH_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export BUPSTASH_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
 
@@ -30,8 +31,9 @@ setup () {
   rm -rf "$SCRATCH"
   mkdir "$SCRATCH"
   bupstash new-key -o "$BUPSTASH_KEY"
-  bupstash new-put-key -o "$SEND_KEY"
-  bupstash new-metadata-key -o "$METADATA_KEY"
+  bupstash new-sub-key --put -o "$PUT_KEY"
+  bupstash new-sub-key --list -o "$METADATA_KEY"
+  bupstash new-sub-key --list-contents -o "$LIST_CONTENTS_KEY"
   if test -z "$BUPSTASH_REPOSITORY"
   then
     bupstash rm --query-encrypted --allow-many id="*"
@@ -57,14 +59,14 @@ teardown () {
 @test "simple put/get put key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
 @test "simple put/get no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put --no-compression -k "$SEND_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put --no-compression -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
@@ -73,7 +75,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     head -c $i /dev/urandom > "$SCRATCH/rand.dat"
-    id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/rand.dat")"
+    id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/rand.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
@@ -85,7 +87,7 @@ teardown () {
   do
     rm -f "$SCRATCH/rand.dat"
     yes | head -c $i > "$SCRATCH/yes.dat"
-    id="$(bupstash put -k "$SEND_KEY" :: "$SCRATCH/yes.dat")"
+    id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/yes.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
@@ -520,6 +522,8 @@ _concurrent_modify_worker () {
   id=$(bupstash put :: "$SCRATCH/foo/bar" "$SCRATCH/foo/bar/baz" "$SCRATCH/foo/bang")
   bupstash get id=$id | tar -tf -
   test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 5 = "$(bupstash list-contents id=$id | wc -l)"
+  test 5 = "$(bupstash list-contents -k $LIST_CONTENTS_KEY id=$id | wc -l)"
 }
 
 @test "hard link short path" {
