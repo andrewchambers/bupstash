@@ -33,7 +33,8 @@ impl PlainTextItemMetadata {
 pub struct EncryptedItemMetadata {
     pub plain_text_hash: [u8; crypto::HASH_BYTES],
     pub send_key_id: Xid,
-    pub hash_key_part_2: crypto::PartialHashKey,
+    pub idx_hash_key_part_2: crypto::PartialHashKey,
+    pub data_hash_key_part_2: crypto::PartialHashKey,
     pub timestamp: chrono::DateTime<chrono::Utc>,
     // We want ordered serialization.
     pub tags: std::collections::BTreeMap<String, String>,

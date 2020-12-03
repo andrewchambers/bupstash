@@ -9,8 +9,10 @@ use std::os::unix::fs::OpenOptionsExt;
 #[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct PrimaryKey {
     pub id: Xid,
+    /* key used to make the rollsum unique to this key. */
+    pub rollsum_key: crypto::RollsumKey,
     /*
-       Hash key is used for content addressing, similar
+       Hash keys are used for content addressing, similar
        to git, but with an HMAC. This means plaintext
        does not leak via known hashes. It also means
        attacks by uploading corrupt chunks won't
@@ -21,16 +23,16 @@ pub struct PrimaryKey {
        and metadata key never knows the hash key and is unable to use this
        to guess file contents.
     */
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
-    /* key used to make the rollsum unique. */
-    pub rollsum_key: crypto::RollsumKey,
+    pub data_hash_key_part_1: crypto::PartialHashKey,
+    pub data_hash_key_part_2: crypto::PartialHashKey,
     /* Key set used for encrypting data. */
     pub data_pk: crypto::BoxPublicKey,
     pub data_sk: crypto::BoxSecretKey,
     pub data_psk: crypto::BoxPreSharedKey,
 
     /* Key set used for encrypting indicies. */
+    pub idx_hash_key_part_1: crypto::PartialHashKey,
+    pub idx_hash_key_part_2: crypto::PartialHashKey,
     pub idx_pk: crypto::BoxPublicKey,
     pub idx_sk: crypto::BoxSecretKey,
     pub idx_psk: crypto::BoxPreSharedKey,
@@ -45,11 +47,13 @@ pub struct PrimaryKey {
 pub struct PutKey {
     pub id: Xid,
     pub primary_key_id: Xid,
-    pub hash_key_part_1: crypto::PartialHashKey,
-    pub hash_key_part_2: crypto::PartialHashKey,
     pub rollsum_key: crypto::RollsumKey,
+    pub data_hash_key_part_1: crypto::PartialHashKey,
+    pub data_hash_key_part_2: crypto::PartialHashKey,
     pub data_pk: crypto::BoxPublicKey,
     pub data_psk: crypto::BoxPreSharedKey,
+    pub idx_hash_key_part_1: crypto::PartialHashKey,
+    pub idx_hash_key_part_2: crypto::PartialHashKey,
     pub idx_pk: crypto::BoxPublicKey,
     pub idx_psk: crypto::BoxPreSharedKey,
     pub metadata_pk: crypto::BoxPublicKey,
@@ -160,23 +164,27 @@ impl Key {
 impl PrimaryKey {
     pub fn gen() -> PrimaryKey {
         let id = Xid::new();
-        let hash_key_part_1 = crypto::PartialHashKey::new();
-        let hash_key_part_2 = crypto::PartialHashKey::new();
         let rollsum_key = crypto::RollsumKey::new();
+        let data_hash_key_part_1 = crypto::PartialHashKey::new();
+        let data_hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
         let data_psk = crypto::BoxPreSharedKey::new();
+        let idx_hash_key_part_1 = crypto::PartialHashKey::new();
+        let idx_hash_key_part_2 = crypto::PartialHashKey::new();
         let (idx_pk, idx_sk) = crypto::box_keypair();
         let idx_psk = crypto::BoxPreSharedKey::new();
         let (metadata_pk, metadata_sk) = crypto::box_keypair();
         let metadata_psk = crypto::BoxPreSharedKey::new();
         PrimaryKey {
             id,
-            hash_key_part_1,
-            hash_key_part_2,
             rollsum_key,
+            data_hash_key_part_1,
+            data_hash_key_part_2,
             data_pk,
             data_sk,
             data_psk,
+            idx_hash_key_part_1,
+            idx_hash_key_part_2,
             idx_pk,
             idx_sk,
             idx_psk,
@@ -189,16 +197,19 @@ impl PrimaryKey {
 
 impl PutKey {
     pub fn gen(k: &PrimaryKey) -> PutKey {
-        let hash_key_part_2 = crypto::PartialHashKey::new();
+        let data_hash_key_part_2 = crypto::PartialHashKey::new();
+        let idx_hash_key_part_2 = crypto::PartialHashKey::new();
         let rollsum_key = crypto::RollsumKey::new();
         PutKey {
             id: Xid::new(),
             primary_key_id: k.id,
-            hash_key_part_1: k.hash_key_part_1.clone(),
-            hash_key_part_2,
             rollsum_key,
+            data_hash_key_part_1: k.data_hash_key_part_1.clone(),
+            data_hash_key_part_2,
             data_pk: k.data_pk.clone(),
             data_psk: k.data_psk.clone(),
+            idx_hash_key_part_1: k.idx_hash_key_part_1.clone(),
+            idx_hash_key_part_2,
             idx_pk: k.idx_pk.clone(),
             idx_psk: k.idx_psk.clone(),
             metadata_pk: k.metadata_pk.clone(),

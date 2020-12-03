@@ -127,8 +127,9 @@ pub struct SendContext {
     pub compression: compression::Scheme,
     pub primary_key_id: Xid,
     pub send_key_id: Xid,
-    pub hash_key: crypto::HashKey,
+    pub data_hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
+    pub idx_hash_key: crypto::HashKey,
     pub idx_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
     pub gear_tab: rollsum::GearTab,
@@ -219,6 +220,7 @@ pub fn send(
                 send_chunks(
                     ctx,
                     &mut sink,
+                    &ctx.data_hash_key,
                     &mut data_ectx,
                     &mut chunker,
                     &mut tw,
@@ -238,6 +240,7 @@ pub fn send(
                 send_chunks(
                     ctx,
                     &mut sink,
+                    &ctx.data_hash_key,
                     &mut data_ectx,
                     &mut chunker,
                     &mut tw,
@@ -271,7 +274,8 @@ pub fn send(
                     Ok(()) => {
                         let chunk_data = idx_chunker.finish();
                         let data_len = chunk_data.len() as u64;
-                        let chunk_addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                        let chunk_addr =
+                            crypto::keyed_content_address(&chunk_data, &ctx.idx_hash_key);
                         idx_tw.add(
                             &mut sink,
                             &chunk_addr,
@@ -311,7 +315,7 @@ pub fn send(
 
         let chunk_data = chunker.finish();
         let data_len = chunk_data.len() as u64;
-        let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+        let addr = crypto::keyed_content_address(&chunk_data, &ctx.data_hash_key);
         tw.add(
             &mut sink,
             &addr,
@@ -334,7 +338,8 @@ pub fn send(
         let e_metadata = itemset::EncryptedItemMetadata {
             plain_text_hash: plain_text_metadata.hash(),
             send_key_id: ctx.send_key_id,
-            hash_key_part_2: ctx.hash_key.part2.clone(),
+            idx_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
+            data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
             timestamp: chrono::Utc::now(),
             data_size: serde_bare::Uint(data_sz),
             index_size: serde_bare::Uint(index_size),
@@ -373,6 +378,7 @@ pub fn send(
 fn send_chunks(
     ctx: &SendContext,
     sink: &mut dyn htree::Sink,
+    hash_key: &crypto::HashKey,
     ectx: &mut crypto::EncryptionContext,
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
@@ -394,7 +400,7 @@ fn send_chunks(
                     if let Some(chunk_data) = c {
                         let data_len = chunk_data.len() as u64;
                         ctx.progress.inc(data_len);
-                        let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                        let addr = crypto::keyed_content_address(&chunk_data, &hash_key);
                         let encrypted_chunk = ectx.encrypt_data(chunk_data, ctx.compression);
                         if let Some(ref mut on_chunk) = on_chunk {
                             on_chunk(&addr);
@@ -565,13 +571,13 @@ fn dir_ent_to_index_ent(
     })
 }
 
-struct SendDirState<'a, 'b, 'c> {
+struct SendDirState<'a, 'b> {
     sink: &'a mut dyn htree::Sink,
     chunker: &'a mut chunker::RollsumChunker,
     tw: &'a mut htree::TreeWriter,
     idx_chunker: &'a mut chunker::RollsumChunker,
     idx_tw: &'a mut htree::TreeWriter,
-    send_log_session: &'b Option<std::cell::RefCell<sendlog::SendLogSession<'c>>>,
+    send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
 }
 
 fn send_dir(
@@ -601,6 +607,7 @@ fn send_dir(
         send_chunks(
             ctx,
             st.sink,
+            &ctx.idx_hash_key,
             &mut idx_ectx,
             st.idx_chunker,
             st.idx_tw,
@@ -644,6 +651,7 @@ fn send_dir(
             send_chunks(
                 ctx,
                 st.sink,
+                &ctx.idx_hash_key,
                 &mut idx_ectx,
                 st.idx_chunker,
                 st.idx_tw,
@@ -653,7 +661,7 @@ fn send_dir(
         }
 
         addresses.clear();
-        let mut hash_state = crypto::HashState::new(Some(&ctx.hash_key));
+        let mut hash_state = crypto::HashState::new(Some(&ctx.idx_hash_key));
 
         // Incorporate the absolute dir in our cache key.
         hash_state.update(cur_dir.as_os_str().as_bytes());
@@ -739,6 +747,7 @@ fn send_dir(
                     send_chunks(
                         ctx,
                         st.sink,
+                        &ctx.idx_hash_key,
                         &mut idx_ectx,
                         st.idx_chunker,
                         st.idx_tw,
@@ -809,6 +818,7 @@ fn send_dir(
                         let file_len = send_chunks(
                             ctx,
                             st.sink,
+                            &ctx.data_hash_key,
                             &mut data_ectx,
                             st.chunker,
                             st.tw,
@@ -844,7 +854,8 @@ fn send_dir(
                     send_chunks(
                         ctx,
                         st.sink,
-                        &mut data_ectx,
+                        &ctx.idx_hash_key,
+                        &mut idx_ectx,
                         st.idx_chunker,
                         st.idx_tw,
                         &mut std::io::Cursor::new(
@@ -857,7 +868,7 @@ fn send_dir(
 
                 if let Some(chunk_data) = st.chunker.force_split() {
                     let data_len = chunk_data.len() as u64;
-                    let addr = crypto::keyed_content_address(&chunk_data, &ctx.hash_key);
+                    let addr = crypto::keyed_content_address(&chunk_data, &ctx.data_hash_key);
                     on_chunk(&addr);
                     st.tw.add(
                         st.sink,
@@ -906,9 +917,8 @@ pub fn request_metadata(
 
 pub struct DataRequestContext {
     pub primary_key_id: Xid,
-    pub hash_key_part_1: crypto::PartialHashKey,
+    pub data_hash_key_part_1: crypto::PartialHashKey,
     pub data_dctx: crypto::DecryptionContext,
-    pub idx_dctx: crypto::DecryptionContext,
     pub metadata_dctx: crypto::DecryptionContext,
 }
 
@@ -930,14 +940,16 @@ pub fn request_data_stream(
     }
 
     if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-        anyhow::bail!("decryption key does not match master key used for encryption");
+        anyhow::bail!("decryption key does not match key used for encryption");
     }
 
     let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
     let plain_text_metadata = &metadata.plain_text_metadata;
 
-    let hash_key =
-        crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+    let hash_key = crypto::derive_hash_key(
+        &ctx.data_hash_key_part_1,
+        &encrypted_metadata.data_hash_key_part_2,
+    );
 
     let mut tr = htree::TreeReader::new(
         plain_text_metadata.data_tree.height.0.try_into()?,
@@ -977,22 +989,31 @@ pub fn request_data_stream(
     Ok(())
 }
 
+pub struct IndexRequestContext {
+    pub primary_key_id: Xid,
+    pub idx_hash_key_part_1: crypto::PartialHashKey,
+    pub idx_dctx: crypto::DecryptionContext,
+    pub metadata_dctx: crypto::DecryptionContext,
+}
+
 pub fn request_index(
-    mut ctx: DataRequestContext,
+    mut ctx: IndexRequestContext,
     id: Xid,
     metadata: &itemset::ItemMetadata,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<index::CompressedIndex, anyhow::Error> {
     if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
-        anyhow::bail!("decryption key does not match master key used for encryption");
+        anyhow::bail!("decryption key does not match key used for encryption");
     }
 
     let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
     let plain_text_metadata = &metadata.plain_text_metadata;
 
-    let hash_key =
-        crypto::derive_hash_key(&ctx.hash_key_part_1, &encrypted_metadata.hash_key_part_2);
+    let hash_key = crypto::derive_hash_key(
+        &ctx.idx_hash_key_part_1,
+        &encrypted_metadata.idx_hash_key_part_2,
+    );
 
     let index_tree = match &plain_text_metadata.index_tree {
         Some(index_tree) => index_tree,
