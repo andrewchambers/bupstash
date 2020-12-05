@@ -1,0 +1,37 @@
+(def hpkgs
+  "https://raw.githubusercontent.com/andrewchambers/hpkgs/93a809b9a17c2275a25c9bc085dc7eb14de9cf7e/")
+
+(defn hpkg-use*
+  [p]
+  (import* (string hpkgs p) :prefix ""))
+
+(defn hpkg-import*
+  [p]
+  (import* (string hpkgs p)))
+
+(hpkg-use* "prelude")
+(hpkg-use* "community/libsodium")
+(hpkg-use* "community/rust")
+(hpkg-import* "core")
+
+(defsrc bupstash-src
+  :url
+  "https://github.com/andrewchambers/bupstash/releases/download/v0.6.0/bupstash-v0.6.0-src+deps.tar.gz"
+  :hash
+  "sha256:4fb027f4d08df22758394cc61593624d8243b958af2ba7d75484179abe3a43f6")
+
+(defpkg bupstash
+  :builder
+  (fn []
+    (os/setenv "PATH" (join-pkg-paths ":" "/bin" [core/build-env rust]))
+    (os/setenv "PKG_CONFIG_PATH" (join-pkg-paths ":" "/lib/pkgconfig" [libsodium]))
+    (unpack-src bupstash-src)
+    # Minor patch to work on older rust...
+    (rewrite "src/rollsum.rs"
+            |(string/replace-all 
+               "h.leading_ones() == 20"
+               "(h & 0xfffff000) == 0xfffff000" $))
+    (sh/$ cargo build --offline --release)
+    (sh/$ strip target/release/bupstash)
+    (sh/$ mkdir (dyn :pkg-out) ^ /bin)
+    (sh/$ cp target/release/bupstash (dyn :pkg-out) ^ /bin)))
