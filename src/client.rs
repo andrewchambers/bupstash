@@ -695,16 +695,23 @@ fn send_dir(
                 }
                 Err(err) => return Err(SendDirError::Other(err.into())),
             };
+
+            // There is no meaningful way to backup a unix socket.
+            if metadata.file_type().is_socket() {
+                continue 'collect_dir_ents;
+            }
+
             let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
             let index_ent =
                 dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs)?;
-            let index_bytes = serde_bare::to_vec(&index_ent).unwrap();
 
             if metadata.is_dir() {
                 work_list.push(ent_path.clone());
             }
 
-            hash_state.update(&index_bytes);
+            if ctx.use_stat_cache {
+                hash_state.update(&serde_bare::to_vec(&index_ent).unwrap());
+            }
             index_ents.push((ent_path, index_ent));
         }
 
@@ -775,8 +782,11 @@ fn send_dir(
             }
             None => {
                 let mut total_size: u64 = 0;
+
                 let mut on_chunk = |addr: &Address| {
-                    addresses.extend_from_slice(&addr.bytes[..]);
+                    if ctx.use_stat_cache {
+                        addresses.extend_from_slice(&addr.bytes[..]);
+                    }
                 };
 
                 let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
