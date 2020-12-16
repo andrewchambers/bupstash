@@ -71,53 +71,20 @@ impl RollsumChunker {
             return (n_bytes, None);
         }
 
-        // This is perhaps the hottest loop in bupstash, hoist
-        // a lot of things out of it manually. At the time
-        // of writing, this unsafe hoisting made the chunker faster.
-        // (200MiB/s up to ~1GiB/s).
-        //
-        // We can measure this function with:
-        //
-        // yes | pv | bupstash put-benchmark --chunk
-        //
-        // We use unsafe here to avoid bounds checks.
-        // This unsafe code is on the upload path, so is less dangerous
-        // than using unsafe on the download path.
-        unsafe {
-            let start_vec_len = self.cur_vec.len();
-            let gear_tab = &self.gear_tab;
-            let min_sz = self.min_sz;
-            let max_sz = self.max_sz;
-            let bufp = buf.as_ptr();
-            let vp = self.cur_vec.as_mut_ptr().add(start_vec_len);
-            // rs is small, cloning is fast.
-            let mut n_added = 0;
-            let mut rs = self.rs.clone();
-            let mut n_to_add = std::cmp::min(self.spare_capacity(), n_bytes);
-            // iterate only as far as max_sz, we can check for max_sz at the end.
-            if start_vec_len + n_to_add > max_sz {
-                let overshoot = start_vec_len + n_to_add - max_sz;
-                n_to_add -= overshoot;
+        n_bytes = std::cmp::min(self.spare_capacity(), n_bytes);
+
+        match self.rs.roll_bytes(&self.gear_tab, &buf[0..n_bytes]) {
+            Some(split) => {
+                self.cur_vec.extend_from_slice(&buf[0..split]);
+                (split, Some(self.swap_vec()))
             }
-            while n_added < n_to_add {
-                let b = *bufp.add(n_added);
-                *vp.add(n_added) = b;
-                n_added += 1;
-                if rs.roll_byte(gear_tab, b) {
-                    let vec_len = start_vec_len + n_added;
-                    if vec_len > min_sz {
-                        self.rs = rs;
-                        self.cur_vec.set_len(vec_len);
-                        return (n_added, Some(self.swap_vec()));
-                    }
+            None => {
+                self.cur_vec.extend_from_slice(&buf[0..n_bytes]);
+                if self.cur_vec.len() == self.max_sz {
+                    (n_bytes, Some(self.swap_vec()))
+                } else {
+                    (n_bytes, None)
                 }
-            }
-            self.rs = rs;
-            self.cur_vec.set_len(start_vec_len + n_added);
-            if self.cur_vec.len() == max_sz {
-                (n_added, Some(self.swap_vec()))
-            } else {
-                (n_added, None)
             }
         }
     }

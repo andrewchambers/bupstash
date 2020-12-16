@@ -15,15 +15,37 @@ impl Rollsum {
     }
 
     #[inline(always)]
-    pub fn roll_byte(&mut self, tab: &GearTab, newch: u8) -> bool {
+    pub fn roll_byte(&mut self, tab: &GearTab, b: u8) -> bool {
+        // Only used for testing, can be slow...
+        let b = &[b];
+        self.roll_bytes(tab, b).is_some()
+    }
+
+    #[inline(always)]
+    pub fn roll_bytes(&mut self, tab: &GearTab, buf: &[u8]) -> Option<usize> {
         let mut h = self.h;
-        // The << 1 rolls out previous values after WINDOW_SIZE shifts.
-        let gv = unsafe { *tab.get_unchecked(newch as usize) };
-        h = (h << 1).wrapping_add(gv);
+        let bp = buf.as_ptr();
+        let end = buf.len();
+        let mut offset = 0;
+        // This is the tightest loop in bupstash,
+        // we must get rid of as many instructions as possible.
+        unsafe {
+            while offset < end {
+                let b = *bp.add(offset);
+                // The << 1 rolls out previous values after WINDOW_SIZE shifts.
+                let gv = *tab.get_unchecked(b as usize);
+                h = (h << 1).wrapping_add(gv);
+                offset += 1;
+                // The chunk mask uses the upper bits, as that has influence from
+                // the whole chunk window, where the bottom bits do not.
+                if h.leading_ones() == 20 {
+                    self.h = h;
+                    return Some(offset);
+                }
+            }
+        }
         self.h = h;
-        // The chunk mask uses the upper bits, as that has influence from
-        // the whole chunk window, where the bottom bits do not.
-        h.leading_ones() == 20
+        None
     }
 
     #[inline]
