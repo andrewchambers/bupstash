@@ -7,8 +7,7 @@ Subcommands:
 
   init              Initialize a bupstash repository.
   new-key           Create a new key capable of all operations.
-  new-put-key       Derive a put key only capable of writing data.
-  new-metadata-key  Derive a metadata key for search and listing.
+  new-sub-key       Derive a sub key for a subset of operations.
   put               Put a new item into a repository.
   list              List items in a repository.
   list-contents     List contents of a directory snapshot.
