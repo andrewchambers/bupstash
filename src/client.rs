@@ -1149,6 +1149,13 @@ fn write_index_as_tarball(
     for ent in index.iter() {
         match ent? {
             index::VersionedIndexEntry::V1(ent) => {
+                if matches!(ent.kind(), index::IndexEntryKind::Other) {
+                    // We can't convert this to a tar header, so just discard the
+                    // data and skip it.
+                    copy_n(&mut std::io::sink(), ent.size.0)?;
+                    continue;
+                }
+
                 let hardlink = if !ent.is_dir() && ent.nlink.0 > 1 {
                     let dev_ino = (ent.dev.0, ent.ino.0);
                     match hardlinks.get(&dev_ino) {
