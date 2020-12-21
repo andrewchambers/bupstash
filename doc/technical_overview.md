@@ -8,6 +8,8 @@ Bupstash also can convert filesystems on disk into a data stream transparently f
 The bupstash repository contains very little unencrypted data, it stores only encrypted data chunks, and encrypted
 metadata.
 
+Bupstash does not transmit decryption keys to the server at any point.
+
 ## Deduplication
 
 - Bupstash splits an input stream into data chunks less than 8 MiB.
