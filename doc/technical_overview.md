@@ -50,7 +50,7 @@ form a merkle tree, only the leaf data nodes are encrypted.
 
 ## Content index
 
-Pure data streams are not efficient enough to allow a file 'browsing' user interface, to
+Pure data streams do not enough to allow an efficient file 'browsing' user interface, to
 solve this, each data stream has an optional auxillary index data stream.
 The index is a hash tree containing an efficient index of the data.
 
