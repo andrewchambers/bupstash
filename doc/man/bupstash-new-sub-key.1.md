@@ -22,15 +22,15 @@ their search tags, without exposing the data decryption key.
 
 The generated key will be marked readable only for the creating user.
 
-If a sub-key is lost, the primary key will still be able to decrypt
-any data saved with the original primary key, or a put-key derived from that key.
+If a sub-key is lost, the original key will still be able to decrypt any data in the repository
+encrypted by that sub-key.
 
 ## OPTIONS
 
 * -k, --key PATH:
-  Key to derive the new put-key from.
+  Key to derive the new sub-key from.
 * -o, --output PATH:
-  Path to where the put-key will be written.
+  Path to where the sub-key will be written.
 * --put:
   The key is able to encrypt data for 'put' operations.
 * --list:
@@ -43,7 +43,7 @@ any data saved with the original primary key, or a put-key derived from that key
 ### Create a new put only key
 
 ```
-$ bupstash new-put-key -k backups.key -o ./put.key
+$ bupstash new-sub-key --put -k backups.key -o ./put.key
 $ bupstash put -k ./backups-put.key ./data
 ```
 

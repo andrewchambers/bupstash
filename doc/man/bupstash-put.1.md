@@ -76,7 +76,7 @@ Default tags can be overidden manually by simply specifying them.
   remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * -k, --key KEY:
-  Primary key or put-key to encrypt data and metadata with. If not set, defaults
+  Key used to encrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
 * -e, --exec:
@@ -125,7 +125,7 @@ Default tags can be overidden manually by simply specifying them.
   allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
-  Path to a primary key, or a put-key, that will be used to encrypt
+  Path to the key that will be used to encrypt
   the data. Only the associated primary key will be able to decrypt
   the data once sent.
 

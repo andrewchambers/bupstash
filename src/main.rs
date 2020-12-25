@@ -509,7 +509,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         Some(key) => {
             if !key.is_list_key() {
                 anyhow::bail!(
-                    "only primary keys and sub keys created with '--list' can be used for listing"
+                    "only main keys and sub keys created with '--list' can be used for listing"
                 )
             }
 

@@ -9,8 +9,7 @@ Run one of the following `bupstash` subcommands.
 
 `bupstash init ...`<br>
 `bupstash new-key ...`<br>
-`bupstash new-put-key ...`<br>
-`bupstash new-metadata-key ...`<br>
+`bupstash new-sub-key ...`<br>
 `bupstash put ...`<br>
 `bupstash list ...`<br>
 `bupstash list-contents ...`<br>
@@ -47,10 +46,8 @@ that each have their own documentation.
   Initialize a bupstash repository.
 * bupstash-new-key(1):
   Create a new primary key for creating/reading repository items.
-* bupstash-new-put-key(1):
-  Derive a put only key from a primary key. 
-* bupstash-new-metadata-key(1):
-  Derive a list/rm only key from a primary key. 
+* bupstash-new-sub-key(1):
+  Derive a sub key for a subset of operations.
 * bupstash-put(1):
   Add data to a bupstash repository.
 * bupstash-get(1):
@@ -148,8 +145,8 @@ $ bupstash gc
 ```
 # Create a key, a put only key, and a metadata (list/rm only) key.
 $ bupstash new-key -o backups.key
-$ bupstash new-put-key -k backups.key -o backups-put.key
-$ bupstash new-metadata-key -k backups.key -o backups-metadata.key
+$ bupstash new-sub-key --put -k backups.key -o backups-put.key
+$ bupstash new-sub-key --list -k backups.key -o backups-metadata.key
 
 ... Copy backups.key to secure offline storage ...
 

@@ -31,7 +31,7 @@ more information on the query cache.
   remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
 
 * -k, --key KEY:
-  Primary key used to decrypt data and metadata. If not set, defaults
+  Key that will be used to decrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
 * --pick PATH:
@@ -60,7 +60,7 @@ more information on the query cache.
   allows more complex connections to the repository for less common use cases.
 
 * BUPSTASH_KEY:
-  Path to a primary key that will be used for decrypting data and metadata.
+  Path to the key that will be used for decrypting data and metadata.
 
 * BUPSTASH_KEY_COMMAND:
   A command to run that must print the key data, can be used instead of BUPSTASH_KEY
