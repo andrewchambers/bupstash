@@ -2,8 +2,7 @@
 
 [![Gitter](https://badges.gitter.im/bupstash/community.svg)](https://gitter.im/bupstash/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
-bupstash is a secure data store for uses ranging from business critical data archiving,
-to small scale personal data collections. 
+bupstash is a secure backup repository for personal and business snapshots and data archiving
 
 Some key features:
 
