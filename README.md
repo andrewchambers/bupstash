@@ -2,7 +2,7 @@
 
 [![Gitter](https://badges.gitter.im/bupstash/community.svg)](https://gitter.im/bupstash/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
-bupstash is a tool for secure encrypted backups, locally and over ssh.
+bupstash is a tool for encrypted backups - if you need secure backups, bupstash is the tool for you.
 
 Some key features:
 
