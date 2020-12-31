@@ -15,7 +15,7 @@ Bupstash was designed to have:
 
 - Great performance on slow networks - Bupstash really strives to work well on high latency networks like cellular and connections to far-off lands.
 
-- Secure access controls - Ransomware and disgruntled business partners will be powerless to delete your backups, even after a full system take over.
+- Secure remote access controls - Ransomware, angry spouses, and disgruntled business partners will be powerless to delete your remote backups.
 
 - Efficient incremental backups - Bupstash knows what it backed up last time and skips that work.
 
