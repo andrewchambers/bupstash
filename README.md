@@ -4,29 +4,24 @@
 
 bupstash is a tool for encrypted backups - if you need secure backups, bupstash is the tool for you.
 
-Some key features:
 
-- Secure offline keys, data can't be decrypted without them, but new backups can still be made.
+Bupstash was designed to have:
 
-- Data deduplication allowing efficient storage of large numbers of data snapshots.
+- Efficient deduplication - Bupstash can store hundreds of encrypted directory snapshots using a fraction of the space encrypted tarballs would require.
 
-- Easy incremental backups without the headache.
+- Offline decryption keys - Backups do not require the decryption key be anywhere near an at-risk server or computer.
 
-- Client side encryption of data and metadata, cryptographically assured privacy.
+- Key/value tagging with search - all while keeping the tags fully encrypted.
 
-- Access controls over ssh, allowing different permissions on a per ssh key basis.
+- Great performance on slow networks - Bupstash really strives to work well on high latency networks like cellular and connections to far-off lands.
 
-- Key/Value backup tagging system and simple query language.
+- Secure access controls - Ransomware and disgruntled business partners will be powerless to delete your backups, even after a full system take over.
 
-- Simple, scriptable command line interface.
+- Efficient incremental backups - Bupstash knows what it backed up last time and skips that work.
 
-- Self hosting with nothing more than an ssh server.
+- Fantastic performance with low ram usage - Bupstash won't bog down your production servers.
 
-- Low ram usage and high performance.
-
-- Append only access controls for high security deployments.
-
-- Written in rust to mitigate many classes of security bugs.
+- Safety against malicious attacks - Bupstash is written in a memory safe language to dramatically reduce the attack surface over the network.
 
 ## Stability and Backwards Compatibility
 
