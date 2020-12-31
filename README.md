@@ -43,6 +43,7 @@ in a backwards incompatible way unless there is *very* strong justification. Fut
 - Visit the [filesystem backups guide](https://bupstash.io/doc/guides/Filesystem%20Backups.html) for examples of making backups.
 - Visit the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
 - Visit the [community chat](https://gitter.im/bupstash/community?utm_source=share-link&utm_medium=link&utm_campaign=share-link) to ask questions.
+- Introductory [blog post](https://acha.ninja/blog/introducing_bupstash/).
 
 # Typical usage
 
