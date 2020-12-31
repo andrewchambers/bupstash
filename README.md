@@ -29,10 +29,13 @@ Some key features:
 
 - Written in rust to mitigate many classes of security bugs.
 
-*WARNING* Bupstash is alpha software, backwards incompatible changes may be made.
-While all efforts are made to keep bupstash bug free, we currently recommend
+## Stability and Backwards Compatibility
+
+*WARNING* Bupstash is alpha software, while all efforts are made to keep bupstash bug free, we currently recommend
 using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
+The repository format is approaching stability, and will not be changed
+in a backwards incompatible way unless there is *very* strong justification. Future changes will most likely be backwards compatible, or come with a migration path if it is needed at all.
 
 # Guides, documentation and support
 
