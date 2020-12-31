@@ -2,7 +2,7 @@
 
 [![Gitter](https://badges.gitter.im/bupstash/community.svg)](https://gitter.im/bupstash/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
-bupstash is a tool for encrypted backups - if you need secure backups, bupstash is the tool for you.
+Bupstash is a tool for encrypted backups - if you need secure backups, Bupstash is the tool for you.
 
 
 Bupstash was designed to have:
@@ -42,7 +42,7 @@ in a backwards incompatible way unless there is *very* strong justification. Fut
 
 # Typical usage
 
-Initialize a new bupstash repository via ssh.
+Initialize a new Bupstash repository via ssh.
 ```
 $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
 $ bupstash init
