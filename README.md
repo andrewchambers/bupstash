@@ -30,7 +30,7 @@ Some key features:
 
 ## Stability and Backwards Compatibility
 
-*WARNING* Bupstash is alpha software, while all efforts are made to keep bupstash bug free, we currently recommend
+Bupstash is alpha software, while all efforts are made to keep bupstash bug free, we currently recommend
 using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 The repository format is approaching stability, and will not be changed
