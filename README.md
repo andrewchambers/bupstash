@@ -9,6 +9,8 @@ Bupstash was designed to have:
 
 - Efficient deduplication - Bupstash can store hundreds of encrypted directory snapshots using a fraction of the space encrypted tarballs would require.
 
+- Strong privacy - Data is encrypted client side and the repository never needs has access to the decryption keys.
+
 - Offline decryption keys - Backups do not require the decryption key be anywhere near an at-risk server or computer.
 
 - Key/value tagging with search - all while keeping the tags fully encrypted.
