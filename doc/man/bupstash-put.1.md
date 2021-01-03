@@ -108,7 +108,7 @@ Default tags can be overidden manually by simply specifying them.
   if the input data is uncompressible and you wish to increase throughput.
 
 * --xattrs:
-  Save directory entry xattrs, only used when WHAT is a directory.
+  Save directory entry xattrs, only used when saving a directory.
 
 * -q, --quiet:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
@@ -138,7 +138,7 @@ Default tags can be overidden manually by simply specifying them.
   for a description of how to use send logging for efficient incremental uploads.
 
 * BUPSTASH_CHECKPOINT_BYTES:
-  When send logging is enabled bupstash will checkpoint the log every BUPSTASH_CHECKPOINT_BYTES
+  When send logging is enabled, bupstash will checkpoint the log every BUPSTASH_CHECKPOINT_BYTES
   of data that is sent. If an upload is interrupted after a successful checkpoint, data will not need
   to be resent over the network. The default value of this option is 1073741824, which is 1 GiB.
 
