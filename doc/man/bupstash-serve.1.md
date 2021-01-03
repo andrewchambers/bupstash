@@ -15,8 +15,9 @@ interaction with a repository. Most bupstash commands operate via an instance of
 The serve command has flags that can be set to restrict access permissions, by default
 all access is permitted until the first --allow-* option is provided.
 
-Typically users won't need to interact with `bupstash serve` unless they want
-to create
+Typically users won't need to interact with `bupstash serve` unless they need
+to create a custom connection via an arbitrary command or they wish to configure
+via an ssh forced command access controls.
 
 ## OPTIONS
 
@@ -34,10 +35,10 @@ to create
 ## EXAMPLES
 
 
-### Using BUPSTASH_REPOSITORY_COMMAND
+### Custom ssh flags using BUPSTASH_REPOSITORY_COMMAND
 
 ```
-$ export BUPSTASH_REPOSITORY_COMMAND="ssh $SERVER bupstash serve /data/repository"
+$ export BUPSTASH_REPOSITORY_COMMAND="ssh -p 2020 $SERVER bupstash serve /data/repository"
 $ bupstash list
 ```
 
