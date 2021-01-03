@@ -41,6 +41,7 @@ in a backwards incompatible way unless there is *very* strong justification. Fut
 - Visit the [man pages](https://bupstash.io/doc/man/bupstash.html) for more comprehensive documentation.
 - Visit the [community chat](https://gitter.im/bupstash/community?utm_source=share-link&utm_medium=link&utm_campaign=share-link) to ask questions.
 - Introductory [blog post](https://acha.ninja/blog/introducing_bupstash/).
+- [Technical Overview](./technical_overview.md).
 
 # Typical usage
 
