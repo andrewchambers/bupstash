@@ -36,7 +36,7 @@ Because all data is stored encrypted on the server, item metadata must first be 
 and then decrypted on the client side to run a query. The file containing the synced and encrypted metadata
 is called the query cache.
 
-The path to the put-cache file, defaults to one of the following, in order, provided
+The path to the query-cache file, defaults to one of the following, in order, provided
 the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
 `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
