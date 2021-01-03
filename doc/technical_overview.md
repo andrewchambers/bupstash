@@ -43,14 +43,14 @@ the data stream and we form a new chunk if the gear hash matches an 'interesting
 When uploading data streams larger than a single chunk, we must group them. To do this we 
 form a merkle tree, only the leaf data nodes are encrypted.
 
-- Each non leaf chunk in the hash tree is simply a list of addresses.
+- Each non leaf chunk in the hash tree is simply a list of addresses and an chunk count bread crumb for random access.
 - Because the hash tree is mostly unencrypted, server can push stream the tree.
 - Because the hash tree is mostly unencrypted, server can perform garbage collection.
 - Data is still encrypted so server only knows approximate data stream size.
 
 ## Content index
 
-Pure data streams do not enough to allow an efficient file 'browsing' user interface, to
+Pure data streams are not enough to allow an efficient file 'browsing' user interface, to
 solve this, each data stream has an optional auxillary index data stream.
 The index is a hash tree containing an efficient index of the data.
 
