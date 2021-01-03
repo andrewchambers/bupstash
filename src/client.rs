@@ -18,9 +18,14 @@ use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+    }
+}
 
 // XXX TODO these chunk parameters need to be investigated and tuned.
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
@@ -466,16 +471,16 @@ fn likely_smear_error(err: &std::io::Error) -> bool {
 }
 
 cfg_if::cfg_if! {
-    if #[cfg(linux)] {
+    if #[cfg(target_os = "linux")] {
 
         fn dev_major(dev: u64) -> u32 {
-            ((dev >> 32) & 0xffff_f000) |
-            ((dev >>  8) & 0x0000_0fff)
+            (((dev >> 32) & 0xffff_f000) |
+             ((dev >>  8) & 0x0000_0fff)) as u32
         }
 
         fn dev_minor(dev: u64) -> u32 {
-            ((dev >> 12) & 0xffff_ff00) |
-            ((dev      ) & 0x0000_00ff)
+            (((dev >> 12) & 0xffff_ff00) |
+             ((dev      ) & 0x0000_00ff)) as u32
         }
 
     } else {
@@ -578,6 +583,52 @@ struct SendDirState<'a, 'b> {
     idx_chunker: &'a mut chunker::RollsumChunker,
     idx_tw: &'a mut htree::TreeWriter,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, SendDirError> {
+            let f = match std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOATIME)
+                .open(fpath)
+            {
+                Ok(f) => f,
+                Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
+                Err(err) => return Err(SendDirError::Other(err.into())),
+            };
+
+            // For linux at least, shift file pages to the tail of the page cache, allowing
+            // the kernel to quickly evict these pages. This works well for the case of system
+            // backups, where we don't to trash the users current cache.
+            // One source on how linux treats this hint - https://lwn.net/Articles/449420
+            nix::fcntl::posix_fadvise(
+                f.as_raw_fd(),
+                0,
+                0,
+                nix::fcntl::PosixFadviseAdvice::POSIX_FADV_NOREUSE,
+            )?;
+
+            Ok(f)
+        }
+
+    // XXX More platforms should support NOATIME and POSIX_FADV_NOREUSE
+    } else {
+
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, SendDirError> {
+            let f = match std::fs::OpenOptions::new()
+                .read(true)
+                .open(fpath)
+            {
+                Ok(f) => f,
+                Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
+                Err(err) => return Err(SendDirError::Other(err.into())),
+            };
+
+            Ok(f)
+        }
+    }
 }
 
 fn send_dir(
@@ -802,28 +853,7 @@ fn send_dir(
                     let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
 
                     if index_ent.is_file() && index_ent.size.0 != 0 {
-                        let mut f = match std::fs::OpenOptions::new()
-                            .read(true)
-                            .custom_flags(libc::O_NOATIME)
-                            .open(&ent_path)
-                        {
-                            Ok(f) => f,
-                            Err(err) if likely_smear_error(&err) => {
-                                return Err(SendDirError::FilesystemModified)
-                            }
-                            Err(err) => return Err(SendDirError::Other(err.into())),
-                        };
-
-                        // For linux at least, shift file pages to the tail of the page cache, allowing
-                        // the kernel to quickly evict these pages. This works well for the case of system
-                        // backups, where we don't to trash the users current cache.
-                        // One source on how linux treats this hint - https://lwn.net/Articles/449420
-                        nix::fcntl::posix_fadvise(
-                            f.as_raw_fd(),
-                            0,
-                            0,
-                            nix::fcntl::PosixFadviseAdvice::POSIX_FADV_NOREUSE,
-                        )?;
+                        let mut f = open_file_for_sending(&ent_path)?;
 
                         let file_len = send_chunks(
                             ctx,
