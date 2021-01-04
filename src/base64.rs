@@ -12,7 +12,7 @@ pub fn encode(buf: &[u8]) -> String {
 
     unsafe {
         assert!(!sodium::sodium_bin2base64(
-            out_buf.as_mut_ptr() as *mut i8,
+            out_buf.as_mut_ptr() as *mut std::os::raw::c_char,
             out_buf.len(),
             buf.as_ptr(),
             buf.len(),
@@ -41,11 +41,11 @@ pub fn decode(data: &str) -> Option<Vec<u8>> {
         sodium::sodium_base642bin(
             out_buf.as_mut_ptr(),
             out_buf.len(),
-            data.as_ptr() as *const i8,
+            data.as_ptr() as *const std::os::raw::c_char,
             data.len(),
             std::ptr::null(),
             &mut out_len as *mut usize,
-            std::ptr::null_mut::<*const i8>(),
+            std::ptr::null_mut::<*const std::os::raw::c_char>(),
             sodium::sodium_base64_VARIANT_ORIGINAL as i32,
         )
     };
