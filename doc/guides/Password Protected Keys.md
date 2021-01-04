@@ -60,5 +60,5 @@ entry.
 
 Remember that BUPSTASH_KEY_COMMAND can be set to run any command of your choosing, giving great flexibility when it comes to protecting sensitive bupstash keys.
 
-Finally, don't forget to check out our other guides and manuals to learn about 'put keys' that do not have the ability to decrypt data after it is sent. 'put keys' allow us to avoid putting our sensitive decryption keys
+Finally, don't forget to check out our other guides and manuals to learn about sub-keys that do not have the ability to decrypt data after it is sent. Sub-keys allow us to avoid putting our sensitive decryption keys
 on devices making backups.
