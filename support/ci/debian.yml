@@ -1,0 +1,17 @@
+image: debian/sid
+packages:
+  - cargo
+  - pkg-config
+  - libsodium-dev
+  - sqlite3
+  - uuid-runtime
+  - bats
+sources:
+  - https://github.com/andrewchambers/bupstash
+tasks:
+  - build: |
+      cd bupstash
+      cargo test
+      cargo build --release
+      export PATH=$(pwd)/target/release:$PATH
+      bats ./cli-tests
