@@ -1,10 +1,7 @@
 Need to do:
 
 - Document required rust version.
-- Improve documentation on key exchange packet and 'box' structure.
-- Hardlink support?
 - Torture test in cli suite for send checkpointing duration.
-- Send permission denied: Permission denied (os error 13), add path to error message.
 
 Can do later (medium term):
 
@@ -36,11 +33,6 @@ Unclassified:
 
 - Prefetch system should also work for non leaf tree nodes.
 
-- Consider a single larger man page.
-
 - Way to untar? Perhaps just use system tar? What about
   windows? Maybe minitar ? Maybe link in a tar implementation.
 
-- Man page quote all glob examples.
-
-- Decouple compression and encryption code. Compression context?
