@@ -11,8 +11,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const RENAME_BATCH_SIZE: u64 = 256;
-
 enum ReadWorkerMsg {
     GetChunk(
         (
@@ -43,6 +41,7 @@ pub struct DirStorage {
     read_worker_rx: crossbeam_channel::Receiver<ReadWorkerMsg>,
 
     // Writing
+    rename_batch_size: u64,
     had_io_error: Arc<AtomicBool>,
     write_worker_handles: Vec<std::thread::JoinHandle<()>>,
     write_worker_tx: Vec<crossbeam_channel::Sender<WriteWorkerMsg>>,
@@ -53,6 +52,7 @@ pub struct DirStorage {
 impl DirStorage {
     fn add_write_worker_thread(&mut self) {
         let mut data_path = self.dir_path.clone();
+        let rename_batch_size = self.rename_batch_size;
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
 
@@ -141,7 +141,7 @@ impl DirStorage {
                             worker_try!(tmp_file.write_all(&data));
 
                             pending_batch_rename.push((dest, tmp.into(), tmp_file));
-                            if pending_batch_rename.len() >= RENAME_BATCH_SIZE.try_into().unwrap() {
+                            if pending_batch_rename.len() >= rename_batch_size.try_into().unwrap() {
                                 worker_try!(do_batch_rename(&mut pending_batch_rename))
                             }
                         }
@@ -275,6 +275,31 @@ impl DirStorage {
             std::fs::DirBuilder::new().create(dir_path)?;
         }
 
+        let file_rlimit = {
+            // Not part of the Nix crate yet so we must resort to libc.
+            let mut rlim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+
+            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+                anyhow::bail!(
+                    "unable to query the open file limit: {}",
+                    std::io::Error::last_os_error()
+                );
+            };
+            rlim.rlim_cur as u64
+        };
+
+        if file_rlimit < 16 {
+            anyhow::bail!(
+                "open file limit '{}' is too low for directory storage engine to function",
+                file_rlimit
+            );
+        }
+
+        // This limit is an approximation of what the bupstash serve process is likely to need.
+        let rename_batch_size = std::cmp::min(256, (file_rlimit - 10) / 2);
         let read_worker_handles = Vec::new();
         let write_worker_handles = Vec::new();
         let write_worker_tx = Vec::new();
@@ -287,6 +312,7 @@ impl DirStorage {
             read_worker_tx,
             read_worker_rx,
             had_io_error,
+            rename_batch_size,
             write_worker_handles,
             write_worker_tx,
             write_chunk_count: 0,
@@ -315,7 +341,7 @@ impl Engine for DirStorage {
 
         self.write_chunk_count += 1;
 
-        if self.write_chunk_count >= RENAME_BATCH_SIZE {
+        if self.write_chunk_count >= self.rename_batch_size {
             self.write_chunk_count = 0;
             self.write_round_robin_index += 1;
             if self.write_round_robin_index >= 2 {
