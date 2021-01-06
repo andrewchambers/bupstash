@@ -1654,6 +1654,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
+
     opts.optflag(
         "",
         "allow-init",
@@ -1708,6 +1709,33 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     if atty::is(atty::Stream::Stdout) {
         eprintln!("'bupstash serve' running on stdin/stdout...");
     }
+
+    // Increase file limit if it looks too low.
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+        anyhow::bail!(
+            "unable to query the open file limit: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+
+    // This should be adjusted based on what the storage backend requires.
+    const DESIRED_MIN_RLIM: u64 = 1024;
+
+    if rlim.rlim_cur < DESIRED_MIN_RLIM {
+        rlim.rlim_cur = std::cmp::min(DESIRED_MIN_RLIM, rlim.rlim_max);
+    }
+
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) } != 0 {
+        eprintln!(
+            "warning: unable to adjust the open file limit: {}",
+            std::io::Error::last_os_error()
+        );
+    };
 
     server::serve(
         server::ServerConfig {
