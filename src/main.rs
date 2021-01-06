@@ -1724,7 +1724,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     // This should be adjusted based on what the storage backend requires.
-    const DESIRED_MIN_RLIM: u64 = 1024;
+    const DESIRED_MIN_RLIM: libc::rlim_t = 1024;
 
     if rlim.rlim_cur < DESIRED_MIN_RLIM {
         rlim.rlim_cur = std::cmp::min(DESIRED_MIN_RLIM, rlim.rlim_max);
