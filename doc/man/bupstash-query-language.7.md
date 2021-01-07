@@ -158,7 +158,7 @@ Use brackets to alter the default precedence.
 ```
 
 Note, This differs from the typical tradition of using `()` for grouping so queries are
-easier to write in shell scripts where `()` already has design a designated meaning.
+easier to write in shell scripts where `()` already has a designated meaning.
 
 ## SEE ALSO
 
