@@ -320,7 +320,12 @@ fn cli_to_serve_process(
                     args
                 } else {
                     vec![
-                        std::env::current_exe()?.to_string_lossy().to_string(),
+                        if cfg!(target_os = "openbsd") {
+                            let args: Vec<String> = std::env::args().collect();
+                            args[0].clone()
+                        } else {
+                            std::env::current_exe()?.to_string_lossy().to_string()
+                        },
                         "serve".to_owned(),
                         repo,
                     ]
