@@ -203,7 +203,7 @@ DATA[...] || 0x00
 
 Valid compression flags are:
 
-- 1 << 0 == zstd compression.
+- 1 << 0 == lz4 compression.
 
 ### Hash tree node chunk
 

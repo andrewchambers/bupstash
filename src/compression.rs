@@ -52,7 +52,7 @@ pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
         footer if footer == COMPRESS_FOOTER_LZ4_COMPRESSED => {
             data.pop();
             if data.len() < 4 {
-                anyhow::bail!("data corrupt - zstd data footer missing decompressed size");
+                anyhow::bail!("data corrupt - lz4 data footer missing decompressed size");
             }
             let data_len = data.len();
             let decompressed_sz = (((data[data_len - 1] as u32) << 24)
