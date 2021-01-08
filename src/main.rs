@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
 
 fn die(s: String) -> ! {
-    eprintln!("{}", s);
+    let _ = writeln!(std::io::stderr(), "{}", s);
     std::process::exit(1);
 }
 
@@ -321,8 +321,7 @@ fn cli_to_serve_process(
                 } else {
                     vec![
                         if cfg!(target_os = "openbsd") {
-                            let args: Vec<String> = std::env::args().collect();
-                            args[0].clone()
+                            std::env::args().next().unwrap()
                         } else {
                             std::env::current_exe()?.to_string_lossy().to_string()
                         },
@@ -385,7 +384,7 @@ fn cli_to_serve_process(
                     // error line twice, I can't see how to fix this unless we
                     // rewrite the progress bar library to report if the print happened.
                     if progress.is_finished() || progress.is_hidden() {
-                        eprintln!("{}", line);
+                        let _ = writeln!(std::io::stderr(), "{}", line);
                     }
                 }
             }
@@ -1712,7 +1711,10 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     if atty::is(atty::Stream::Stdout) {
-        eprintln!("'bupstash serve' running on stdin/stdout...");
+        let _ = writeln!(
+            std::io::stderr(),
+            "'bupstash serve' running on stdin/stdout..."
+        );
     }
 
     // Increase file limit if it looks too low.
@@ -1736,7 +1738,8 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rlim) } != 0 {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "warning: unable to adjust the open file limit: {}",
             std::io::Error::last_os_error()
         );
