@@ -20,7 +20,7 @@ jobs:
           command: check
 
   test:
-    name: Test Suite
+    name: Cargo Test Suite
     runs-on: ubuntu-latest
     steps:
       - name: "Install libsodium"
@@ -34,6 +34,25 @@ jobs:
       - uses: actions-rs/cargo@v1
         with:
           command: test
+
+  test-cli:
+    name: CLI Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install libsodium and bats"
+        run: sudo apt-get install -y libsodium-dev bats
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - name: "Run tests"
+        run: PATH="$(pwd)/target/release:$PATH" bats ./cli-tests
 
   fmt:
     name: Rustfmt
