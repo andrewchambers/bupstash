@@ -39,13 +39,11 @@ pub fn index_entry_to_tarheader(
             index::IndexEntryKind::Other => {
                 anyhow::bail!("index entry {} has an unknown type", ent.path)
             }
-            index::IndexEntryKind::Directory => {
-                anyhow::bail!(
-                    "index entry {} is a directory, so can't have a hard link to {}",
-                    ent.path,
-                    hard_link,
-                )
-            }
+            index::IndexEntryKind::Directory => anyhow::bail!(
+                "index entry {} is a directory, so can't have a hard link to {}",
+                ent.path,
+                hard_link,
+            ),
             _ => tar::EntryType::Link,
         },
 

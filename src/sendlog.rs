@@ -246,6 +246,7 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn stat_cache_lookup(
         &self,
         hash: &[u8],
