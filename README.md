@@ -106,14 +106,6 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
-# Developing
-
-If you want to contribute, consider installing the pre-commit hook using:
-
-```
-ln -s ../../support/pre-commit.sh .git/hooks/pre-commit
-```
-
 ## Test suites
 
 Install bash automated test framework and run the following to run both the unit tests, and cli integration test suite.
