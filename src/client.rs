@@ -380,6 +380,7 @@ pub fn send(
     anyhow::bail!("put retried too many times");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_chunks(
     ctx: &SendContext,
     sink: &mut dyn htree::Sink,
@@ -962,6 +963,7 @@ pub struct DataRequestContext {
     pub metadata_dctx: crypto::DecryptionContext,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,

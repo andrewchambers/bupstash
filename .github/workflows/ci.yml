@@ -1,0 +1,162 @@
+on: [push, pull_request]
+
+name: CI
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install libsodium"
+        run: sudo apt-get install -y libsodium-dev
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+
+  test:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        IMAGE: [ubuntu-latest, macos-latest]
+    name: Cargo Test Suite (${{ matrix.IMAGE }})
+    runs-on: ${{ matrix.IMAGE }}
+    steps:
+      - name: "Install dependencies (Ubuntu)"
+        run: sudo apt-get install -y libsodium-dev
+        if: ${{ matrix.IMAGE == 'ubuntu-latest' }}
+      - name: "Install dependencies (macOS)"
+        run: brew install libsodium
+        if: ${{ matrix.IMAGE == 'macos-latest' }}
+      - uses: actions/checkout@v2
+      # macOS's BSD tar implementations corrupts the cargo cache when used. There
+      # is a workaround that installs gnu-tar, but since bupstash recommends using
+      # the system tar implementation we just skip caching on macOS.
+      # See: https://github.com/actions/cache/issues/403
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        if: ${{ matrix.IMAGE != 'macos-latest' }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+
+  test-cli:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        # NOTE: macOS tests are currently disabled since the suite uses GNU
+        #       specific commands and behavior
+        # IMAGE: [ubuntu-latest, macos-latest]
+        IMAGE: [ubuntu-latest]
+    name: CLI Test Suite (${{ matrix.IMAGE }})
+    runs-on: ${{ matrix.IMAGE }}
+    steps:
+      - name: "Install dependencies (Ubuntu)"
+        run: sudo apt-get install -y libsodium-dev bats
+        if: ${{ matrix.IMAGE == 'ubuntu-latest' }}
+      - name: "Install dependencies (macOS)"
+        run: brew install libsodium bats
+        if: ${{ matrix.IMAGE == 'macos-latest' }}
+      - uses: actions/checkout@v2
+      # macOS's BSD tar implementations corrupts the cargo cache when used. There
+      # is a workaround that installs gnu-tar, but since bupstash recommends using
+      # the system tar implementation we just skip caching on macOS.
+      # See: https://github.com/actions/cache/issues/403
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        if: ${{ matrix.IMAGE != 'macos-latest' }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release
+      - name: "Run tests"
+        run: PATH="$(pwd)/target/release:$PATH" bats ./cli-tests
+        # The tests here should be reasonably quick to finish. We override the
+        # default 6 hour timeout in case they aren't
+        timeout-minutes: 15
+
+  fmt:
+    needs: check
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install libsodium"
+        run: sudo apt-get install -y libsodium-dev
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  clippy:
+    needs: check
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Install libsodium"
+        run: sudo apt-get install -y libsodium-dev
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add clippy
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: -- -D warnings
