@@ -43,20 +43,20 @@ $ cp "$HOME/.cargo/bin/bupstash" "$INSTALL_DIR"
 
 First we must initialize a repository to save data into.  We do this with the `bupstash init` command.
 
-Initializing a local repository:
+To initialize a local repository run:
 ```
 export BUPSTASH_REPOSITORY="$(pwd)/bupstash-repo"
 $ bupstash init
 ```
 
-Initializing a remote repository:
+To intialize a remote repository install bupstash on both the local and the remote machine, then run the following:
 
 ```
 export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
 $ bupstash init
 ```
 
-As a side note, you can avoid some retyping by setting certain environment variables (e.g.
+Note that you can avoid some retyping by setting certain environment variables (e.g.
 BUPSTASH_REPOSITORY) in your .bashrc or other equivalent file.
 
 ## Generating an encryption key

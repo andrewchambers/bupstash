@@ -1510,14 +1510,14 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let out = std::io::stdout();
     let mut out = out.lock();
 
-    if let Some(chunks_freed) = stats.chunks_freed {
-        writeln!(out, "{} chunks freed", chunks_freed)?;
+    if let Some(chunks_deleted) = stats.chunks_deleted {
+        writeln!(out, "{} chunks deleted", chunks_deleted)?;
     }
     if let Some(chunks_remaining) = stats.chunks_remaining {
         writeln!(out, "{} chunks remaining", chunks_remaining)?;
     }
-    if let Some(bytes_freed) = stats.bytes_freed {
-        writeln!(out, "{} bytes freed", bytes_freed)?;
+    if let Some(bytes_deleted) = stats.bytes_deleted {
+        writeln!(out, "{} bytes deleted", bytes_deleted)?;
     }
     if let Some(bytes_remaining) = stats.bytes_remaining {
         writeln!(out, "{} bytes remaining", bytes_remaining)?;

@@ -390,9 +390,9 @@ impl Engine for DirStorage {
         // worry about fs semantics of removing while iterating.
         let mut to_remove = Vec::new();
 
-        let mut bytes_freed = 0;
         let mut chunks_remaining = 0;
-        let mut chunks_freed = 0;
+        let mut chunks_deleted = 0;
+        let mut bytes_deleted = 0;
         let mut bytes_remaining = 0;
 
         for e in std::fs::read_dir(&self.dir_path)? {
@@ -409,10 +409,10 @@ impl Engine for DirStorage {
 
                     if !reachable {
                         if let Ok(md) = e.metadata() {
-                            bytes_freed += md.len() as usize
+                            bytes_deleted += md.len() as usize
                         }
                         to_remove.push(e.path());
-                        chunks_freed += 1;
+                        chunks_deleted += 1;
                     } else {
                         if let Ok(md) = e.metadata() {
                             bytes_remaining += md.len() as usize
@@ -433,8 +433,8 @@ impl Engine for DirStorage {
 
         Ok(repository::GCStats {
             chunks_remaining: Some(chunks_remaining),
-            chunks_freed: Some(chunks_freed),
-            bytes_freed: Some(bytes_freed),
+            chunks_deleted: Some(chunks_deleted),
+            bytes_deleted: Some(bytes_deleted),
             bytes_remaining: Some(bytes_remaining),
         })
     }

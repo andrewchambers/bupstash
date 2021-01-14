@@ -30,8 +30,8 @@ pub enum LockMode {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GCStats {
-    pub chunks_freed: Option<usize>,
-    pub bytes_freed: Option<usize>,
+    pub chunks_deleted: Option<usize>,
+    pub bytes_deleted: Option<usize>,
     pub chunks_remaining: Option<usize>,
     pub bytes_remaining: Option<usize>,
 }
@@ -247,7 +247,7 @@ impl Repo {
                 // Consider the following case:
                 //
                 // 1. We are deleting a set of objects in an external storage engine.
-                // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+                // 2. A delete object message is sent to the backing store (s3/gcs/w.e.)
                 // 3. The repository process crashes.
                 // 4. A new put starts.
                 // 5. The new process resends the same object that is in the process of deletion.
