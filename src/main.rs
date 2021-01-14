@@ -721,9 +721,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     for e in matches.opt_strs("exclude") {
         match glob::Pattern::new(&e) {
             Ok(pattern) => exclusions.push(pattern),
-            Err(err) => {
-                anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err)
-            }
+            Err(err) => anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
         }
     }
 
