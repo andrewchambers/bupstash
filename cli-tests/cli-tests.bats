@@ -74,7 +74,13 @@ teardown () {
   for i in $(echo 0 1024 4096 1000000 100000000)
   do
     rm -f "$SCRATCH/rand.dat"
-    head -c $i /dev/urandom > "$SCRATCH/rand.dat"
+    if test $i -gt 0
+    then
+      head -c $i /dev/urandom > "$SCRATCH/rand.dat"
+    else
+      # Workaround since macOS's head doesn't support a byte count of 0
+      touch "$SCRATCH/rand.dat"
+    fi
     id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/rand.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
@@ -83,10 +89,10 @@ teardown () {
 }
 
 @test "highly compressible data" {
-  for i in $(echo 0 1024 4096 1000000 100000000)
+  for i in $(echo 1024 4096 1000000 100000000)
   do
-    rm -f "$SCRATCH/rand.dat"
-    yes | head -c $i > "$SCRATCH/yes.dat"
+    rm -f "$SCRATCH/yes.dat"
+    dd if=/dev/zero of="$SCRATCH/yes.dat" bs=$i count=1
     id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/yes.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
@@ -145,7 +151,7 @@ _concurrent_send_test_worker () {
     bupstash gc > /dev/null
   done
   wait
-  count=$(bupstash list | wc -l)
+  count=$(bupstash list | expr $(wc -l))
   echo "count is $count"
   test 500 = $count
 }
@@ -157,115 +163,115 @@ _concurrent_send_test_worker () {
   done
   for k in $BUPSTASH_KEY $METADATA_KEY
   do
-    test 100 = $(bupstash list -k "$k" | wc -l)
-    test 1 = $(bupstash list -k "$k" i=100 | wc -l)
-    test 0 = $(bupstash list -k "$k" i=101 | wc -l)
+    test 100 = $(bupstash list -k "$k" | expr $(wc -l))
+    test 1 = $(bupstash list -k "$k" i=100 | expr $(wc -l))
+    test 0 = $(bupstash list -k "$k" i=101 | expr $(wc -l))
   done
 }
 
 @test "rm and gc" {
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
   id2="$(bupstash put -e :: echo hello2)"
-  test 2 = $(bupstash list | wc -l)
+  test 2 = $(bupstash list | expr $(wc -l))
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
-  test 1 = $(bupstash list | wc -l)
+  test 1 = $(bupstash list | expr $(wc -l))
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 3 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash gc
-  test 1 = $(bupstash list | wc -l)
+  test 1 = $(bupstash list | expr $(wc -l))
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id2
   bupstash gc
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
 }
 
 @test "rm and restore-removed" {
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
   id2="$(bupstash put -e :: echo hello2)"
-  test 2 = "$(bupstash list | wc -l)"
+  test 2 = "$(bupstash list | expr $(wc -l))"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
   bupstash restore-removed
-  test 2 = "$(bupstash list | wc -l)"
+  test 2 = "$(bupstash list | expr $(wc -l))"
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 4 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
   bupstash gc
   bupstash restore-removed
-  test 1 = "$(bupstash list | wc -l)"
+  test 1 = "$(bupstash list | expr $(wc -l))"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id2
   bupstash gc
   bupstash restore-removed
-  test 0 = "$(bupstash list | wc -l)"
+  test 0 = "$(bupstash list | expr $(wc -l))"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
     test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
     test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | wc -l)"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
 }
 
 @test "query sync" {
   id1="$(bupstash put -e :: echo hello1)"
-  test 1 = $(bupstash list | wc -l)
+  test 1 = $(bupstash list | expr $(wc -l))
   id2="$(bupstash put -e :: echo hello2)"
-  test 2 = $(bupstash list | wc -l)
+  test 2 = $(bupstash list | expr $(wc -l))
   bupstash rm id=$id1
-  test 1 = $(bupstash list | wc -l)
+  test 1 = $(bupstash list | expr $(wc -l))
   bupstash gc
-  test 1 = $(bupstash list | wc -l)
+  test 1 = $(bupstash list | expr $(wc -l))
   bupstash rm id=$id2
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
   bupstash gc
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
 }
 
 @test "get via query" {
@@ -279,15 +285,15 @@ _concurrent_send_test_worker () {
   bupstash put -e  foo=bar  echo -n hello1 
   bupstash put -e  foo=baz  echo -n hello2
   bupstash put -e  foo=bang echo -n hello2
-  test 3 = $(bupstash list | wc -l)
+  test 3 = $(bupstash list | expr $(wc -l))
   if bupstash rm "foo=*"
   then
     exit 1
   fi
   bupstash rm "foo=bar"
-  test 2 = $(bupstash list | wc -l)
+  test 2 = $(bupstash list | expr $(wc -l))
   bupstash rm --allow-many -k "$METADATA_KEY" "foo=*"
-  test 0 = $(bupstash list | wc -l)
+  test 0 = $(bupstash list | expr $(wc -l))
 }
 
 @test "send directory sanity" {
@@ -297,10 +303,10 @@ _concurrent_send_test_worker () {
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
   # Test again to excercise stat caching.
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "send directory no stat cache" {
@@ -310,9 +316,9 @@ _concurrent_send_test_worker () {
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
   id=$(bupstash put --no-send-log :: "$SCRATCH/foo")
-  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
   id=$(bupstash put --no-stat-caching :: "$SCRATCH/foo")
-  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "stat cache invalidated" {
@@ -354,8 +360,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa
   id=$(bupstash put :: "$SCRATCH/foo")
-  bupstash get id=$id | tar -tf - | wc -l
-  test 7 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 7 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "long link target" {
@@ -367,7 +372,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
     "$SCRATCH/foo/l"
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 2 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "directory exclusions" {
@@ -377,13 +382,13 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   touch "$SCRATCH/foo/bang"
 
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 4 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   id=$(bupstash put --exclude="*/bang" :: "$SCRATCH/foo")
-  test 3 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   id=$(bupstash put --exclude="*/bar" :: "$SCRATCH/foo")
-  test 2 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "checkpoint plain data" {
@@ -410,20 +415,18 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   export BUPSTASH_CHECKPOINT_BYTES=1
 
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 4 = "$(bupstash get id=$id | tar -tf - | wc -l)"
+  test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "rm from stdin" {
   id1="$(bupstash put -e echo hello1)"
   id2="$(bupstash put -e echo hello2)"
   id3="$(bupstash put -e echo hello3)"
-  test 3 = "$(bupstash list | wc -l)"
+  test 3 = "$(bupstash list | expr $(wc -l))"
   echo "${id1}" | bupstash rm --ids-from-stdin
-  test 2 = "$(bupstash list | wc -l)"
+  test 2 = "$(bupstash list | expr $(wc -l))"
   echo -e "${id2}\n${id3}" | bupstash rm --ids-from-stdin
-  bupstash list
-  bupstash list | wc -l
-  test 0 = "$(bupstash list | wc -l)"
+  test 0 = "$(bupstash list | expr $(wc -l))"
 }
 
 _concurrent_modify_worker () {
@@ -476,9 +479,9 @@ _concurrent_modify_worker () {
   bupstash put -e echo hello1
   bupstash put -e echo hello2
   unset BUPSTASH_KEY
-  test 2 = "$(bupstash list --query-encrypted | wc -l)"
+  test 2 = "$(bupstash list --query-encrypted | expr $(wc -l))"
   bupstash rm --allow-many --query-encrypted id='*'
-  test 0 = "$(bupstash list --query-encrypted | wc -l)"
+  test 0 = "$(bupstash list --query-encrypted | expr $(wc -l))"
 }
 
 @test "pick and index" {
@@ -490,11 +493,11 @@ _concurrent_modify_worker () {
   do
     # Create some test files scattered in two directories.
     # Small files
-    head -c "$(shuf -i 10-1000 -n 1)" /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
-    head -c "$(shuf -i 10-1000 -n 1)" /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
+    head -c $((10 + $(head -c 4 /dev/urandom | cksum | cut -f1 -d " " | head -c 3))) /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
+    head -c $((10 + $(head -c 4 /dev/urandom | cksum | cut -f1 -d " " | head -c 3))) /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
     # Large files
-    head -c "$(shuf -i 10000-10000000 -n 1)" /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
-    head -c "$(shuf -i 10000-10000000 -n 1)" /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
+    head -c $((10000 + $(head -c 4 /dev/urandom | cksum | cut -f1 -d " " | head -c 7))) /dev/urandom > "$SCRATCH/foo/$(uuidgen)"
+    head -c $((10000 + $(head -c 4 /dev/urandom | cksum | cut -f1 -d " " | head -c 7))) /dev/urandom > "$SCRATCH/foo/baz/$(uuidgen)"
   done
 
   # Loop so we test cache code paths
@@ -505,10 +508,10 @@ _concurrent_modify_worker () {
     do
       cmp <(bupstash get --pick "$f" id=$id) "$SCRATCH/foo/$f"
     done
-    test $(bupstash get id=$id | tar -t | wc -l) = 22
-    test $(bupstash get --pick . id=$id | tar -t | wc -l) = 22
-    test $(bupstash get --pick baz id=$id | tar -t | wc -l) = 11
-    test $(bupstash list-contents  id=$id | wc -l) = 22
+    test $(bupstash get id=$id | tar -t | expr $(wc -l)) = 22
+    test $(bupstash get --pick . id=$id | tar -t | expr $(wc -l)) = 22
+    test $(bupstash get --pick baz id=$id | tar -t | expr $(wc -l)) = 11
+    test $(bupstash list-contents  id=$id | expr $(wc -l)) = 22
   done
 }
 
@@ -521,9 +524,9 @@ _concurrent_modify_worker () {
 
   id=$(bupstash put :: "$SCRATCH/foo/bar" "$SCRATCH/foo/bar/baz" "$SCRATCH/foo/bang")
   bupstash get id=$id | tar -tf -
-  test 5 = "$(bupstash get id=$id | tar -tf - | wc -l)"
-  test 5 = "$(bupstash list-contents id=$id | wc -l)"
-  test 5 = "$(bupstash list-contents -k $LIST_CONTENTS_KEY id=$id | wc -l)"
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  test 5 = "$(bupstash list-contents id=$id | expr $(wc -l))"
+  test 5 = "$(bupstash list-contents -k $LIST_CONTENTS_KEY id=$id | expr $(wc -l))"
 }
 
 @test "hard link short path" {
@@ -540,7 +543,13 @@ _concurrent_modify_worker () {
 }
 
 @test "long hard link target" {
-  name="$(yes | head -c 200)"
+  if test $(uname) == "Darwin"
+  then
+    skip "Long symlinks are currently broken on macOS due to incompatible tar format"
+  fi
+
+  a="aaaaaaaaaa"
+  name="$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a"
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/$name"
   ln "$SCRATCH/foo/$name" "$SCRATCH/foo/b"
@@ -554,6 +563,12 @@ _concurrent_modify_worker () {
 }
 
 @test "hard link to symlink" {
+  # On macOS hard links to symlinks actually point to the original file
+  if test $(uname) == "Darwin"
+  then
+    skip "Not applicable on macOS"
+  fi
+
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/a"
   ln -s "$SCRATCH/foo/a" "$SCRATCH/foo/b"
