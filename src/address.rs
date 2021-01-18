@@ -1,5 +1,6 @@
 use super::hex;
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 use std::fmt;
 
 pub const ADDRESS_SZ: usize = 32;
@@ -18,6 +19,12 @@ impl fmt::Display for Address {
 impl Address {
     pub fn from_bytes(bytes: &[u8; 32]) -> Address {
         Address { bytes: *bytes }
+    }
+
+    pub fn from_slice(s: &[u8]) -> Result<Address, anyhow::Error> {
+        Ok(Address {
+            bytes: s.try_into()?,
+        })
     }
 
     pub fn from_hex_str(s: &str) -> Result<Address, anyhow::Error> {
