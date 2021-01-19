@@ -4,16 +4,15 @@ use super::repository;
 use super::xid;
 
 pub trait Engine {
-    // Get a chunk from the storage engine using the worker pool.
-    fn get_chunk_async(
+    // Get many chunks in an efficient pipeline.
+    fn pipelined_get_chunks(
         &mut self,
-        addr: &Address,
-    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, anyhow::Error>>;
+        addresses: &[Address],
+        on_chunk: &mut dyn FnMut(&Address, &[u8]) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error>;
 
-    // Get a chunk from the storage engine.
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
-        self.get_chunk_async(addr).recv()?
-    }
+    // Get a chunk that may or may not have been prefetched from the storage engine.
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error>;
 
     // Set the gc_id for the following call to gc. This is a form
     // of two phase commit where we ensure the backend saves this

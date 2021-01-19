@@ -273,8 +273,6 @@ fn send_index(
     Ok(())
 }
 
-const HTREE_SEND_PIPELINE_LEN: usize = 5;
-
 fn send_htree(
     repo: &mut repository::Repo,
     tr: &mut htree::TreeReader,
@@ -282,36 +280,36 @@ fn send_htree(
 ) -> Result<(), anyhow::Error> {
     let mut storage_engine = repo.storage_engine()?;
 
+    let mut on_chunk = |addr: &address::Address, data: &[u8]| -> Result<(), anyhow::Error> {
+        write_chunk(w, addr, data)?;
+        Ok(())
+    };
+
     loop {
         match tr.current_height() {
             Some(0) => {
-                let mut chunk_address = address::Address::default();
-                let mut pipeline = std::collections::VecDeque::new();
+                let address_buf = tr.pop_level().unwrap();
 
-                for ent_slice in tr.pop_level().unwrap().chunks(8 + address::ADDRESS_SZ) {
-                    let address_slice = &ent_slice[8..];
-                    chunk_address.bytes.clone_from_slice(&address_slice);
-                    pipeline.push_back((
-                        chunk_address,
-                        storage_engine.get_chunk_async(&chunk_address),
-                    ));
+                let mut addresses =
+                    Vec::with_capacity(address_buf.len() / (8 + address::ADDRESS_SZ));
 
-                    if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
-                        let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
-                        write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
-                    }
-                }
+                // XXX Can we avoid this potentially large allocation/copy?
+                // It serves very little purpose and could double ram usage of this function
+                // in a bad case.
+                addresses.extend(
+                    address_buf
+                        .chunks(8 + address::ADDRESS_SZ)
+                        .map(|x| address::Address::from_slice(&x[8..]).unwrap()),
+                );
 
-                while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
-                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
-                }
+                storage_engine.pipelined_get_chunks(&addresses, &mut on_chunk)?;
             }
             Some(_) => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
-                    write_chunk(w, &chunk_address, &chunk_data)?;
-                    let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
-                    tr.push_level(height - 1, chunk_data)?;
+                    on_chunk(&chunk_address, &chunk_data)?;
+                    let decompressed = compression::unauthenticated_decompress(chunk_data)?;
+                    tr.push_level(height - 1, decompressed)?;
                 }
             }
             None => break,
@@ -388,30 +386,31 @@ fn send_partial_htree(
         anyhow::bail!("htree is corrupt, seek went too far");
     }
 
+    let mut on_chunk = |addr: &address::Address, data: &[u8]| -> Result<(), anyhow::Error> {
+        write_chunk(w, addr, data)?;
+        Ok(())
+    };
+
     // Mostly the same as the less complicated send_htree function, but we filter out unwanted chunks and exit early.
     loop {
         match tr.current_height() {
             Some(0) => {
-                let mut chunk_address = address::Address::default();
-                let mut pipeline = std::collections::VecDeque::new();
-                let level_chunk = tr.pop_level().unwrap();
-                for ent_slice in level_chunk.chunks(8 + address::ADDRESS_SZ) {
-                    let address_slice = &ent_slice[8..];
+                let address_buf = tr.pop_level().unwrap();
+                let mut filtered_addresses =
+                    Vec::with_capacity(address_buf.len() / (8 + address::ADDRESS_SZ) / 4);
+
+                // XXX This could be an iterator, but it wasn't easy to write nicely,
+                // I think when rust gets generators on stable we should use it here.
+                for addr in address_buf
+                    .chunks(8 + address::ADDRESS_SZ)
+                    .map(|x| address::Address::from_slice(&x[8..]).unwrap())
+                {
                     match ranges.get(range_idx) {
                         Some(current_range) => {
-                            chunk_address.bytes.clone_from_slice(&address_slice);
                             if current_data_chunk_idx >= current_range.start_idx.0
                                 && current_data_chunk_idx <= current_range.end_idx.0
                             {
-                                pipeline.push_back((
-                                    chunk_address,
-                                    storage_engine.get_chunk_async(&chunk_address),
-                                ));
-
-                                if pipeline.len() >= HTREE_SEND_PIPELINE_LEN {
-                                    let (chunk_address, chunk_data) = pipeline.pop_front().unwrap();
-                                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
-                                }
+                                filtered_addresses.push(addr)
                             }
 
                             current_data_chunk_idx += 1;
@@ -423,14 +422,12 @@ fn send_partial_htree(
                     }
                 }
 
-                while let Some((chunk_address, chunk_data)) = pipeline.pop_front() {
-                    write_chunk(w, &chunk_address, &chunk_data.recv()??)?;
-                }
+                storage_engine.pipelined_get_chunks(&filtered_addresses, &mut on_chunk)?;
             }
             Some(_) if ranges.get(range_idx).is_some() => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
                     let chunk_data = storage_engine.get_chunk(&chunk_address)?;
-                    write_chunk(w, &chunk_address, &chunk_data)?;
+                    on_chunk(&chunk_address, &chunk_data)?;
                     let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data)?;
                 }

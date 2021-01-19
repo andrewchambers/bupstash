@@ -5,11 +5,14 @@ use super::hex;
 use super::repository;
 use super::xid;
 
+use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+const MAX_READ_WORKERS: usize = 8;
 
 enum ReadWorkerMsg {
     GetChunk(
@@ -219,9 +222,6 @@ impl DirStorage {
     }
 
     fn scaling_read_worker_dispatch(&mut self, msg: ReadWorkerMsg) -> Result<(), anyhow::Error> {
-        // Should this be configurable?
-        const MAX_READ_WORKERS: usize = 10;
-
         if self.read_worker_handles.len() < MAX_READ_WORKERS {
             match self.read_worker_tx.try_send(msg) {
                 Ok(_) => Ok(()),
@@ -328,6 +328,41 @@ impl Drop for DirStorage {
 }
 
 impl Engine for DirStorage {
+    fn pipelined_get_chunks(
+        &mut self,
+        addresses: &[Address],
+        on_chunk: &mut dyn FnMut(&Address, &[u8]) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
+        let mut pipeline_get_queue = VecDeque::new();
+
+        for addr in addresses.iter() {
+            let (tx, rx) = crossbeam_channel::bounded(1);
+            self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx)))?;
+            pipeline_get_queue.push_back((addr, rx));
+
+            if pipeline_get_queue.len() >= MAX_READ_WORKERS {
+                let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
+                let data = rx.recv()??;
+                on_chunk(&addr, &data)?;
+            }
+        }
+
+        while !pipeline_get_queue.is_empty() {
+            let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
+            let data = rx.recv()??;
+            on_chunk(&addr, &data)?;
+        }
+
+        Ok(())
+    }
+
+    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
+        self.dir_path.push(addr.as_hex_addr().as_str());
+        let result = std::fs::read(self.dir_path.as_path());
+        self.dir_path.pop();
+        Ok(result?)
+    }
+
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
         // Lazily start our write threads.
         while self.write_worker_handles.len() < 2 {
@@ -352,21 +387,6 @@ impl Engine for DirStorage {
         Ok(())
     }
 
-    fn get_chunk_async(
-        &mut self,
-        addr: &Address,
-    ) -> crossbeam_channel::Receiver<Result<Vec<u8>, anyhow::Error>> {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        match self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx))) {
-            Ok(()) => rx,
-            Err(err) => {
-                let (tx, rx) = crossbeam_channel::bounded(1);
-                tx.send(Err(err)).unwrap();
-                rx
-            }
-        }
-    }
-
     fn sync(&mut self) -> Result<(), anyhow::Error> {
         self.sync_write_workers()
     }
@@ -387,7 +407,7 @@ impl Engine for DirStorage {
             reachability_tx.prepare_cached("select 1 from Reachability where Address = ?;")?;
 
         // Collect removals into memory first so we don't have to
-        // worry about fs semantics of removing while iterating.
+        // worry about fs semantics when removing while iterating.
         let mut to_remove = Vec::new();
 
         let mut chunks_remaining = 0;
@@ -449,7 +469,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn add_get_chunk() {
+    fn add_and_get_chunk() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("data");
@@ -461,7 +481,31 @@ mod tests {
         storage.sync().unwrap();
         let v = storage.get_chunk(&addr).unwrap();
         assert_eq!(v, vec![1]);
-        let v = storage.get_chunk_async(&addr).recv().unwrap().unwrap();
-        assert_eq!(v, vec![1]);
+    }
+
+    #[test]
+    fn pipelined_get_chunks() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let mut path_buf = PathBuf::from(tmp_dir.path());
+        path_buf.push("data");
+        let mut storage = DirStorage::new(&path_buf).unwrap();
+
+        let addr = Address::default();
+        storage.add_chunk(&addr, vec![1]).unwrap();
+        storage.sync().unwrap();
+
+        let mut result = Vec::new();
+
+        let mut on_chunk = |fetched_addr: &Address, data: &[u8]| {
+            assert_eq!(addr, *fetched_addr);
+            result.extend_from_slice(data);
+            Ok(())
+        };
+
+        storage
+            .pipelined_get_chunks(&vec![addr, addr, addr, addr], &mut on_chunk)
+            .unwrap();
+
+        assert_eq!(result, vec![1, 1, 1, 1]);
     }
 }
