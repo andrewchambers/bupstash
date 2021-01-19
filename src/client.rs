@@ -471,6 +471,19 @@ fn likely_smear_error(err: &std::io::Error) -> bool {
     )
 }
 
+// Like try! but in the case of an error likely caused
+// by a concurrent filesystem modification we return a FilesystemModified
+// error. This allows us to retry backups on a busy system.
+macro_rules! smear_try {
+    ($e:expr) => {
+        match ($e) {
+            Ok(v) => v,
+            Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
+            Err(err) => return Err(SendDirError::Other(err.into())),
+        }
+    };
+}
+
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
 
@@ -517,13 +530,10 @@ fn dir_ent_to_index_ent(
     let mut xattrs = None;
 
     if want_xattrs {
-        let attrs = match xattr::list(full_path) {
-            Ok(attrs) => attrs,
-            Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
-            Err(err) => return Err(err.into()),
-        };
+        let attrs = smear_try!(xattr::list(full_path));
+
         for attr in attrs {
-            if let Some(value) = xattr::get(full_path, &attr)? {
+            if let Some(value) = smear_try!(xattr::get(full_path, &attr)) {
                 if xattrs.is_none() {
                     xattrs = Some(std::collections::BTreeMap::new())
                 }
@@ -556,7 +566,7 @@ fn dir_ent_to_index_ent(
         nlink: serde_bare::Uint(metadata.nlink()),
         link_target: if t.is_symlink() {
             Some(
-                std::fs::read_link(&full_path)?
+                smear_try!(std::fs::read_link(&full_path))
                     .to_string_lossy()
                     .to_string(),
             )
@@ -590,15 +600,10 @@ cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
 
         fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, SendDirError> {
-            let f = match std::fs::OpenOptions::new()
+            let f = smear_try!(std::fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOATIME)
-                .open(fpath)
-            {
-                Ok(f) => f,
-                Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
-                Err(err) => return Err(SendDirError::Other(err.into())),
-            };
+                .open(fpath));
 
             // For linux at least, shift file pages to the tail of the page cache, allowing
             // the kernel to quickly evict these pages. This works well for the case of system
@@ -614,19 +619,13 @@ cfg_if::cfg_if! {
             Ok(f)
         }
 
-    // XXX More platforms should support NOATIME and POSIX_FADV_NOREUSE
+    // XXX More platforms should support NOATIME or at the very least POSIX_FADV_NOREUSE
     } else {
 
         fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, SendDirError> {
-            let f = match std::fs::OpenOptions::new()
+            let f = smear_try!(std::fs::OpenOptions::new()
                 .read(true)
-                .open(fpath)
-            {
-                Ok(f) => f,
-                Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
-                Err(err) => return Err(SendDirError::Other(err.into())),
-            };
-
+                .open(fpath));
             Ok(f)
         }
     }
@@ -686,7 +685,9 @@ fn send_dir(
         // for them, so we add before we process the dir contents.
         if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
             initial_paths.remove(&cur_dir);
-            let metadata = std::fs::metadata(&base)?;
+
+            let metadata = smear_try!(std::fs::metadata(&base));
+
             if !metadata.is_dir() {
                 return Err(SendDirError::Other(anyhow::format_err!(
                     "{} is not a directory",
@@ -720,11 +721,7 @@ fn send_dir(
         // Null byte marks the end of path in the hash space.
         hash_state.update(&[0]);
 
-        let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
-            Ok(dir_ents) => dir_ents,
-            Err(err) if likely_smear_error(&err) => return Err(SendDirError::FilesystemModified),
-            Err(err) => return Err(SendDirError::Other(err.into())),
-        };
+        let mut dir_ents = smear_try!(fsutil::read_dirents(&cur_dir));
 
         // XXX sorting by extension or reverse filename might give better compression.
         dir_ents.sort_by_key(|a| a.file_name());
@@ -740,13 +737,7 @@ fn send_dir(
                 }
             }
 
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                Err(err) if likely_smear_error(&err) => {
-                    return Err(SendDirError::FilesystemModified)
-                }
-                Err(err) => return Err(SendDirError::Other(err.into())),
-            };
+            let metadata = smear_try!(entry.metadata());
 
             // There is no meaningful way to backup a unix socket.
             if metadata.file_type().is_socket() {
