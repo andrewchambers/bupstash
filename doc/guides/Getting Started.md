@@ -49,7 +49,7 @@ export BUPSTASH_REPOSITORY="$(pwd)/bupstash-repo"
 $ bupstash init
 ```
 
-To intialize a remote repository install bupstash on both the local and the remote machine, then run the following:
+For remote repositories, install bupstash on both the local and the remote machine and run the following:
 
 ```
 export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/bupstash-repo
