@@ -294,8 +294,8 @@ fn send_htree(
                     Vec::with_capacity(address_buf.len() / (8 + address::ADDRESS_SZ));
 
                 // XXX Can we avoid this potentially large allocation/copy?
-                // It serves very little purpose and could double ram usage of this function
-                // in a bad case.
+                // It serves very little purpose and could double ram usage
+                // of this function in a bad case.
                 addresses.extend(
                     address_buf
                         .chunks(8 + address::ADDRESS_SZ)
