@@ -39,8 +39,8 @@ pub struct GCStats {
 pub struct Repo {
     repo_path: PathBuf,
     conn: rusqlite::Connection,
-    _repo_lock_mode: LockMode,
-    _repo_lock: Option<fsutil::FileLock>,
+    repo_lock_mode: LockMode,
+    repo_lock: Option<fsutil::FileLock>,
 }
 
 pub enum ItemSyncEvent {
@@ -60,23 +60,6 @@ impl Repo {
         let mut lock_path = repo_path.to_path_buf();
         lock_path.push("tmp");
         lock_path
-    }
-
-    fn random_tmp_reachability_db_path(repo_path: &Path) -> PathBuf {
-        let random_suffix = {
-            let mut buf = [0; 16];
-            crypto::randombytes(&mut buf[..]);
-            hex::easy_encode_to_string(&buf[..])
-        };
-        let file_name = "reachability."
-            .chars()
-            .chain(random_suffix.chars())
-            .chain(".sqlite3".chars())
-            .collect::<String>();
-
-        let mut db_path = Repo::tmp_dir_path(repo_path);
-        db_path.push(file_name);
-        db_path
     }
 
     fn repo_db_path(repo_path: &Path) -> PathBuf {
@@ -220,17 +203,17 @@ impl Repo {
         Ok(Repo {
             conn,
             repo_path: fs::canonicalize(&repo_path)?,
-            _repo_lock_mode: LockMode::None,
-            _repo_lock: None,
+            repo_lock_mode: LockMode::None,
+            repo_lock: None,
         })
     }
 
     pub fn alter_lock_mode(&mut self, lock_mode: LockMode) -> Result<(), anyhow::Error> {
         // On error we should perhaps put a poison value.
-        if self._repo_lock_mode != lock_mode {
-            self._repo_lock_mode = lock_mode.clone();
-            self._repo_lock = None;
-            self._repo_lock = match lock_mode {
+        if self.repo_lock_mode != lock_mode {
+            self.repo_lock_mode = lock_mode.clone();
+            self.repo_lock = None;
+            self.repo_lock = match lock_mode {
                 LockMode::None => None,
                 LockMode::Write => Some(fsutil::FileLock::get_shared(&Repo::repo_lock_path(
                     &self.repo_path,
@@ -240,7 +223,7 @@ impl Repo {
                 )?),
             };
 
-            if matches!(self._repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
+            if matches!(self.repo_lock_mode, LockMode::Write | LockMode::Exclusive) {
                 // The gc_dirty id is set when a garbage collection exits without
                 // proper cleanup. For external storage engines this poses a problem:
                 //
@@ -271,21 +254,14 @@ impl Repo {
                 //  - we must explicitly wait for the storage engine backend to tell us our gc operation is complete.
                 //  - We can finally remove the gc-dirty marker.
 
-                if let Some(gc_dirty) = self.conn.query_row(
-                    "select Value from RepositoryMeta where Key='gc-dirty';",
-                    rusqlite::NO_PARAMS,
-                    |row| row.get(0),
-                )? {
+                if let Some(gc_dirty) = self.gc_check_dirty()? {
                     let mut storage_engine = self.storage_engine()?;
-
                     storage_engine.await_gc_completion(gc_dirty)?;
-
                     // Because we hold either a write lock, or the exclusive lock, we know gc-dirty
-                    // cannot change from anything but false to true at this point.
-                    self.conn.execute(
-                        "update RepositoryMeta set Value = Null where key = 'gc-dirty' and Value = $1;",
-                        rusqlite::params![&gc_dirty],
-                    )?;
+                    // cannot change from anything but dirty to clean at this point. If multiple
+                    // concurrent instances of bupstash reach this point at the same time, it won't
+                    // prematurely clear the dirty marker for a different GC.
+                    self.gc_clear_dirty()?;
                 }
             }
         }
@@ -344,7 +320,7 @@ impl Repo {
         gc_generation: Xid,
         item: itemset::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
-        match self._repo_lock_mode {
+        match self.repo_lock_mode {
             LockMode::None => panic!("BUG: write lock not held when adding item"),
             LockMode::Write | LockMode::Exclusive => (),
         }
@@ -466,30 +442,124 @@ impl Repo {
         Ok(n_restored)
     }
 
+    fn walk_items(
+        &mut self,
+        f: &mut dyn FnMut(i64, Xid, itemset::VersionedItemMetadata) -> Result<(), anyhow::Error>,
+    ) -> Result<(), anyhow::Error> {
+        let tx = self.conn.transaction()?;
+        itemset::walk_items(&tx, f)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn random_tmp_reachability_db_path(repo_path: &Path) -> PathBuf {
+        let random_suffix = {
+            let mut buf = [0; 16];
+            crypto::randombytes(&mut buf[..]);
+            hex::easy_encode_to_string(&buf[..])
+        };
+        let file_name = "reachability."
+            .chars()
+            .chain(random_suffix.chars())
+            .chain(".sqlite3".chars())
+            .collect::<String>();
+
+        let mut db_path = Repo::tmp_dir_path(repo_path);
+        db_path.push(file_name);
+        db_path
+    }
+
+    fn gc_remove_temp_files(&mut self) -> Result<(), anyhow::Error> {
+        debug_assert!(matches!(self.repo_lock_mode, LockMode::Exclusive));
+
+        let mut to_remove = Vec::new();
+        for e in std::fs::read_dir(Repo::tmp_dir_path(&self.repo_path))? {
+            let e = e?;
+            to_remove.push(e.path());
+        }
+        for p in to_remove.iter() {
+            std::fs::remove_file(p)?;
+        }
+
+        Ok(())
+    }
+
+    fn gc_compact(&mut self) -> Result<(), anyhow::Error> {
+        debug_assert!(matches!(self.repo_lock_mode, LockMode::Exclusive));
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        itemset::compact(&tx)?;
+        tx.commit()?;
+        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+        Ok(())
+    }
+
+    fn gc_mark_dirty(&mut self, gc_generation: Xid) -> Result<(), anyhow::Error> {
+        debug_assert!(matches!(self.repo_lock_mode, LockMode::Exclusive));
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        // We cycle the gc generation here to invalidate client caches.
+        tx.execute(
+            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
+            rusqlite::params![&gc_generation],
+        )?;
+
+        // If a repository is dirty when we lock it, then we must ensure
+        // the storage backend has terminated before continuing.
+        tx.execute(
+            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
+            rusqlite::params![&gc_generation],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn gc_check_dirty(&mut self) -> Result<Option<Xid>, anyhow::Error> {
+        Ok(self.conn.query_row(
+            "select Value from RepositoryMeta where Key='gc-dirty';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?)
+    }
+
+    fn gc_clear_dirty(&mut self) -> Result<(), anyhow::Error> {
+        debug_assert!(matches!(self.repo_lock_mode, LockMode::Exclusive));
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        tx.execute(
+            "update RepositoryMeta set Value = null where Key = 'gc-dirty';",
+            rusqlite::NO_PARAMS,
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
     ) -> Result<GCStats, anyhow::Error> {
         self.alter_lock_mode(LockMode::Exclusive)?;
-        // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
-        // For example, this could make out of space problems even worse.
+
         update_progress_msg("removing temporary files...".to_string())?;
-        {
-            let mut to_remove = Vec::new();
-            for e in std::fs::read_dir(Repo::tmp_dir_path(&self.repo_path))? {
-                let e = e?;
-                to_remove.push(e.path());
-            }
-            for p in to_remove.iter() {
-                std::fs::remove_file(p)?;
-            }
-        }
-        // Once we have removed temporary files, we can go back to a shared lock.
+
+        // We remove stale temporary files first so we don't accumulate them during failed gc attempts.
+        self.gc_remove_temp_files()?;
+
+        // Once we have removed temporary files, we can temporarily go back to a shared lock
+        // so backups can keep happening.
         self.alter_lock_mode(LockMode::Write)?;
 
         let reachability_db_path = Repo::random_tmp_reachability_db_path(&self.repo_path);
         let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
-
         // Because this is a fresh database (we already removed all tmp files), we
         // are ok to disable synchronous operation. If we get power off event, the next
         // gc will remove the corrupt database first so theres no chance we open a corrupt db.
@@ -519,8 +589,11 @@ impl Repo {
                     "insert into Reachability(Address) values(?) on conflict do nothing;",
                 )?;
 
-                // It seems likely we could do some sort of pipelining or parallel fetch when we walk the tree.
-                // For garbage collection walking in order is not a concern, we just need to ensure we touch each reachable node.
+                // For garbage collection walking in order is not a concern,
+                // we just need to ensure we touch each reachable node.
+                //
+                // Note that we could also do some sort of pipelining or parallel fetch,
+                // when we walk the tree, for now keep it simple.
 
                 let data_tree = metadata.plain_text_metadata.data_tree;
 
@@ -551,73 +624,44 @@ impl Repo {
         };
 
         update_progress_msg("walking reachable data...".to_string())?;
-        {
-            // Walk all reachable data WITHOUT an exclusive repo lock, this means
-            // we should be able to walk most of the data except data
-            // that arrives between the end of this walk and us getting the
-            // exclusive lock on the repository.
-            let tx = self.conn.transaction()?;
-            itemset::walk_items(&tx, &mut walk_item)?;
-            tx.commit()?;
-        }
+        // Walk all reachable data WITHOUT an exclusive repo lock, this means
+        // we should be able to walk most of the data except data
+        // that arrives between the end of this walk and us getting the
+        // exclusive lock on the repository.
+        self.walk_items(&mut walk_item)?;
 
         update_progress_msg("acquiring exclusive repository lock...".to_string())?;
         self.alter_lock_mode(LockMode::Exclusive)?;
 
-        // We must commit the new gc generation before we start
-        // deleting any chunks, the gc generation is how we invalidate
-        // client side put caches.
-        self.conn.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
-            rusqlite::params![Xid::new()],
-        )?;
-
         update_progress_msg("finalizing reachable data...".to_string())?;
-        {
-            let tx = self
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            // Will skip items that we already processed when we did not hold
-            // an exclusive repository lock.
-            itemset::walk_items(&tx, &mut walk_item)?;
-            tx.commit()?;
-        }
+        // Now that we have an exlusive lock, we walk the items again, this will
+        // be fast for items we already walked, and lets us pick up any new items.
+        self.walk_items(&mut walk_item)?;
 
-        // The after this commit, the reachability database now contains all reachable chunks
+        // After this commit the reachability database contains all reachable chunks
         // ready for use by the storage engine.
         reachability_tx.commit()?;
 
         update_progress_msg("compacting item log...".to_string())?;
-        {
-            let tx = self
-                .conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            itemset::compact(&tx)?;
-            tx.commit()?;
-        }
+        // After compaction, removed items are deleted from the metadata database.
+        self.gc_compact()?;
 
-        self.conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
-
-        let gc_id = Xid::new();
-
-        storage_engine.prepare_for_gc(gc_id)?;
-
-        self.conn.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
-            rusqlite::params![&gc_id],
-        )?;
+        let gc_generation = Xid::new();
+        // We ensure the storage engine has saved this gc_generation before we commit
+        // this generation to the repository. The idea here is once we start deleting
+        // items asynchronously via a plugin, we must ensure the storage engine signals
+        // that the deletions have terminated. This let's us avoid a nasty case
+        // of deletions occuring in the background while we think they have finished.
+        // One cause of this would be a crash of 'serve' process
+        // while it is still holding the repository locks.
+        storage_engine.prepare_for_gc(gc_generation)?;
+        self.gc_mark_dirty(gc_generation)?;
 
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = storage_engine.gc(&reachability_db_path, &mut reachability_db)?;
 
-        // We no longer need this reachability database.
         std::fs::remove_file(&reachability_db_path)?;
-
-        self.conn.execute(
-            "update RepositoryMeta set Value = null where Key = 'gc-dirty';",
-            rusqlite::NO_PARAMS,
-        )?;
-
+        self.gc_clear_dirty()?;
         Ok(stats)
     }
 }
