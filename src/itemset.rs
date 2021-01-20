@@ -238,7 +238,7 @@ pub fn compact(tx: &rusqlite::Transaction) -> Result<(), anyhow::Error> {
 }
 
 pub fn has_item_with_id(tx: &rusqlite::Transaction, id: &Xid) -> Result<bool, anyhow::Error> {
-    match tx.query_row("select 1 from ItemOpLog where ItemId = ?;", &[id], |_row| {
+    match tx.query_row("select 1 from Items where ItemId = ?;", &[id], |_row| {
         Ok(true)
     }) {
         Ok(_) => Ok(true),
