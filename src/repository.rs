@@ -210,7 +210,7 @@ impl Repo {
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let mut data_dir = repo_path.to_path_buf();
+                    let mut data_dir = repo_path.clone();
                     data_dir.push("data");
                     Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
                 }
@@ -220,7 +220,7 @@ impl Repo {
                     let socket_path = PathBuf::from(socket_path);
                     Box::new(external_chunk_storage::ExternalStorage::new(
                         &socket_path,
-                        &path.to_string(),
+                        &path,
                     )?)
                 }
             }
@@ -625,7 +625,7 @@ impl Repo {
             )?;
 
             // We must check this again in case it changed since the initial check.
-            if let Some(_) = gc_dirty {
+            if gc_dirty.is_some() {
                 anyhow::bail!("garbage collection already in progress");
             }
 
