@@ -696,7 +696,7 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
         Repo::init(path_buf.as_path(), Some(StorageEngineSpec::DirStore)).unwrap();
-        let repo = Repo::open(path_buf.as_path()).unwrap();
+        let mut repo = Repo::open(path_buf.as_path()).unwrap();
         let addr = Address::default();
         repo.add_chunk(&addr, vec![1]).unwrap();
         repo.sync().unwrap();
