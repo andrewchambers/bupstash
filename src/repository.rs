@@ -642,13 +642,14 @@ impl Repo {
                 rusqlite::params![&gc_generation],
             )?;
 
-            // We compact the item set in the same transaction that
-            // gc-dirty is set to avoid any problems caused by an
-            // external storage engine crashing and then marking the gc as
-            // complete while we are still modifying the itemset.
-            // Doing this totally avoids us needing to think about
-            // interleaving restore-removed ops with compaction
-            // and chunk deletion.
+            // We compact the item set in the same transaction the the gc-generation
+            // is cycled to keep client query caches consistent. They rely on the
+            // gc-generation being in sync with any oplog changes.
+            //
+            // Another case to consider is if we split the compaction to another
+            // transaction and the external storage engine crashes and then marks
+            // the gc as complete, we must ensure that gc-dirty is still valid
+            // for any compaction operations we perform.
             itemset::compact(&tx)?;
 
             tx.commit()?;
