@@ -40,13 +40,12 @@ pub enum ClientError {
 pub fn open_repository(
     w: &mut dyn std::io::Write,
     r: &mut dyn std::io::Read,
-    lock_hint: LockHint,
 ) -> Result<(), anyhow::Error> {
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
-            repository_protocol_version: "4".to_string(),
-            lock_hint,
+            reserved: 0,
+            protocol_version: "5".to_string(),
         }),
     )?;
 
@@ -351,7 +350,7 @@ pub fn send(
             tags,
         };
 
-        ctx.progress.set_message("syncing disks...");
+        ctx.progress.set_message("syncing storage...");
 
         write_packet(
             w,
@@ -1438,7 +1437,7 @@ pub fn sync(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    progress.set_message("syncing remote items...");
+    progress.set_message("fetching remote metadata...");
 
     let mut tx = query_cache.transaction()?;
 

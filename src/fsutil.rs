@@ -17,6 +17,12 @@ impl FileLock {
         Ok(FileLock { f })
     }
 
+    pub fn try_get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
+        let f = fs::File::open(p)?;
+        f.try_lock_exclusive()?;
+        Ok(FileLock { f })
+    }
+
     pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
         let f = fs::File::open(p)?;
         f.lock_shared()?;

@@ -1,6 +1,7 @@
 use super::address::Address;
 use super::chunk_storage::Engine;
 use super::crypto;
+use super::fsutil;
 use super::hex;
 use super::repository;
 use super::xid;
@@ -50,6 +51,9 @@ pub struct DirStorage {
     write_worker_tx: Vec<crossbeam_channel::Sender<WriteWorkerMsg>>,
     write_chunk_count: u64,
     write_round_robin_index: usize,
+
+    // Garbage collection
+    gc_exclusive_lock: Option<fsutil::FileLock>,
 }
 
 impl DirStorage {
@@ -270,6 +274,13 @@ impl DirStorage {
         }
     }
 
+    fn lock_file_path(&self) -> PathBuf {
+        let mut p = self.dir_path.clone();
+        p.pop();
+        p.push("repo.lock");
+        p
+    }
+
     pub fn new(dir_path: &std::path::Path) -> Result<Self, anyhow::Error> {
         if !dir_path.exists() {
             std::fs::DirBuilder::new().create(dir_path)?;
@@ -317,6 +328,7 @@ impl DirStorage {
             write_worker_tx,
             write_chunk_count: 0,
             write_round_robin_index: 0,
+            gc_exclusive_lock: None,
         })
     }
 }
@@ -392,7 +404,18 @@ impl Engine for DirStorage {
     }
 
     fn prepare_for_gc(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
-        Ok(())
+        self.gc_exclusive_lock = None; // Explicitly free and drop lock.
+
+        match fsutil::FileLock::try_get_exclusive(&self.lock_file_path()) {
+            Ok(l) => {
+                self.gc_exclusive_lock = Some(l);
+                Ok(())
+            }
+            Err(err) if err.raw_os_error() == Some(libc::EWOULDBLOCK) => Err(anyhow::format_err!(
+                "garbage collection already in progress"
+            )),
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn gc(
@@ -401,6 +424,8 @@ impl Engine for DirStorage {
         reachability_db: &mut rusqlite::Connection,
     ) -> Result<repository::GCStats, anyhow::Error> {
         self.stop_workers();
+
+        assert!(self.gc_exclusive_lock.is_some());
 
         let reachability_tx = reachability_db.transaction()?;
         let mut check_reachability_stmt =
@@ -451,6 +476,8 @@ impl Engine for DirStorage {
             std::fs::remove_file(p)?;
         }
 
+        self.gc_exclusive_lock = None;
+
         Ok(repository::GCStats {
             chunks_remaining: Some(chunks_remaining),
             chunks_deleted: Some(chunks_deleted),
@@ -459,8 +486,12 @@ impl Engine for DirStorage {
         })
     }
 
-    fn await_gc_completion(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
-        Ok(())
+    fn gc_completed(&mut self, _gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
+        match fsutil::FileLock::try_get_exclusive(&self.lock_file_path()) {
+            Ok(_) => Ok(true),
+            Err(err) if err.raw_os_error() == Some(libc::EWOULDBLOCK) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

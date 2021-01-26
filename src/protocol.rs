@@ -9,16 +9,9 @@ use std::convert::TryInto;
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub enum LockHint {
-    Read,
-    Write,
-    Gc,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TOpenRepository {
-    pub lock_hint: LockHint,
-    pub repository_protocol_version: String,
+    pub reserved: u8, // Here for backwards compatibility.
+    pub protocol_version: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -155,8 +148,8 @@ pub enum Packet {
     RStoragePrepareForGC,
     StorageBeginGC(StorageBeginGC),
     StorageGCComplete(repository::GCStats),
-    TStorageAwaitGCCompletion(Xid),
-    RStorageAwaitGCCompletion,
+    TStorageGCCompleted(Xid),
+    RStorageGCCompleted(bool),
     StoragePipelineGetChunks(Vec<Address>),
     EndOfTransmission,
 }
@@ -198,8 +191,8 @@ const PACKET_KIND_T_STORAGE_PREPARE_FOR_GC: u8 = 103;
 const PACKET_KIND_R_STORAGE_PREPARE_FOR_GC: u8 = 104;
 const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 105;
 const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 107;
-const PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION: u8 = 108;
-const PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION: u8 = 109;
+const PACKET_KIND_T_STORAGE_GC_COMPLETED: u8 = 108;
+const PACKET_KIND_R_STORAGE_GC_COMPLETED: u8 = 109;
 const PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS: u8 = 110;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
@@ -320,10 +313,12 @@ pub fn read_packet_raw(
         PACKET_KIND_R_STORAGE_PREPARE_FOR_GC => Packet::RStoragePrepareForGC,
         PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION => {
-            Packet::TStorageAwaitGCCompletion(serde_bare::from_slice(&buf)?)
+        PACKET_KIND_T_STORAGE_GC_COMPLETED => {
+            Packet::TStorageGCCompleted(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION => Packet::RStorageAwaitGCCompletion,
+        PACKET_KIND_R_STORAGE_GC_COMPLETED => {
+            Packet::RStorageGCCompleted(serde_bare::from_slice(&buf)?)
+        }
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
         PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS => {
@@ -545,17 +540,15 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TStorageAwaitGCCompletion(ref v) => {
+        Packet::TStorageGCCompleted(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(
-                w,
-                PACKET_KIND_T_STORAGE_AWAIT_GC_COMPLETION,
-                b.len().try_into()?,
-            )?;
+            send_hdr(w, PACKET_KIND_T_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RStorageAwaitGCCompletion => {
-            send_hdr(w, PACKET_KIND_R_STORAGE_AWAIT_GC_COMPLETION, 0)?;
+        Packet::RStorageGCCompleted(v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TStorageWriteBarrier => {
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;

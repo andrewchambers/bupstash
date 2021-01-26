@@ -30,6 +30,7 @@ with the addition of `-` and `_`. Tag processing ends at the first argument that
 
 The special marker argument `::` may be used to force the end of tag parsing, but is usually not necessary.
 
+Note that multiple concurrent uploads to the same repository are safe and supported.
 
 ## USAGE NOTES
 

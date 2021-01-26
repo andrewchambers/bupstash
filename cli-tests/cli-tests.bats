@@ -5,6 +5,7 @@ unset BUPSTASH_REPOSITORY_COMMAND
 unset BUPSTASH_KEY
 unset BUPSTASH_KEY_COMMAND
 
+export CLI_TEST_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
 export BUPSTASH_KEY="$SCRATCH/bupstash-test-primary.key"
 export PUT_KEY="$SCRATCH/bupstash-test-put.key"
@@ -12,6 +13,8 @@ export METADATA_KEY="$SCRATCH/bupstash-test-metadata.key"
 export LIST_CONTENTS_KEY="$SCRATCH/bupstash-test-list-contents.key"
 export BUPSTASH_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export BUPSTASH_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
+
+
 
 # We have two modes for running the tests...
 # 
@@ -144,11 +147,6 @@ _concurrent_send_test_worker () {
   for i in $(seq 10)
   do
     _concurrent_send_test_worker &
-  done
-  for i in $(seq 5)
-  do
-    bupstash list > /dev/null
-    bupstash gc > /dev/null
   done
   wait
   count=$(bupstash list | expr $(wc -l))
@@ -608,4 +606,20 @@ _concurrent_modify_worker () {
         <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
     done
   done
+}
+
+@test "s3 parallel thrash" {
+  which bupstash-s3-storage > /dev/null || skip "bupstash-s3-storage missing"
+  which minio > /dev/null || skip "minio missing"
+  which mc > /dev/null || skip "mc missing"
+  which bwrap > /dev/null || skip bwrap missing
+  # This test uses a lot of file descriptors.
+  ulimit -n $(ulimit -Hn)
+  # Use bwrap to help ensure proper process cleanup.
+  bwrap \
+    --die-with-parent \
+    --unshare-net \
+    --unshare-pid \
+    --dev-bind / / \
+    -- $(which bash) "$BATS_TEST_DIRNAME"/s3-parallel-thrash.sh
 }

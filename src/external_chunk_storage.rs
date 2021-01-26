@@ -15,7 +15,7 @@ impl ExternalStorage {
         protocol::write_packet(
             &mut sock,
             &protocol::Packet::StorageConnect(protocol::StorageConnect {
-                protocol: "s-1".to_string(),
+                protocol: "s-2".to_string(),
                 path: path.to_string(),
             }),
         )?;
@@ -104,13 +104,13 @@ impl Engine for ExternalStorage {
         }
     }
 
-    fn await_gc_completion(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+    fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
         protocol::write_packet(
             &mut self.sock,
-            &protocol::Packet::TStorageAwaitGCCompletion(gc_id),
+            &protocol::Packet::TStorageGCCompleted(gc_id),
         )?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE)? {
-            protocol::Packet::RStorageAwaitGCCompletion => Ok(()),
+            protocol::Packet::RStorageGCCompleted(completed) => Ok(completed),
             _ => anyhow::bail!("unexpected packet response, expected RStorageAwaitGCCompletion"),
         }
     }

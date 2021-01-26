@@ -560,7 +560,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -942,8 +942,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         want_xattrs,
     };
 
-    progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -1006,7 +1005,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1179,7 +1178,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Read)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1385,8 +1384,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-        progress.set_message(&"acquiring repository lock...");
-        client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
+        client::open_repository(&mut serve_in, &mut serve_out)?;
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
@@ -1394,8 +1392,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-        progress.set_message(&"acquiring repository lock...");
-        client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
+        client::open_repository(&mut serve_in, &mut serve_out)?;
 
         let ids: Vec<xid::Xid> = match cli_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
@@ -1497,8 +1494,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Gc)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -1540,8 +1536,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    progress.set_message(&"acquiring repository lock...");
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::LockHint::Write)?;
+    client::open_repository(&mut serve_in, &mut serve_out)?;
     let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;

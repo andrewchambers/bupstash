@@ -25,20 +25,14 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.repository_protocol_version != "4" {
+                if req.protocol_version != "5" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
-                        req.repository_protocol_version
+                        req.protocol_version
                     )
                 }
 
                 let mut repo = repository::Repo::open(&cfg.repo_path)?;
-
-                match req.lock_hint {
-                    LockHint::Read => repo.alter_lock_mode(repository::LockMode::None)?,
-                    LockHint::Write => repo.alter_lock_mode(repository::LockMode::Write)?,
-                    LockHint::Gc => repo.alter_lock_mode(repository::LockMode::Write)?,
-                }
 
                 write_packet(
                     w,
@@ -81,49 +75,42 @@ fn serve_repository(
                 if !cfg.allow_put {
                     anyhow::bail!("server has disabled put for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::Write)?;
                 recv(repo, begin, r, w)?;
             }
             Packet::TRequestMetadata(req) => {
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::None)?;
                 send_metadata(repo, req.id, w)?;
             }
             Packet::RequestData(req) => {
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::None)?;
                 send(repo, req.id, req.ranges, w)?;
             }
             Packet::RequestIndex(req) => {
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::None)?;
                 send_index(repo, req.id, w)?;
             }
             Packet::TGc(_) => {
                 if !cfg.allow_gc {
                     anyhow::bail!("server has disabled garbage collection for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::Write)?;
                 gc(repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
                 if !cfg.allow_get && !cfg.allow_remove {
                     anyhow::bail!("server has disabled query and search for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::None)?;
                 item_sync(repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
                 if !cfg.allow_remove {
                     anyhow::bail!("server has disabled remove for this client")
                 }
-                repo.alter_lock_mode(repository::LockMode::Write)?;
                 if !items.is_empty() {
                     repo.remove_items(items)?;
                 }
@@ -133,7 +120,6 @@ fn serve_repository(
                 if !cfg.allow_put || !cfg.allow_get {
                     anyhow::bail!("server has disabled restore for this client (restore requires get and put permissions).")
                 }
-                repo.alter_lock_mode(repository::LockMode::Write)?;
                 let n_restored = repo.restore_removed()?;
                 write_packet(
                     w,
@@ -154,10 +140,22 @@ fn recv(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
+    let gc_generation = match repo.gc_status()? {
+        repository::GCStatus::Complete(gc_generation) => gc_generation,
+        repository::GCStatus::Running(_) => {
+            // We can only start a recv if we aren't currently
+            // performing a garbage collection, otherwise we might
+            // accept an upload that occured during the sweep
+            // phase of the garbage collector which would lead to
+            // corruption.
+            anyhow::bail!("garbage collection in progress");
+        }
+    };
+
     write_packet(
         w,
         &Packet::RBeginSend(RBeginSend {
-            gc_generation: repo.gc_generation()?,
+            gc_generation,
             has_delta_id: if let Some(delta_id) = begin.delta_id {
                 repo.has_item_with_id(&delta_id)?
             } else {
@@ -166,19 +164,20 @@ fn recv(
         }),
     )?;
 
-    let mut store_engine = repo.storage_engine()?;
-
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::Chunk(chunk) => {
-                store_engine.add_chunk(&chunk.address, chunk.data)?;
+                repo.add_chunk(&chunk.address, chunk.data)?;
             }
             Packet::TSendSync => {
-                store_engine.sync()?;
+                repo.sync()?;
                 write_packet(w, &Packet::RSendSync)?;
             }
             Packet::TAddItem(add_item) => {
-                store_engine.sync()?;
+                if add_item.gc_generation != gc_generation {
+                    anyhow::bail!("client sent an unexpected gc_generation");
+                }
+                repo.sync()?;
                 let item_id = repo.add_item(add_item.gc_generation, add_item.item)?;
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
@@ -278,8 +277,6 @@ fn send_htree(
     tr: &mut htree::TreeReader,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    let mut storage_engine = repo.storage_engine()?;
-
     let mut on_chunk = |addr: &address::Address, data: &[u8]| -> Result<(), anyhow::Error> {
         write_chunk(w, addr, data)?;
         Ok(())
@@ -302,11 +299,11 @@ fn send_htree(
                         .map(|x| address::Address::from_slice(&x[8..]).unwrap()),
                 );
 
-                storage_engine.pipelined_get_chunks(&addresses, &mut on_chunk)?;
+                repo.pipelined_get_chunks(&addresses, &mut on_chunk)?;
             }
             Some(_) => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
-                    let chunk_data = storage_engine.get_chunk(&chunk_address)?;
+                    let chunk_data = repo.get_chunk(&chunk_address)?;
                     on_chunk(&chunk_address, &chunk_data)?;
                     let decompressed = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, decompressed)?;
@@ -343,7 +340,6 @@ fn send_partial_htree(
     }
 
     let mut range_idx: usize = 0;
-    let mut storage_engine = repo.storage_engine()?;
     let mut current_data_chunk_idx: u64 = 0;
     let start_chunk_idx = match ranges.get(0) {
         Some(range) => range.start_idx,
@@ -363,7 +359,7 @@ fn send_partial_htree(
 
         let (_, address) = tr.next_addr().unwrap();
 
-        let chunk_data = storage_engine.get_chunk(&address)?;
+        let chunk_data = repo.get_chunk(&address)?;
         write_chunk(w, &address, &chunk_data)?;
         let mut chunk_data = compression::unauthenticated_decompress(chunk_data)?;
 
@@ -422,11 +418,11 @@ fn send_partial_htree(
                     }
                 }
 
-                storage_engine.pipelined_get_chunks(&filtered_addresses, &mut on_chunk)?;
+                repo.pipelined_get_chunks(&filtered_addresses, &mut on_chunk)?;
             }
             Some(_) if ranges.get(range_idx).is_some() => {
                 if let Some((height, chunk_address)) = tr.next_addr() {
-                    let chunk_data = storage_engine.get_chunk(&chunk_address)?;
+                    let chunk_data = repo.get_chunk(&chunk_address)?;
                     on_chunk(&chunk_address, &chunk_data)?;
                     let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data)?;

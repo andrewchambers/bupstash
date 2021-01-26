@@ -27,7 +27,7 @@ pub trait Engine {
     ) -> Result<repository::GCStats, anyhow::Error>;
 
     // Check that a previous invocation of gc has finished.
-    fn await_gc_completion(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
+    fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name to protect historic items from corruption.

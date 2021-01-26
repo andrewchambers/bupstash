@@ -13,12 +13,12 @@ unreferenced data and freeing disk space.
 `bupstash gc` walks the repository contents attempting to find
 unreachable data chunks and removing them, potentially reclaiming disk space.
 
-When garbage collection is in process, get and put operations are paused for the
-duration.
+For periods of time during garbage collection operations that modify
+the repository (such as bupstash-put(1)) may temporarily fail and report that
+the repository is busy.
 
 The garbage collector only relies on unencrypted metadata, so does not need
-access to decryption keys to operate, and can thus be run on a storage server
-without access to any keys.
+access to decryption keys to operate.
 
 ## OPTIONS
 
