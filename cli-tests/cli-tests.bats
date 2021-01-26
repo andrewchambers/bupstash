@@ -14,8 +14,6 @@ export LIST_CONTENTS_KEY="$SCRATCH/bupstash-test-list-contents.key"
 export BUPSTASH_SEND_LOG="$SCRATCH/send-log.sqlite3"
 export BUPSTASH_QUERY_CACHE="$SCRATCH/query-cache.sqlite3"
 
-
-
 # We have two modes for running the tests...
 # 
 # When BUPSTASH_TEST_REPOSITORY_COMMAND is set, we are running
@@ -608,14 +606,36 @@ _concurrent_modify_worker () {
   done
 }
 
+@test "parallel thrash" {
+  
+  if ! ps --version | grep -q procps-ng
+  then
+    skip "test requires procps-ng"
+  fi
+
+  which bwrap > /dev/null || skip bwrap missing
+  # Use bwrap to help ensure proper cleanup and protect the host processes from kills.
+  bwrap \
+    --die-with-parent \
+    --unshare-net \
+    --unshare-pid \
+    --dev-bind / / \
+    bash "$BATS_TEST_DIRNAME"/parallel-thrash.sh
+}
+
 @test "s3 parallel thrash" {
+  if ! ps --version | grep -q procps-ng
+  then
+    skip "test requires procps-ng"
+  fi
+  which bwrap > /dev/null || skip bwrap missing
   which bupstash-s3-storage > /dev/null || skip "bupstash-s3-storage missing"
   which minio > /dev/null || skip "minio missing"
   which mc > /dev/null || skip "mc missing"
-  which bwrap > /dev/null || skip bwrap missing
+  
   # This test uses a lot of file descriptors.
   ulimit -n $(ulimit -Hn)
-  # Use bwrap to help ensure proper process cleanup.
+  # Use bwrap to help ensure proper cleanup and protect the host processes from kills.
   bwrap \
     --die-with-parent \
     --unshare-net \
