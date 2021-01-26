@@ -73,7 +73,7 @@ jobs:
     runs-on: ${{ matrix.IMAGE }}
     steps:
       - name: "Install dependencies (Ubuntu)"
-        run: sudo apt-get install -y libsodium-dev bats
+        run: sudo apt-get install -y libsodium-dev bats bubblewrap
         if: ${{ matrix.IMAGE == 'ubuntu-latest' }}
       - name: "Install dependencies (macOS)"
         run: |

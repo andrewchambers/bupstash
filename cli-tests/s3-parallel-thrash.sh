@@ -112,7 +112,7 @@ s3_plugin_supervisor () {
   done
 }
 
-minio server "$SCRATCH/data" >&2 &
+minio server "$SCRATCH/miniodata" >&2 &
 minio_pid="$!"
 s3_plugin_supervisor &
 s3_plugin_supervisor_pid="$!"
@@ -122,7 +122,6 @@ sleep 1
 # Configure the test minio instance.
 rm -rf "$SCRATCH/mc"
 mc config host add thrashminio http://127.0.0.1:9000 thrash_access thrash_secret >&2 
-mc -C "$SCRATCH/mc" mb "thrashminio/thrashbucket" >&2
 
 # Outer loop is to control the size of the gc set.
 for i in $(seq 50)
