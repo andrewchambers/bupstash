@@ -194,7 +194,7 @@ impl Repo {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         tx.execute(
-            /* Schema version is a string to keep all meta rows the same type. */
+            // Schema version is a string to keep all meta rows the same type.
             "update RepositoryMeta set value = '3' where key = 'schema-version';",
             rusqlite::NO_PARAMS,
         )?;
