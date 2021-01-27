@@ -1,11 +1,9 @@
 use super::address::*;
 use super::chunk_storage;
 use super::compression;
-use super::crypto;
 use super::dir_chunk_storage;
 use super::external_chunk_storage;
 use super::fsutil;
-use super::hex;
 use super::htree;
 use super::itemset;
 use super::xid::*;
@@ -38,7 +36,6 @@ pub struct GCStats {
 }
 
 pub struct Repo {
-    repo_path: PathBuf,
     conn: rusqlite::Connection,
     storage_engine: Box<dyn chunk_storage::Engine>,
 }
@@ -55,12 +52,6 @@ pub enum GCStatus {
 }
 
 impl Repo {
-    fn tmp_dir_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("tmp");
-        lock_path
-    }
-
     fn repo_db_path(repo_path: &Path) -> PathBuf {
         let mut db_path = repo_path.to_path_buf();
         db_path.push("bupstash.sqlite3");
@@ -129,10 +120,6 @@ impl Repo {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        path_buf.push("tmp");
-        fs::DirBuilder::new().create(path_buf.as_path())?;
-        path_buf.pop();
-
         path_buf.push("storage-engine.json");
         let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
         fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
@@ -157,7 +144,7 @@ impl Repo {
         )?;
         tx.execute(
             /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '2');",
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '3');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -183,6 +170,42 @@ impl Repo {
         Ok(())
     }
 
+    fn upgrade_2_to_3(
+        conn: &mut rusqlite::Connection,
+        repo_path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        eprintln!("upgrading repository schema from version 2 to version 3...");
+
+        let repo_lock = {
+            let mut lock_path = repo_path.to_owned();
+            lock_path.push("repo.lock");
+            fsutil::FileLock::try_get_exclusive(&lock_path)?
+        };
+
+        // We no longer need the temporary directory.
+        {
+            let mut tmp_dir = repo_path.to_owned();
+            tmp_dir.push("tmp");
+            if tmp_dir.exists() {
+                std::fs::remove_dir_all(&tmp_dir)?;
+            }
+        }
+
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        tx.execute(
+            /* Schema version is a string to keep all meta rows the same type. */
+            "update RepositoryMeta set value = '3' where key = 'schema-version';",
+            rusqlite::NO_PARAMS,
+        )?;
+
+        tx.commit()?;
+        drop(repo_lock);
+
+        eprintln!("repository upgrade successful...");
+        Ok(())
+    }
+
     pub fn open(repo_path: &Path) -> Result<Repo, anyhow::Error> {
         if !repo_path.exists() {
             anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
@@ -190,15 +213,27 @@ impl Repo {
 
         let repo_path = fs::canonicalize(&repo_path)?;
 
-        let conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
+        let mut conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
 
         let v: String = conn.query_row(
             "select Value from RepositoryMeta where Key='schema-version';",
             rusqlite::NO_PARAMS,
             |row| row.get(0),
         )?;
-        if v.parse::<u64>().unwrap() != 2 {
-            anyhow::bail!("repository has an unsupported schema version");
+
+        let mut schema_version = v.parse::<u64>().unwrap();
+
+        // We should be able to phase these checks out as versions age.
+        if schema_version == 2 {
+            Repo::upgrade_2_to_3(&mut conn, &repo_path)?;
+            schema_version = 3;
+        }
+
+        if schema_version != 3 {
+            anyhow::bail!(
+                "repository has an unsupported schema version, want 3, got {}",
+                schema_version
+            );
         }
 
         let storage_engine: Box<dyn chunk_storage::Engine> = {
@@ -210,7 +245,7 @@ impl Repo {
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let mut data_dir = repo_path.clone();
+                    let mut data_dir = repo_path;
                     data_dir.push("data");
                     Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
                 }
@@ -226,13 +261,10 @@ impl Repo {
             }
         };
 
-        let repo = Repo {
+        Ok(Repo {
             conn,
-            repo_path,
             storage_engine,
-        };
-
-        Ok(repo)
+        })
     }
 
     pub fn pipelined_get_chunks(
@@ -254,6 +286,30 @@ impl Repo {
 
     pub fn sync(&mut self) -> Result<(), anyhow::Error> {
         self.storage_engine.sync()
+    }
+
+    fn gc_dirty_check(
+        tx: &rusqlite::Transaction,
+        storage_engine: &mut Box<dyn chunk_storage::Engine>,
+        busy_msg: &'static str,
+    ) -> Result<(), anyhow::Error> {
+        let gc_dirty: Option<Xid> = tx.query_row(
+            "select Value from RepositoryMeta where Key='gc-dirty';",
+            rusqlite::NO_PARAMS,
+            |row| row.get(0),
+        )?;
+
+        if let Some(dirty_generation) = gc_dirty {
+            if !storage_engine.gc_completed(dirty_generation)? {
+                anyhow::bail!(busy_msg);
+            }
+            tx.execute(
+                "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
+                rusqlite::params![&dirty_generation],
+            )?;
+        }
+
+        Ok(())
     }
 
     pub fn add_item(
@@ -282,22 +338,11 @@ impl Repo {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        let gc_dirty: Option<Xid> = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
+        Repo::gc_dirty_check(
+            &tx,
+            &mut self.storage_engine,
+            "cannot add item while garbage collection is in progress",
         )?;
-
-        if let Some(dirty_generation) = gc_dirty {
-            if !self.storage_engine.gc_completed(dirty_generation)? {
-                anyhow::bail!("cannot add item while garbage collection is in progress");
-            }
-
-            tx.execute(
-                "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                rusqlite::params![&dirty_generation],
-            )?;
-        }
 
         let current_gc_generation = tx.query_row(
             "select Value from RepositoryMeta where Key='gc-generation';",
@@ -319,22 +364,11 @@ impl Repo {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        let gc_dirty: Option<Xid> = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
+        Repo::gc_dirty_check(
+            &tx,
+            &mut self.storage_engine,
+            "cannot remove items while garbage collection is in progress",
         )?;
-
-        if let Some(dirty_generation) = gc_dirty {
-            if !self.storage_engine.gc_completed(dirty_generation)? {
-                anyhow::bail!("cannot remove items while garbage collection is in progress");
-            }
-
-            tx.execute(
-                "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                rusqlite::params![&dirty_generation],
-            )?;
-        }
 
         itemset::remove_items(&tx, items)?;
         tx.commit()?;
@@ -403,45 +437,17 @@ impl Repo {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        let gc_dirty: Option<Xid> = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
+        Repo::gc_dirty_check(
+            &tx,
+            &mut self.storage_engine,
+            "cannot restore items while garbage collection is in progress",
         )?;
-
-        if let Some(dirty_generation) = gc_dirty {
-            if !self.storage_engine.gc_completed(dirty_generation)? {
-                anyhow::bail!("cannot restore items while garbage collection is in progress");
-            }
-
-            tx.execute(
-                "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                rusqlite::params![&dirty_generation],
-            )?;
-        }
 
         let n_restored = itemset::restore_removed(&tx)?;
         if n_restored > 0 {
             tx.commit()?;
         }
         Ok(n_restored)
-    }
-
-    fn random_tmp_reachability_db_path(repo_path: &Path) -> PathBuf {
-        let random_suffix = {
-            let mut buf = [0; 16];
-            crypto::randombytes(&mut buf[..]);
-            hex::easy_encode_to_string(&buf[..])
-        };
-        let file_name = "reachability."
-            .chars()
-            .chain(random_suffix.chars())
-            .chain(".sqlite3".chars())
-            .collect::<String>();
-
-        let mut db_path = Repo::tmp_dir_path(repo_path);
-        db_path.push(file_name);
-        db_path
     }
 
     pub fn gc_status(&mut self) -> Result<GCStatus, anyhow::Error> {
@@ -483,8 +489,6 @@ impl Repo {
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
     ) -> Result<GCStats, anyhow::Error> {
         let gc_generation = Xid::new();
-        let repo_path = &self.repo_path;
-        let reachability_db_path = Repo::random_tmp_reachability_db_path(repo_path);
         let storage_engine = &mut self.storage_engine;
         let conn = &mut self.conn;
 
@@ -494,22 +498,13 @@ impl Repo {
         {
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-            let gc_dirty: Option<Xid> = tx.query_row(
-                "select Value from RepositoryMeta where Key='gc-dirty';",
-                rusqlite::NO_PARAMS,
-                |row| row.get(0),
+            Repo::gc_dirty_check(
+                &tx,
+                storage_engine,
+                "garbage collection already in progress",
             )?;
 
-            if let Some(dirty_generation) = gc_dirty {
-                if !storage_engine.gc_completed(dirty_generation)? {
-                    anyhow::bail!("garbage collection already in progress");
-                }
-
-                tx.execute(
-                    "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                    rusqlite::params![&dirty_generation],
-                )?;
-            }
+            tx.commit()?;
         }
 
         // Signal to the storage engine a gc is about to begin, this involves marking a gc
@@ -518,57 +513,11 @@ impl Repo {
         storage_engine.prepare_for_gc(gc_generation)?;
 
         update_progress_msg("removing temporary files...".to_string())?;
-        // There is the possibility that another instance of bupstash clears
-        // the gc_dirty flag and begins another gc.
-        // The chance of this increases if we crash while running an external
-        // storage backend. If this happens and we wipe the temporary files,
-        // the gc may have its reachability database removed out from under it.
-        // This should just result in a 'file not found' error in the storage
-        // backend, this is because we have disabled
-        // journal files for this db and by the time the storage engine is passed the reachability
-        // database, it is already read only. To confirm this we also have the parallel thrash
-        // test in the test suite to test these conditions.
-        {
-            let mut to_remove = Vec::new();
-            for e in std::fs::read_dir(Repo::tmp_dir_path(repo_path))? {
-                let e = e?;
-                to_remove.push(e.path());
-            }
-            for p in to_remove.iter() {
-                match std::fs::remove_file(p) {
-                    Ok(()) => (),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-                    Err(err) => return Err(err.into()),
-                };
-            }
-        }
 
-        let mut reachability_db = rusqlite::Connection::open(&reachability_db_path)?;
-        // Because this is a fresh random database are ok to disable synchronous operation.
-        reachability_db.execute("pragma synchronous = OFF;", rusqlite::NO_PARAMS)?;
-        reachability_db.query_row(
-            "pragma journal_mode = OFF;",
-            rusqlite::NO_PARAMS,
-            |_| Ok(()),
-        )?;
-
-        let reachability_tx =
-            reachability_db.transaction_with_behavior(rusqlite::TransactionBehavior::Exclusive)?;
-
-        // We want to maintain the invariant that the reachability table contains ALL reachable
-        // chunks, or it does not exist at all. This means we can't accidentally query an empty
-        // reachability table from a chunk storage plugin and delete everything.
-        reachability_tx.execute(
-            "create table Reachability(Address primary key) without rowid;",
-            rusqlite::NO_PARAMS,
-        )?;
+        let mut reachable = std::collections::HashSet::<Address>::with_capacity(65535);
 
         let mut walk_item = |_op_id, _item_id, metadata| match metadata {
             itemset::VersionedItemMetadata::V1(metadata) => {
-                let mut add_reachability_stmt = reachability_tx.prepare_cached(
-                    "insert into Reachability(Address) values(?) on conflict do nothing;",
-                )?;
-
                 // For garbage collection walking in order is not a concern,
                 // we just need to ensure we touch each reachable node.
                 //
@@ -590,9 +539,7 @@ impl Repo {
                         &tree.address,
                     );
                     while let Some((height, addr)) = tr.next_addr() {
-                        let rows_changed =
-                            add_reachability_stmt.execute(rusqlite::params![&addr.bytes[..]])?;
-                        if rows_changed != 0 && height != 0 {
+                        if reachable.insert(addr) && height != 0 {
                             let data = storage_engine.get_chunk(&addr)?;
                             let data = compression::unauthenticated_decompress(data)?;
                             tr.push_level(height - 1, data)?;
@@ -668,13 +615,8 @@ impl Repo {
             tx.commit()?;
         }
 
-        reachability_tx.commit()?;
-
         update_progress_msg("deleting unused chunks...".to_string())?;
-        let stats = self
-            .storage_engine
-            .gc(&reachability_db_path, &mut reachability_db)?;
-        drop(reachability_db);
+        let stats = self.storage_engine.gc(reachable)?;
 
         // We are now done and can stop mark the gc as complete.
         conn.execute(

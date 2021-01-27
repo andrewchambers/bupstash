@@ -420,16 +420,11 @@ impl Engine for DirStorage {
 
     fn gc(
         &mut self,
-        _reachability_db_path: &std::path::Path,
-        reachability_db: &mut rusqlite::Connection,
+        reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, anyhow::Error> {
         self.stop_workers();
 
         assert!(self.gc_exclusive_lock.is_some());
-
-        let reachability_tx = reachability_db.transaction()?;
-        let mut check_reachability_stmt =
-            reachability_tx.prepare_cached("select 1 from Reachability where Address = ?;")?;
 
         // Collect removals into memory first so we don't have to
         // worry about fs semantics when removing while iterating.
@@ -444,15 +439,7 @@ impl Engine for DirStorage {
             let e = e?;
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
-                    let reachable = match check_reachability_stmt
-                        .query_row(rusqlite::params![&addr.bytes[..]], |_| Ok(()))
-                    {
-                        Ok(_) => true,
-                        Err(rusqlite::Error::QueryReturnedNoRows) => false,
-                        Err(err) => return Err(err.into()),
-                    };
-
-                    if !reachable {
+                    if !reachable.contains(&addr) {
                         if let Ok(md) = e.metadata() {
                             bytes_deleted += md.len() as usize
                         }

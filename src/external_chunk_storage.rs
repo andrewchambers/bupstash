@@ -83,9 +83,10 @@ impl Engine for ExternalStorage {
 
     fn gc(
         &mut self,
-        reachability_db_path: &std::path::Path,
-        _reachability_db: &mut rusqlite::Connection,
+        _reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, anyhow::Error> {
+        panic!("TODO");
+        /*
         protocol::write_packet(
             &mut self.sock,
             &protocol::Packet::StorageBeginGC(protocol::StorageBeginGC {
@@ -102,6 +103,7 @@ impl Engine for ExternalStorage {
             Ok(_) => anyhow::bail!("unexpected packet response, expected StorageGCComplete"),
             Err(err) => Err(err),
         }
+        */
     }
 
     fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {

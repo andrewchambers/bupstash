@@ -18,7 +18,6 @@ Files:
 ```
 repo/
 ├── bupstash.sqlite3
-├── tmp
 ├── data
 │   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
 │   └── ...
@@ -95,10 +94,6 @@ It is important to note, all metadata like search tags are stored encrypted and 
 readable without a master key or metadata key.
 
 The `Items` table is an aggregated view of current items which have not be marked for removal.
-
-### tmp directory
-
-Temporary space for files used by bupstash, they are automatically deleted by bupstash-gc(1).
 
 ### data directory
 
