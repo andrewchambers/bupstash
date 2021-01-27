@@ -7,7 +7,7 @@ else
   export SCRATCH
 fi
 
-export N_WORKERS=32
+export N_WORKERS=$(nproc)
 
 trap "trap - SIGTERM ; kill -9 -- -$$" SIGINT SIGTERM EXIT
 

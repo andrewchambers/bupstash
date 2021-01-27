@@ -12,7 +12,7 @@ export BUPSTASH_KEY="$SCRATCH/thrash.key"
 export BUPSTASH_QUERY_CACHE="$SCRATCH/thrash.qcache"
 export MINIO_ACCESS_KEY="thrash_access"
 export MINIO_SECRET_KEY="thrash_secret"
-export N_WORKERS=32
+export N_WORKERS=$(nproc)
 
 trap "trap - SIGTERM ; kill -9 -- -$$" SIGINT SIGTERM EXIT
 
