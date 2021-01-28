@@ -83,16 +83,16 @@ impl Engine for ExternalStorage {
 
     fn gc(
         &mut self,
-        _reachable: std::collections::HashSet<Address>,
+        mut reachable: std::collections::HashSet<Address>,
     ) -> Result<repository::GCStats, anyhow::Error> {
-        panic!("TODO");
-        /*
-        protocol::write_packet(
-            &mut self.sock,
-            &protocol::Packet::StorageBeginGC(protocol::StorageBeginGC {
-                reachability_db_path: reachability_db_path.to_owned(),
-            }),
-        )?;
+        let reachable: Vec<Address> = reachable.drain().collect();
+
+        protocol::write_packet(&mut self.sock, &protocol::Packet::StorageBeginGC)?;
+
+        for chunk in reachable.chunks(65535) {
+            protocol::write_storage_reachable(&mut self.sock, chunk)?;
+        }
+        protocol::write_storage_reachable(&mut self.sock, &[])?;
 
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
             Ok(protocol::Packet::StorageGCComplete(stats)) => {
@@ -103,7 +103,6 @@ impl Engine for ExternalStorage {
             Ok(_) => anyhow::bail!("unexpected packet response, expected StorageGCComplete"),
             Err(err) => Err(err),
         }
-        */
     }
 
     fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {

@@ -16,8 +16,6 @@ Can do later (medium term):
 
 - Should allow running of single cli tests.
 
-- busy timeout or other mechanism for send log and query cache.
-
 - Sparse file support in snapshots.
 
 - Document precedence.
