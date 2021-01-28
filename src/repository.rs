@@ -20,13 +20,6 @@ pub enum StorageEngineSpec {
     ExternalStore { socket_path: String, path: String },
 }
 
-#[derive(Clone, PartialEq)]
-pub enum LockMode {
-    None,
-    Write,
-    Exclusive,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GCStats {
     pub chunks_deleted: Option<usize>,
