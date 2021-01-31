@@ -674,6 +674,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "PATTERN",
     );
 
+    opts.optflag(
+        "",
+        "one-file-system",
+        "Do not cross mount points in the file system.",
+    );
+
     let matches = parse_cli_opts(opts, &args);
 
     let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$").unwrap();
@@ -724,6 +730,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             Err(err) => anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
         }
     }
+
+    let onefs = matches.opt_present("one-file-system");
 
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {
@@ -950,6 +958,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         send_log,
         tags,
         &mut data_source,
+        onefs,
     )?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;

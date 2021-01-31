@@ -115,6 +115,9 @@ Default tags can be overidden manually by simply specifying them.
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
+* --one-file-system:
+  Do not cross mount points in the file system.
+
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
