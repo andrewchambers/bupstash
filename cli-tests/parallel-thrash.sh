@@ -123,13 +123,13 @@ do
 
 done
 
-if test sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='put-ok';" = ""
+if test $(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='put-ok';") = ""
 then
   echo "at least one 'put' operation must succeed for the test to pass."
   exit 1
 fi
 
-if test sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='gc-ok';" = ""
+if test $(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='gc-ok';") = ""
 then
   echo "at least one 'gc' operation must succeed for the test to pass."
   exit 1
