@@ -560,7 +560,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -942,7 +942,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         want_xattrs,
     };
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -1005,7 +1005,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1178,7 +1178,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1384,7 +1384,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-        client::open_repository(&mut serve_in, &mut serve_out)?;
+        client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
@@ -1392,7 +1392,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-        client::open_repository(&mut serve_in, &mut serve_out)?;
+        client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
 
         let ids: Vec<xid::Xid> = match cli_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
@@ -1494,7 +1494,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Gc)?;
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -1536,7 +1536,7 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out)?;
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
     let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;

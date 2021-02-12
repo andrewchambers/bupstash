@@ -27,7 +27,7 @@ cfg_if::cfg_if! {
     }
 }
 
-// XXX TODO these chunk parameters need to be investigated and tuned.
+// These chunk parameters could be investigated and tuned.
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
 pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 
@@ -40,11 +40,12 @@ pub enum ClientError {
 pub fn open_repository(
     w: &mut dyn std::io::Write,
     r: &mut dyn std::io::Read,
+    open_mode: OpenMode,
 ) -> Result<(), anyhow::Error> {
     write_packet(
         w,
         &Packet::TOpenRepository(TOpenRepository {
-            reserved: 0,
+            open_mode,
             protocol_version: "5".to_string(),
         }),
     )?;

@@ -9,8 +9,19 @@ use std::convert::TryInto;
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum OpenMode {
+    Read,
+    ReadWrite,
+    Gc,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TOpenRepository {
-    pub reserved: u8, // Here for backwards compatibility.
+    // Open mode can be used by server implementations for load balancing purposes.
+    // An example of why this is useful is that garbage collection can be extremely
+    // memory intensive, while get/put operations have relatively constant memory
+    // requirements.
+    pub open_mode: OpenMode,
     pub protocol_version: String,
 }
 

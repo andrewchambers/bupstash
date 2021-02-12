@@ -41,7 +41,7 @@ pub fn serve(
                     }),
                 )?;
 
-                return serve_repository(cfg, &mut repo, r, w);
+                return serve_repository(cfg, req.open_mode, &mut repo, r, w);
             }
 
             Packet::TInitRepository(engine) => {
@@ -60,6 +60,7 @@ pub fn serve(
 
 fn serve_repository(
     cfg: ServerConfig,
+    open_mode: OpenMode,
     repo: &mut repository::Repo,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -72,42 +73,67 @@ fn serve_repository(
                 );
             }
             Packet::TBeginSend(begin) => {
+                if !matches!(open_mode, OpenMode::ReadWrite) {
+                    anyhow::bail!(
+                        "client opened repository in wrong mode for TBeginSend, expected ReadWrite"
+                    )
+                }
                 if !cfg.allow_put {
                     anyhow::bail!("server has disabled put for this client")
                 }
                 recv(repo, begin, r, w)?;
             }
             Packet::TRequestMetadata(req) => {
+                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
+                    anyhow::bail!("client opened repository in wrong mode for TRequestMetadata, expected Read|ReadWrite")
+                }
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
                 send_metadata(repo, req.id, w)?;
             }
             Packet::RequestData(req) => {
+                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
+                    anyhow::bail!("client opened repository in wrong mode for RequestData, expected Read|ReadWrite")
+                }
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
                 send(repo, req.id, req.ranges, w)?;
             }
             Packet::RequestIndex(req) => {
+                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
+                    anyhow::bail!("client opened repository in wrong mode for RequestIndex, expected Read|ReadWrite")
+                }
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
                 send_index(repo, req.id, w)?;
             }
             Packet::TGc(_) => {
+                if !matches!(open_mode, OpenMode::Gc) {
+                    anyhow::bail!("client opened repository in wrong mode for TGc, expected Gc")
+                }
                 if !cfg.allow_gc {
                     anyhow::bail!("server has disabled garbage collection for this client")
                 }
                 gc(repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
+                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
+                    anyhow::bail!("client opened repository in wrong mode for TRequestItemSync, expected Read|ReadWrite")
+                }
                 if !cfg.allow_get && !cfg.allow_remove {
                     anyhow::bail!("server has disabled query and search for this client")
                 }
                 item_sync(repo, req.after, req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
+                if !matches!(open_mode, OpenMode::ReadWrite) {
+                    anyhow::bail!(
+                        "client opened repository in wrong mode for TRmItems, expected ReadWrite"
+                    )
+                }
                 if !cfg.allow_remove {
                     anyhow::bail!("server has disabled remove for this client")
                 }
@@ -117,6 +143,9 @@ fn serve_repository(
                 write_packet(w, &Packet::RRmItems)?;
             }
             Packet::TRestoreRemoved => {
+                if !matches!(open_mode, OpenMode::ReadWrite) {
+                    anyhow::bail!("client opened repository in wrong mode for TRestoreRemoved, expected ReadWrite")
+                }
                 if !cfg.allow_put || !cfg.allow_get {
                     anyhow::bail!("server has disabled restore for this client (restore requires get and put permissions).")
                 }
