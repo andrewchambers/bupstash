@@ -38,7 +38,7 @@ impl Rollsum {
                 offset += 1;
                 // The chunk mask uses the upper bits, as that has influence from
                 // the whole chunk window, where the bottom bits do not.
-                if (h & 0xfffff000) == 0xfffff000 {
+                if (h & 0xfffff000) == 0 {
                     self.h = h;
                     return Some(offset);
                 }
