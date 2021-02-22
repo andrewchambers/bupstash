@@ -163,6 +163,7 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: &mut DataSource,
+    onefs: bool,
 ) -> Result<Xid, anyhow::Error> {
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
@@ -272,7 +273,7 @@ pub fn send(
                         send_log_session: &send_log_session,
                     };
 
-                    send_dir(ctx, &mut st, &base, paths, &exclusions)
+                    send_dir(ctx, &mut st, &base, paths, &exclusions, onefs)
                 };
 
                 match send_result {
@@ -637,6 +638,7 @@ fn send_dir(
     base: &std::path::PathBuf,
     paths: &[std::path::PathBuf],
     exclusions: &[glob::Pattern],
+    onefs: bool,
 ) -> Result<(), SendDirError> {
     let mut data_ectx = ctx.data_ectx.clone();
     let mut idx_ectx = ctx.idx_ectx.clone();
@@ -721,7 +723,7 @@ fn send_dir(
         // Null byte marks the end of path in the hash space.
         hash_state.update(&[0]);
 
-        let mut dir_ents = smear_try!(fsutil::read_dirents(&cur_dir));
+        let mut dir_ents = smear_try!(fsutil::read_dirents(&cur_dir, onefs));
 
         // XXX sorting by extension or reverse filename might give better compression.
         dir_ents.sort_by_key(|a| a.file_name());
