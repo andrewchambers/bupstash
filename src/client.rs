@@ -749,10 +749,8 @@ fn send_dir(
             let index_ent =
                 dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs)?;
 
-            if metadata.is_dir() {
-                if (cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system {
-                    work_list.push((ent_path.clone(), metadata));
-                }
+            if metadata.is_dir() && ((cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system) {
+                work_list.push((ent_path.clone(), metadata));
             }
 
             if ctx.use_stat_cache {
