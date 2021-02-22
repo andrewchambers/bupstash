@@ -108,15 +108,15 @@ Default tags can be overidden manually by simply specifying them.
   Disable compression of data chunks, generally should only be used
   if the input data is uncompressible and you wish to increase throughput.
 
+* --same-mount:
+  Do not traverse mount points in the file system.
+
 * --xattrs:
   Save directory entry xattrs, only used when saving a directory.
 
 * -q, --quiet:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
-
-* --one-file-system:
-  Do not cross mount points in the file system.
 
 ## ENVIRONMENT
 

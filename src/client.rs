@@ -141,6 +141,7 @@ pub struct SendContext {
     pub checkpoint_bytes: u64,
     pub want_xattrs: bool,
     pub use_stat_cache: bool,
+    pub same_mount: bool,
 }
 
 pub enum DataSource {
@@ -163,7 +164,6 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: &mut DataSource,
-    onefs: bool,
 ) -> Result<Xid, anyhow::Error> {
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
@@ -273,7 +273,7 @@ pub fn send(
                         send_log_session: &send_log_session,
                     };
 
-                    send_dir(ctx, &mut st, &base, paths, &exclusions, onefs)
+                    send_dir(ctx, &mut st, &base, paths, &exclusions)
                 };
 
                 match send_result {
@@ -638,7 +638,6 @@ fn send_dir(
     base: &std::path::PathBuf,
     paths: &[std::path::PathBuf],
     exclusions: &[glob::Pattern],
-    onefs: bool,
 ) -> Result<(), SendDirError> {
     let mut data_ectx = ctx.data_ectx.clone();
     let mut idx_ectx = ctx.idx_ectx.clone();
@@ -674,35 +673,35 @@ fn send_dir(
 
     let mut initial_paths = std::collections::HashSet::new();
     for p in paths {
-        work_list.push(p.clone());
+        work_list.push((p.clone(), smear_try!(std::fs::metadata(&p))));
         if p != base {
             initial_paths.insert(p.clone());
         }
     }
 
-    while let Some(cur_dir) = work_list.pop() {
+    while let Some((cur_dir, cur_dir_md)) = work_list.pop() {
         ctx.progress.set_message(&cur_dir.to_string_lossy());
+
+        if !cur_dir_md.is_dir() {
+            return Err(SendDirError::Other(anyhow::format_err!(
+                "{} is not a directory",
+                cur_dir.display()
+            )));
+        }
 
         // These inital paths do not have a parent who will add an index entry
         // for them, so we add before we process the dir contents.
         if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
             initial_paths.remove(&cur_dir);
 
-            let metadata = smear_try!(std::fs::metadata(&base));
-
-            if !metadata.is_dir() {
-                return Err(SendDirError::Other(anyhow::format_err!(
-                    "{} is not a directory",
-                    cur_dir.display()
-                )));
-            }
             let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
             let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(
-                &base,
+                &cur_dir,
                 &index_path,
-                &metadata,
+                &cur_dir_md,
                 ctx.want_xattrs,
             )?);
+
             send_chunks(
                 ctx,
                 st.sink,
@@ -723,7 +722,7 @@ fn send_dir(
         // Null byte marks the end of path in the hash space.
         hash_state.update(&[0]);
 
-        let mut dir_ents = smear_try!(fsutil::read_dirents(&cur_dir, onefs));
+        let mut dir_ents = smear_try!(fsutil::read_dirents(&cur_dir));
 
         // XXX sorting by extension or reverse filename might give better compression.
         dir_ents.sort_by_key(|a| a.file_name());
@@ -751,12 +750,15 @@ fn send_dir(
                 dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs)?;
 
             if metadata.is_dir() {
-                work_list.push(ent_path.clone());
+                if (cur_dir_md.dev() == metadata.dev()) || !ctx.same_mount {
+                    work_list.push((ent_path.clone(), metadata));
+                }
             }
 
             if ctx.use_stat_cache {
                 hash_state.update(&serde_bare::to_vec(&index_ent).unwrap());
             }
+
             index_ents.push((ent_path, index_ent));
         }
 

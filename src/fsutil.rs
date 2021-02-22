@@ -4,7 +4,6 @@ use fs2::FileExt;
 use path_clean::PathClean;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub struct FileLock {
@@ -94,22 +93,10 @@ where
     Ok(absolute_path)
 }
 
-pub fn read_dirents(path: &Path, onefs: bool) -> std::io::Result<Vec<std::fs::DirEntry>> {
+pub fn read_dirents(path: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     let mut dir_ents = Vec::new();
-
-    if onefs {
-        let dev = fs::metadata(&path)?.dev();
-        for entry in std::fs::read_dir(&path)? {
-            let p = &entry.as_ref().unwrap().path();
-            if p.is_dir() && fs::metadata(p)?.dev() != dev {
-                continue;
-            }
-            dir_ents.push(entry?);
-        }
-    } else {
-        for entry in std::fs::read_dir(&path)? {
-            dir_ents.push(entry?);
-        }
+    for entry in std::fs::read_dir(&path)? {
+        dir_ents.push(entry?);
     }
     Ok(dir_ents)
 }

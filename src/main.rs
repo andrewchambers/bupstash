@@ -676,8 +676,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     opts.optflag(
         "",
-        "one-file-system",
-        "Do not cross mount points in the file system.",
+        "same-mount",
+        "Do not cross mount points when traversing the file system.",
     );
 
     let matches = parse_cli_opts(opts, &args);
@@ -731,7 +731,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     }
 
-    let onefs = matches.opt_present("one-file-system");
+    let same_mount = matches.opt_present("same-mount");
 
     let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
         Ok(v) => match v.parse() {
@@ -948,6 +948,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         idx_hash_key,
         idx_ectx,
         want_xattrs,
+        same_mount,
     };
 
     client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
@@ -958,7 +959,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         send_log,
         tags,
         &mut data_source,
-        onefs,
     )?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
