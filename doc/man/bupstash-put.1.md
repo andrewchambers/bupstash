@@ -108,7 +108,7 @@ Default tags can be overidden manually by simply specifying them.
   Disable compression of data chunks, generally should only be used
   if the input data is uncompressible and you wish to increase throughput.
 
-* --same-mount:
+* --one-file-system:
   Do not traverse mount points in the file system.
 
 * --xattrs:

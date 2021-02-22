@@ -141,7 +141,7 @@ pub struct SendContext {
     pub checkpoint_bytes: u64,
     pub want_xattrs: bool,
     pub use_stat_cache: bool,
-    pub same_mount: bool,
+    pub one_file_system: bool,
 }
 
 pub enum DataSource {
@@ -750,7 +750,7 @@ fn send_dir(
                 dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs)?;
 
             if metadata.is_dir() {
-                if (cur_dir_md.dev() == metadata.dev()) || !ctx.same_mount {
+                if (cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system {
                     work_list.push((ent_path.clone(), metadata));
                 }
             }
