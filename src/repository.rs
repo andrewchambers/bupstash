@@ -507,6 +507,10 @@ impl Repo {
 
         update_progress_msg("removing temporary files...".to_string())?;
 
+        // We could use an LRU for the walked set to save memory in large repositories.
+        let mut walked = std::collections::HashSet::<Address>::with_capacity(65535);
+        // In the future we can use a probabilistic data structure
+        // for the reachable set to trade memory for precision.
         let mut reachable = std::collections::HashSet::<Address>::with_capacity(65535);
 
         let mut walk_item = |_op_id, _item_id, metadata| match metadata {
@@ -532,7 +536,8 @@ impl Repo {
                         &tree.address,
                     );
                     while let Some((height, addr)) = tr.next_addr() {
-                        if reachable.insert(addr) && height != 0 {
+                        reachable.insert(addr);
+                        if height != 0 && walked.insert(addr) {
                             let data = storage_engine.get_chunk(&addr)?;
                             let data = compression::unauthenticated_decompress(data)?;
                             tr.push_level(height - 1, data)?;
