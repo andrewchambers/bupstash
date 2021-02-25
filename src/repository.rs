@@ -507,10 +507,7 @@ impl Repo {
 
         update_progress_msg("removing temporary files...".to_string())?;
 
-        // We could use an LRU for the walked set to save memory in large repositories.
         let mut walked = std::collections::HashSet::<Address>::with_capacity(65535);
-        // In the future we can use a probabilistic data structure
-        // for the reachable set to trade memory for precision.
         let mut reachable = std::collections::HashSet::<Address>::with_capacity(65535);
 
         let mut walk_item = |_op_id, _item_id, metadata| match metadata {
