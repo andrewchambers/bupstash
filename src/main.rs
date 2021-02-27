@@ -1,4 +1,6 @@
+pub mod abloom;
 pub mod address;
+pub mod awcache;
 pub mod base64;
 pub mod chunk_storage;
 pub mod chunker;

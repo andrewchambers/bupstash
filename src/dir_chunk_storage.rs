@@ -1,3 +1,4 @@
+use super::abloom;
 use super::address::Address;
 use super::chunk_storage::Engine;
 use super::crypto;
@@ -418,10 +419,11 @@ impl Engine for DirStorage {
         }
     }
 
-    fn gc(
-        &mut self,
-        reachable: std::collections::HashSet<Address>,
-    ) -> Result<repository::GCStats, anyhow::Error> {
+    fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error> {
+        Ok(std::fs::read_dir(&self.dir_path)?.count().try_into()?)
+    }
+
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error> {
         self.stop_workers();
 
         assert!(self.gc_exclusive_lock.is_some());
@@ -439,17 +441,17 @@ impl Engine for DirStorage {
             let e = e?;
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
                 Ok(addr) => {
-                    if !reachable.contains(&addr) {
+                    if reachable.probably_has(&addr) {
+                        if let Ok(md) = e.metadata() {
+                            bytes_remaining += md.len() as usize
+                        }
+                        chunks_remaining += 1
+                    } else {
                         if let Ok(md) = e.metadata() {
                             bytes_deleted += md.len() as usize
                         }
                         to_remove.push(e.path());
                         chunks_deleted += 1;
-                    } else {
-                        if let Ok(md) = e.metadata() {
-                            bytes_remaining += md.len() as usize
-                        }
-                        chunks_remaining += 1
                     }
                 }
                 Err(_) => {

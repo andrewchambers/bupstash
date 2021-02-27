@@ -1,4 +1,6 @@
+use super::abloom;
 use super::address::*;
+use super::awcache;
 use super::chunk_storage;
 use super::compression;
 use super::dir_chunk_storage;
@@ -43,6 +45,9 @@ pub enum GCStatus {
     Running(Xid),
     Complete(Xid),
 }
+
+const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
+const MAX_GC_BLOOM_SIZE: usize = 1024 * 1024 * 1024;
 
 impl Repo {
     fn repo_db_path(repo_path: &Path) -> PathBuf {
@@ -505,47 +510,64 @@ impl Repo {
         // storage engine confirms it has terminated.
         storage_engine.prepare_for_gc(gc_generation)?;
 
-        update_progress_msg("removing temporary files...".to_string())?;
+        update_progress_msg("walking reachable data...".to_string())?;
 
-        let mut walked = std::collections::HashSet::<Address>::with_capacity(65535);
-        let mut reachable = std::collections::HashSet::<Address>::with_capacity(65535);
+        let estimated_chunk_count = storage_engine.estimate_chunk_count()?;
+        let reachable_bloom_mem_size =
+            abloom::approximate_mem_size_upper_bound(0.02, estimated_chunk_count)
+                .min(MAX_GC_BLOOM_SIZE)
+                .max(MIN_GC_BLOOM_SIZE);
 
-        let mut walk_item = |_op_id, _item_id, metadata| match metadata {
-            itemset::VersionedItemMetadata::V1(metadata) => {
-                // For garbage collection walking in order is not a concern,
-                // we just need to ensure we touch each reachable node.
-                //
-                // Note that we could also do some sort of pipelining or parallel fetch,
-                // when we walk the tree, for now keep it simple.
+        // Set of item ids we have walked before.
+        let mut xid_wset = std::collections::HashSet::with_capacity(65536);
+        // Fixed size cache of addresses we have walked before.
+        let mut address_wcache = awcache::AWCache::new(65536);
+        // Bloom filter used in the sweep phase.
+        let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
-                let data_tree = metadata.plain_text_metadata.data_tree;
+        let mut walk_item = |_op_id, item_id, metadata| {
+            if !xid_wset.insert(item_id) {
+                return Ok(());
+            }
 
-                let trees = if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
-                    vec![data_tree, index_tree]
-                } else {
-                    vec![data_tree]
-                };
+            match metadata {
+                itemset::VersionedItemMetadata::V1(metadata) => {
+                    // For garbage collection walking in order is not a concern,
+                    // we just need to ensure we touch each reachable node.
+                    //
+                    // Note that we could also do some sort of pipelining or parallel fetch,
+                    // when we walk the tree, for now keep it simple.
 
-                for tree in trees {
-                    let mut tr = htree::TreeReader::new(
-                        tree.height.0.try_into()?,
-                        tree.data_chunk_count.0,
-                        &tree.address,
-                    );
-                    while let Some((height, addr)) = tr.next_addr() {
-                        reachable.insert(addr);
-                        if height != 0 && walked.insert(addr) {
-                            let data = storage_engine.get_chunk(&addr)?;
-                            let data = compression::unauthenticated_decompress(data)?;
-                            tr.push_level(height - 1, data)?;
+                    let data_tree = metadata.plain_text_metadata.data_tree;
+
+                    let trees = if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
+                        vec![data_tree, index_tree]
+                    } else {
+                        vec![data_tree]
+                    };
+
+                    for tree in trees {
+                        let mut tr = htree::TreeReader::new(
+                            tree.height.0.try_into()?,
+                            tree.data_chunk_count.0,
+                            &tree.address,
+                        );
+
+                        while let Some((height, addr)) = tr.next_addr() {
+                            reachable.add(&addr);
+
+                            if height != 0 && address_wcache.add(&addr) {
+                                let data = storage_engine.get_chunk(&addr)?;
+                                let data = compression::unauthenticated_decompress(data)?;
+                                tr.push_level(height - 1, data)?;
+                            }
                         }
                     }
+                    Ok(())
                 }
-                Ok(())
             }
         };
 
-        update_progress_msg("walking reachable data...".to_string())?;
         // Walk all reachable data WITHOUT marking the repository as
         // gc_dirty, we should be able to walk most of the data except data
         // that arrives between the end of this walk and us marking
@@ -610,10 +632,40 @@ impl Repo {
             tx.commit()?;
         }
 
+        if std::env::var("BUPSTASH_DEBUG_GC").is_ok() {
+            eprintln!("dbg_gc_estimated_chunk_count={}", estimated_chunk_count);
+            eprintln!("dbg_gc_reachable_bloom_size={}", reachable.mem_size());
+            eprintln!(
+                "dbg_gc_reachable_bloom_utilization={}",
+                reachable.estimate_utilization()
+            );
+            eprintln!(
+                "dbg_gc_reachable_bloom_estimated_false_positive_rate={}",
+                reachable.estimate_false_positive_rate()
+            );
+            eprintln!(
+                "dbg_gc_reachable_bloom_estimated_add_count={}",
+                reachable.estimate_add_count()
+            );
+            eprintln!("dbg_gc_xid_walk_set_size={}", xid_wset.len(),);
+            eprintln!(
+                "dbg_gc_address_walk_cache_hit_count={}/{}",
+                address_wcache.hit_count, address_wcache.add_count
+            );
+            eprintln!(
+                "dbg_gc_address_walk_cache_utilization={}",
+                address_wcache.utilization()
+            );
+        }
+
+        // Drop the caches, we no longer need to free this memory for the storage engine.
+        std::mem::drop(xid_wset);
+        std::mem::drop(address_wcache);
+
         update_progress_msg("deleting unused chunks...".to_string())?;
         let stats = self.storage_engine.gc(reachable)?;
 
-        // We are now done and can stop mark the gc as complete.
+        // We are now done and can stop, mark the gc as complete.
         conn.execute(
             "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
             rusqlite::params![&gc_generation],

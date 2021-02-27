@@ -1,3 +1,4 @@
+use super::crypto;
 use super::hex;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -17,6 +18,12 @@ impl fmt::Display for Address {
 }
 
 impl Address {
+    pub fn random() -> Address {
+        let mut bytes = [0; ADDRESS_SZ];
+        crypto::randombytes(&mut bytes);
+        Address { bytes }
+    }
+
     pub fn from_bytes(bytes: &[u8; 32]) -> Address {
         Address { bytes: *bytes }
     }
