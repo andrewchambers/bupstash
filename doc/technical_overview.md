@@ -65,14 +65,6 @@ When converting a filesystem to a data stream and index, we can cache the hashes
 file/directory based on stat information, allowing us to skip the expensive compression and encryption step.
 This cache information is stored in the send log.
 
-## Repository locking
-
-- Read operations do not lock the repository.
-- Write operations get a shared lock on the repository.
-- Garbage collection operations get a shared lock for most of the mark phase,
-  and an exclusive lock on the repository for the final parts of the mark phase,
-  and also the sweep phase.
-
 ## Repository Garbage collection
 
 - Garbage collection is a partially concurrent mark and sweep collector.
