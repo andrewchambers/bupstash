@@ -1,3 +1,4 @@
+use super::abloom;
 use super::address::*;
 use super::htree;
 use super::repository;
@@ -20,10 +21,7 @@ pub trait Engine {
     fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
 
     // Remove all chunks not in the reachable set.
-    fn gc(
-        &mut self,
-        reachable: std::collections::HashSet<Address>,
-    ) -> Result<repository::GCStats, anyhow::Error>;
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error>;
 
     // Check that a previous invocation of gc has finished.
     fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;
@@ -38,6 +36,11 @@ pub trait Engine {
     // in stable storage after a call to sync has returned. A backend
     // can use this to implement concurrent background writes.
     fn sync(&mut self) -> Result<(), anyhow::Error>;
+
+    // Estimate how many chunks we have stored, the implementation is free to
+    // make a rough guess to increase performance. One trick is sampling
+    // a single address prefix.
+    fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error>;
 }
 
 impl htree::Sink for Box<dyn Engine> {

@@ -1,3 +1,4 @@
+use super::abloom;
 use super::address::Address;
 use super::chunk_storage::Engine;
 use super::protocol;
@@ -15,7 +16,7 @@ impl ExternalStorage {
         protocol::write_packet(
             &mut sock,
             &protocol::Packet::StorageConnect(protocol::StorageConnect {
-                protocol: "s-2".to_string(),
+                protocol: "s-3".to_string(),
                 path: path.to_string(),
             }),
         )?;
@@ -81,19 +82,18 @@ impl Engine for ExternalStorage {
         Ok(())
     }
 
-    fn gc(
-        &mut self,
-        mut reachable: std::collections::HashSet<Address>,
-    ) -> Result<repository::GCStats, anyhow::Error> {
-        let reachable: Vec<Address> = reachable.drain().collect();
-
-        protocol::write_packet(&mut self.sock, &protocol::Packet::StorageBeginGC)?;
-
-        for chunk in reachable.chunks(65535) {
-            protocol::write_storage_reachable(&mut self.sock, chunk)?;
+    fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error> {
+        protocol::write_packet(&mut self.sock, &protocol::Packet::TStorageEstimateCount)?;
+        match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+            Ok(protocol::Packet::RStorageEstimateCount(v)) => Ok(v.count.0),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForGC"),
+            Err(err) => Err(err),
         }
-        protocol::write_storage_reachable(&mut self.sock, &[])?;
+    }
 
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error> {
+        protocol::write_begin_gc(&mut self.sock, &reachable)?;
+        std::mem::drop(reachable);
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
             Ok(protocol::Packet::StorageGCComplete(stats)) => {
                 let _ =

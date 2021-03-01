@@ -1,3 +1,4 @@
+use super::abloom;
 use super::address::*;
 use super::index;
 use super::itemset;
@@ -116,6 +117,11 @@ pub struct RRestoreRemoved {
     pub n_restored: serde_bare::Uint,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RStorageEstimateCount {
+    pub count: serde_bare::Uint,
+}
+
 #[non_exhaustive]
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -152,11 +158,12 @@ pub enum Packet {
     StorageConnect(StorageConnect),
     TStoragePrepareForGC(Xid),
     RStoragePrepareForGC,
-    StorageBeginGC,
-    StorageReachable(Vec<Address>),
+    StorageBeginGC(abloom::ABloom),
     StorageGCComplete(repository::GCStats),
     TStorageGCCompleted(Xid),
     RStorageGCCompleted(bool),
+    TStorageEstimateCount,
+    RStorageEstimateCount(RStorageEstimateCount),
     StoragePipelineGetChunks(Vec<Address>),
     EndOfTransmission,
 }
@@ -197,12 +204,13 @@ const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
 const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
 const PACKET_KIND_T_STORAGE_PREPARE_FOR_GC: u8 = 103;
 const PACKET_KIND_R_STORAGE_PREPARE_FOR_GC: u8 = 104;
-const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 105;
-const PACKET_KIND_STORAGE_REACHABLE: u8 = 106;
-const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 107;
-const PACKET_KIND_T_STORAGE_GC_COMPLETED: u8 = 108;
-const PACKET_KIND_R_STORAGE_GC_COMPLETED: u8 = 109;
-const PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS: u8 = 110;
+const PACKET_KIND_T_STORAGE_ESTIMATE_COUNT: u8 = 105;
+const PACKET_KIND_R_STORAGE_ESTIMATE_COUNT: u8 = 106;
+const PACKET_KIND_STORAGE_BEGIN_GC: u8 = 107;
+const PACKET_KIND_STORAGE_GC_COMPLETE: u8 = 108;
+const PACKET_KIND_T_STORAGE_GC_COMPLETED: u8 = 109;
+const PACKET_KIND_R_STORAGE_GC_COMPLETED: u8 = 110;
+const PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS: u8 = 111;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
@@ -320,8 +328,11 @@ pub fn read_packet_raw(
             Packet::TStoragePrepareForGC(serde_bare::from_slice(&buf)?)
         }
         PACKET_KIND_R_STORAGE_PREPARE_FOR_GC => Packet::RStoragePrepareForGC,
-        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC,
-        PACKET_KIND_STORAGE_REACHABLE => Packet::StorageReachable(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_STORAGE_ESTIMATE_COUNT => Packet::TStorageEstimateCount,
+        PACKET_KIND_R_STORAGE_ESTIMATE_COUNT => {
+            Packet::RStorageEstimateCount(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(abloom::ABloom::from_bytes(buf)),
         PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_GC_COMPLETED => {
             Packet::TStorageGCCompleted(serde_bare::from_slice(&buf)?)
@@ -398,18 +409,13 @@ pub fn write_storage_pipelined_get_chunks(
     Ok(())
 }
 
-pub fn write_storage_reachable(
+pub fn write_begin_gc(
     w: &mut dyn std::io::Write,
-    addresses: &[Address],
+    bloom: &abloom::ABloom,
 ) -> Result<(), anyhow::Error> {
-    unsafe {
-        assert!(std::mem::size_of::<Address>() == ADDRESS_SZ);
-        let n_bytes = addresses.len() * std::mem::size_of::<Address>();
-        let b = std::slice::from_raw_parts(addresses.as_ptr() as *const u8, n_bytes);
-        send_hdr(w, PACKET_KIND_STORAGE_REACHABLE, b.len().try_into()?)?;
-        write_to_remote(w, &b)?;
-    }
-
+    let b = bloom.borrow_bytes();
+    send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, b.len().try_into()?)?;
+    write_to_remote(w, b)?;
     flush_remote(w)?;
     Ok(())
 }
@@ -556,11 +562,16 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::RStoragePrepareForGC => {
             send_hdr(w, PACKET_KIND_R_STORAGE_PREPARE_FOR_GC, 0)?;
         }
-        Packet::StorageBeginGC => {
-            send_hdr(w, PACKET_KIND_STORAGE_BEGIN_GC, 0)?;
+        Packet::TStorageEstimateCount => {
+            send_hdr(w, PACKET_KIND_T_STORAGE_ESTIMATE_COUNT, 0)?;
         }
-        Packet::StorageReachable(ref v) => {
-            return write_storage_reachable(w, &v);
+        Packet::RStorageEstimateCount(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_ESTIMATE_COUNT, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::StorageBeginGC(ref v) => {
+            return write_begin_gc(w, &v);
         }
         Packet::StorageGCComplete(ref v) => {
             let b = serde_bare::to_vec(&v)?;
