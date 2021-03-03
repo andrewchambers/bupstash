@@ -530,7 +530,7 @@ fn dir_ent_to_index_ent(
 
     let mut xattrs = None;
 
-    if want_xattrs {
+    if want_xattrs && (t.is_file() || t.is_dir()) {
         let attrs = smear_try!(xattr::list(full_path));
 
         for attr in attrs {
