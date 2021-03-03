@@ -924,8 +924,6 @@ fn send_dir(
                             &serde_bare::to_vec(&dir_index_offsets).unwrap(),
                         )?;
                 }
-
-                ctx.progress.inc(total_size);
             }
         }
     }
