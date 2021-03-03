@@ -200,3 +200,9 @@ $ bupstash put ./files
 ## SEE ALSO
 
 bupstash(1), bupstash-keyfiles(7)
+
+## CAVEATS
+
+`bupstash put` employs a simple and robust backup method, but does not account for files being modified
+during upload. Upon modification `bupstash put` will restart sending. Number of restarts is currently fixed
+at 100. If `bupstash put` fails to restart successfully it will present an error.
