@@ -522,7 +522,7 @@ fn dir_ent_to_index_ent(
 
     let t = metadata.file_type();
 
-    let (dev_major, dev_minor) = if t.is_block_device() || t.is_block_device() {
+    let (dev_major, dev_minor) = if t.is_block_device() || t.is_char_device() {
         (dev_major(metadata.rdev()), dev_minor(metadata.rdev()))
     } else {
         (0, 0)
