@@ -59,6 +59,22 @@ $ bupstash put --send-log /root/bupstash-backups.sendlog /home/
 $ bupstash put --send-log /root/bupstash-backups.sendlog /home/
 ```
 
+### Concurrent filesystem modification
+
+Bupstash supports uploading a filesystem that is concurrently being modified with
+the caveat that bupstash cannot guarantee the filesystem is in a consistent state. If bupstash
+is reading a file or directory while it is concurrently being modified by an application, it may
+be the case the bupstash snapshot contains data from multiple points in time with the combination
+being invalid corrupt.
+
+The only sure way to ensure data consistency is to use in a filesystem with snapshot capabilities.
+Using filesystem snapshots you can create a consistent filesystem view and then perform a bupstash 
+backup on that snapshot. On linux some options for performing consistent
+snapshots include ZFS, BTRFS and also LVM snapshots 
+
+Another choice is to perform a put operation at a time when the files are less likely to be modified,
+this will provide backups that are good enough for many people without extra complications.
+
 ### Default tags
 
 `bupstash` automatically sets default tags.
