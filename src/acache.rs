@@ -1,23 +1,23 @@
 use super::address::*;
 use std::convert::TryInto;
 
-// AWCache is the 'address walk cache' designed to let bupstash
-// efficiently skip data during garbage collection while also
+// ACache is the 'address cache' designed to let bupstash
+// efficiently skip operations on addresses while also
 // keeping a bound on memory use.
 //
 // The current implementation is a direct mapped cache. On hash collision
 // a value simply evicts the existing value. We could use something fancier like an lru,
 // but we need benchmarks to show it improves anything over such a simple implementaion.
 
-pub struct AWCache {
+pub struct ACache {
     dm_cache_ents: Vec<Address>,
     pub add_count: u64,
     pub hit_count: u64,
 }
 
-impl AWCache {
-    pub fn new(cache_ents: usize) -> AWCache {
-        AWCache {
+impl ACache {
+    pub fn new(cache_ents: usize) -> ACache {
+        ACache {
             dm_cache_ents: vec![Address::from_bytes(&[0; ADDRESS_SZ]); cache_ents],
             add_count: 0,
             hit_count: 0,
@@ -60,7 +60,7 @@ mod tests {
     fn test_awcache() {
         crypto::init();
 
-        let mut cache = AWCache::new(4 * 1024);
+        let mut cache = ACache::new(4 * 1024);
 
         let addresses: Vec<Address> = (0..1000).map(|_| Address::random()).collect();
 

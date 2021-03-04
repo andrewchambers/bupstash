@@ -1,6 +1,6 @@
 use super::abloom;
 use super::address::*;
-use super::awcache;
+use super::acache;
 use super::chunk_storage;
 use super::compression;
 use super::dir_chunk_storage;
@@ -521,7 +521,7 @@ impl Repo {
         // Set of item ids we have walked before.
         let mut xid_wset = std::collections::HashSet::with_capacity(65536);
         // Fixed size cache of addresses we have walked before.
-        let mut address_wcache = awcache::AWCache::new(65536);
+        let mut address_wcache = acache::ACache::new(65536);
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
