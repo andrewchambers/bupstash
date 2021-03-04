@@ -39,7 +39,7 @@ glob = "0.3"
 chrono = { version = "0.4", features = ["serde"]}
 cfg-if = "0.1"
 shlex = "0.1"
-nix = "0.17"
+nix = "0.20"
 indicatif = "0.15"
 rangemap = "0.1.7"
 blake3 = "0.3"

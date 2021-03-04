@@ -1,5 +1,5 @@
-bupstash put [OPTIONS] TAGS... DIR
 bupstash put [OPTIONS] TAGS... FILE
+bupstash put [OPTIONS] TAGS... DIRS...
 bupstash put -e [OPTIONS] TAGS... CMD...
 
 `bupstash put` encrypts a file, directory, or command output and stores it
