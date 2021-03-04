@@ -441,6 +441,11 @@ _concurrent_modify_worker () {
     echo c >> $SCRATCH/t/c$2
     echo e >> $SCRATCH/t/d$2/e$2
 
+    echo "" > $SCRATCH/t/a$2
+    echo "" > $SCRATCH/t/b$2
+    echo "" > $SCRATCH/t/c$2
+    echo "" > $SCRATCH/t/d$2/e$2
+
     rm $SCRATCH/t/a$2
     rm $SCRATCH/t/b$2
     rm $SCRATCH/t/c$2
