@@ -1,3 +1,4 @@
+use super::acache;
 use super::address::*;
 use super::chunker;
 use super::compression;
@@ -85,6 +86,7 @@ struct ConnectionHtreeSink<'a, 'b> {
     checkpoint_bytes: u64,
     dirty_bytes: u64,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
+    acache: acache::ACache,
     r: &'a mut dyn std::io::Read,
     w: &'a mut dyn std::io::Write,
 }
@@ -95,15 +97,17 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> std::result::Result<(), anyhow::Error> {
+        if !self.acache.add(addr) {
+            return Ok(());
+        }
+
         match self.send_log_session {
             Some(ref send_log_session) => {
                 let mut send_log_session = send_log_session.borrow_mut();
-                if send_log_session.cached_address(addr)? {
-                    send_log_session.add_address(addr)?;
-                } else {
+
+                if send_log_session.add_address(addr)? {
                     self.dirty_bytes += data.len() as u64;
                     write_chunk(self.w, addr, &data)?;
-                    send_log_session.add_address(addr)?;
                 }
 
                 if self.dirty_bytes >= self.checkpoint_bytes {
@@ -199,6 +203,7 @@ pub fn send(
         checkpoint_bytes: ctx.checkpoint_bytes,
         dirty_bytes: 0,
         send_log_session: &send_log_session,
+        acache: acache::ACache::new(65536),
         w,
         r,
     };

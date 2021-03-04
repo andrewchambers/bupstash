@@ -1,6 +1,6 @@
 use super::abloom;
-use super::address::*;
 use super::acache;
+use super::address::*;
 use super::chunk_storage;
 use super::compression;
 use super::dir_chunk_storage;
