@@ -173,23 +173,37 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn add_address(&self, addr: &Address) -> Result<(), anyhow::Error> {
+    pub fn add_address(&self, addr: &Address) -> Result<bool, anyhow::Error> {
         if !self.tx_active {
             anyhow::bail!("no active transaction");
         };
 
-        // We update and not replace so we can keep an old item id if it exists.
-        let mut stmt = self.log.tmp_conn.prepare_cached(
-            "insert into Sent(GCGeneration, LatestSessionId, Address) values($1, $2, $3) \
-             on conflict(Address) do update set LatestSessionId = $2;",
-        )?;
+        // There does not seem to be a way to do this in a single query due
+        // to the fact that we are using a 'without rowid' table. We can't change this
+        // without upgrading the send logs that are out there.
+        let has_address = self.cached_address(addr)?;
 
-        stmt.execute(rusqlite::params![
-            self.gc_generation,
-            self.session_id,
-            &addr.bytes[..]
-        ])?;
-        Ok(())
+        if has_address {
+            let mut stmt = self.log.tmp_conn.prepare_cached(
+                "update Sent set LatestSessionId = $2 where GCGeneration = $1 and Address = $3;",
+            )?;
+            stmt.execute(rusqlite::params![
+                self.gc_generation,
+                self.session_id,
+                &addr.bytes[..]
+            ])?;
+        } else {
+            let mut stmt = self.log.tmp_conn.prepare_cached(
+                "insert into Sent(GCGeneration, LatestSessionId, Address) values($1, $2, $3);",
+            )?;
+            stmt.execute(rusqlite::params![
+                self.gc_generation,
+                self.session_id,
+                &addr.bytes[..]
+            ])?;
+        }
+
+        Ok(!has_address)
     }
 
     pub fn cached_address(&self, addr: &Address) -> Result<bool, anyhow::Error> {
@@ -233,16 +247,6 @@ impl<'a> SendLogSession<'a> {
             size as i64
         ])?;
 
-        // It's unclear if something like the following is worth doing:
-        //
-        // let mut addr = Address::default();
-        // for bytes in addresses.chunks(ADDRESS_SZ) {
-        //    addr.bytes[..].clone_from_slice(bytes);
-        // }
-        // self.add_address(&addr)?;
-        //
-        // We know the server has these addresses, but the higher level
-        // stat cache already skips sending them.
         Ok(())
     }
 
