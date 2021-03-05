@@ -283,8 +283,10 @@ impl DirStorage {
     }
 
     pub fn new(dir_path: &std::path::Path) -> Result<Self, anyhow::Error> {
-        if !dir_path.exists() {
-            std::fs::DirBuilder::new().create(dir_path)?;
+        match std::fs::DirBuilder::new().create(dir_path) {
+            Ok(_) => (),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(err) => return Err(err.into()),
         }
 
         let file_rlimit = {
