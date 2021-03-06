@@ -421,6 +421,16 @@ cfg_if::cfg_if! {
              ((dev      ) & 0x0000_00ff)) as u32
         }
 
+    } else if #[cfg(target_os = "openbsd")] {
+
+        fn dev_major(dev: u64) -> u32 {
+            ((dev >> 8) & 0x0000_00ff) as u32
+        }
+
+        fn dev_minor(dev: u64) -> u32 {
+            ((dev & 0x0000_00ff) | ((dev & 0xffff_0000) >> 8)) as u32
+        }
+
     } else {
 
         fn dev_major(_dev: u64) -> u32 {
