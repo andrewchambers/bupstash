@@ -16,6 +16,7 @@ use super::xid::*;
 use super::xtar;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
+use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
@@ -541,10 +542,22 @@ cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
 
         fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
+            // Try with O_NOATIME first; if it fails, e.g. because the user we
+            // run as is not the file owner, retry without. See #106.
             let f = std::fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOATIME)
-                .open(fpath)?;
+                .open(fpath)
+                .or_else(|error| {
+                    match error.kind() {
+                        ErrorKind::PermissionDenied => {
+                            std::fs::OpenOptions::new()
+                                .read(true)
+                                .open(fpath)
+                        }
+                        _ => Err(error)
+                    }
+                })?;
 
             // For linux at least, shift file pages to the tail of the page cache, allowing
             // the kernel to quickly evict these pages. This works well for the case of system
