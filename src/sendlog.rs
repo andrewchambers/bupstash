@@ -1,5 +1,7 @@
 use super::address::*;
+use super::index;
 use super::xid::*;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub struct SendLog {
@@ -19,6 +21,16 @@ pub struct SendLogSession<'a> {
     log: &'a mut SendLog,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct StatCacheEntry {
+    pub total_size: u64,
+    pub addresses: Vec<Address>,
+    pub base_offsets: Vec<index::IndexEntryOffsets>,
+    pub hashes: Vec<index::ContentCryptoHash>,
+}
+
+const SCHEMA_VERSION: i64 = 4;
+
 impl SendLog {
     pub fn open(p: &PathBuf) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
@@ -27,11 +39,11 @@ impl SendLog {
 
         let tx = db_conn.transaction()?;
         tx.execute(
-            "create table if not exists LogMeta(Key primary key, Value) without rowid; ",
+            "create table if not exists LogMeta(Key primary key, Value) without rowid;",
             rusqlite::NO_PARAMS,
         )?;
 
-        match tx.query_row(
+        let needs_init = match tx.query_row(
             "select Value from LogMeta where Key = 'schema-version';",
             rusqlite::NO_PARAMS,
             |r| {
@@ -39,19 +51,10 @@ impl SendLog {
                 Ok(v)
             },
         ) {
-            Ok(v) => {
-                if v != 2 {
-                    anyhow::bail!("send log at {:?} is from a different version of the software and must be removed manually", &p);
-                }
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                tx.execute(
-                    "insert into LogMeta(Key, Value) values('schema-version', 2);",
-                    rusqlite::NO_PARAMS,
-                )?;
-            }
+            Ok(v) => v != SCHEMA_VERSION,
+            Err(rusqlite::Error::QueryReturnedNoRows) => true,
             Err(err) => return Err(err.into()),
-        }
+        };
 
         let sequence_number = match tx.query_row(
             "select Value from LogMeta where Key = 'sequence-number';",
@@ -75,16 +78,6 @@ impl SendLog {
             Err(err) => return Err(err.into()),
         };
 
-        tx.execute(
-            "create table if not exists Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid; ",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        tx.execute(
-            "create table if not exists StatCache(Hash primary key, Addresses, IndexOffsets, Size, GCGeneration, LatestSessionId, ItemId) without rowid; ",
-            rusqlite::NO_PARAMS,
-        )?;
-
         tx.commit()?;
 
         /* Simple policy to decide when to defragment our send log. */
@@ -97,8 +90,37 @@ impl SendLog {
         // tmp conn does not need fsync, it disappears on os crash.
         tmp_conn.execute("pragma synchronous = OFF;", rusqlite::NO_PARAMS)?;
 
-        // Copy the persistent send log to the anonymous one.
-        {
+        if needs_init {
+            let tx = tmp_conn.transaction()?;
+
+            tx.execute(
+                "create table LogMeta(Key primary key, Value) without rowid;",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.execute(
+                "insert into LogMeta(Key, Value) values('schema-version', $1);",
+                &[&SCHEMA_VERSION],
+            )?;
+
+            tx.execute(
+                "insert into LogMeta(Key, Value) values('sequence-number', 1);",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.execute(
+                "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.execute(
+                "create table StatCache(Hash primary key, Cached, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.commit()?;
+        } else {
+            // Copy the persistent send log to the anonymous one.
             let backup = rusqlite::backup::Backup::new(&db_conn, &mut tmp_conn)?;
             if backup.step(-1)? != rusqlite::backup::StepResult::Done {
                 anyhow::bail!("unable to start send log transaction");
@@ -224,9 +246,7 @@ impl<'a> SendLogSession<'a> {
     pub fn add_stat_cache_data(
         &self,
         hash: &[u8],
-        size: u64,
-        addresses: &[u8],
-        index_offsets: &[u8],
+        data: &StatCacheEntry,
     ) -> Result<(), anyhow::Error> {
         if !self.tx_active {
             anyhow::bail!("no active transaction");
@@ -234,7 +254,7 @@ impl<'a> SendLogSession<'a> {
 
         // We update and not replace so we can keep an old item id if it exists.
         let mut stmt = self.log.tmp_conn.prepare_cached(
-            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Addresses, IndexOffsets, Size) Values($1, $2, $3, $4, $5, $6) \
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Cached) Values($1, $2, $3, $4) \
             on conflict(Hash) do update set LatestSessionId = $2;"
         )?;
 
@@ -242,30 +262,23 @@ impl<'a> SendLogSession<'a> {
             self.gc_generation,
             self.session_id,
             hash,
-            addresses,
-            index_offsets,
-            size as i64
+            serde_bare::to_vec(data)?,
         ])?;
 
         Ok(())
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn stat_cache_lookup(
-        &self,
-        hash: &[u8],
-    ) -> Result<Option<(u64, Vec<u8>, Vec<u8>)>, anyhow::Error> {
-        let mut stmt = self.log.tmp_conn.prepare_cached(
-            "select Size, Addresses, IndexOffsets from StatCache where Hash = $1;",
-        )?;
+    pub fn stat_cache_lookup(&self, hash: &[u8]) -> Result<Option<StatCacheEntry>, anyhow::Error> {
+        let mut stmt = self
+            .log
+            .tmp_conn
+            .prepare_cached("select Cached from StatCache where Hash = $1;")?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
-            let sz: i64 = r.get(0)?;
-            let addrs: Vec<u8> = r.get(1)?;
-            let index: Vec<u8> = r.get(2)?;
-            Ok((sz as u64, addrs, index))
+            let data: Vec<u8> = r.get(0)?;
+            Ok(data)
         }) {
-            Ok(cached) => Ok(Some(cached)),
+            Ok(cached) => Ok(Some(serde_bare::from_slice(&cached)?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(err) => Err(err.into()),
         }
@@ -377,7 +390,17 @@ mod tests {
             assert!(!session.cached_address(&addr).unwrap());
             assert!(!session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.add_address(&addr).unwrap();
-            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
+            session
+                .add_stat_cache_data(
+                    &[32; 0],
+                    &StatCacheEntry {
+                        total_size: 123,
+                        addresses: vec![],
+                        base_offsets: vec![],
+                        hashes: vec![],
+                    },
+                )
+                .unwrap();
             assert!(session.cached_address(&addr).unwrap());
             assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
             session.commit(&id).unwrap();
@@ -435,7 +458,17 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
+            session
+                .add_stat_cache_data(
+                    &[32; 0],
+                    &StatCacheEntry {
+                        total_size: 123,
+                        addresses: vec![],
+                        base_offsets: vec![],
+                        hashes: vec![],
+                    },
+                )
+                .unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);
@@ -490,7 +523,17 @@ mod tests {
         {
             let session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
+            session
+                .add_stat_cache_data(
+                    &[32; 0],
+                    &StatCacheEntry {
+                        total_size: 123,
+                        addresses: vec![],
+                        base_offsets: vec![],
+                        hashes: vec![],
+                    },
+                )
+                .unwrap();
             session.commit(&id).unwrap();
         }
         drop(sendlog);
@@ -500,7 +543,17 @@ mod tests {
         {
             let mut session = sendlog.session(gc_generation).unwrap();
             session.add_address(&addr).unwrap();
-            session.add_stat_cache_data(&[32; 0], 0, &[], &[]).unwrap();
+            session
+                .add_stat_cache_data(
+                    &[32; 0],
+                    &StatCacheEntry {
+                        total_size: 123,
+                        addresses: vec![],
+                        base_offsets: vec![],
+                        hashes: vec![],
+                    },
+                )
+                .unwrap();
             session.checkpoint().unwrap();
         }
         drop(sendlog);
