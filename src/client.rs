@@ -526,6 +526,7 @@ fn dir_ent_to_index_ent(
             data_chunk_offset: serde_bare::Uint(0),
             data_chunk_end_offset: serde_bare::Uint(0),
         },
+        content: index::ContentCryptoHash::None, // Added later.
     })
 }
 
@@ -538,10 +539,41 @@ struct SendDirState<'a, 'b> {
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
 }
 
+// Read a file while also blake3 hashing any data.
+struct TeeHashFileReader {
+    f: std::fs::File,
+    h: blake3::Hasher,
+}
+
+impl TeeHashFileReader {
+    fn new(f: std::fs::File) -> Self {
+        TeeHashFileReader {
+            f,
+            h: blake3::Hasher::new(),
+        }
+    }
+
+    fn finalize(self) -> [u8; 32] {
+        self.h.finalize().into()
+    }
+}
+
+impl std::io::Read for TeeHashFileReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.f.read(buf) {
+            Ok(n) => {
+                self.h.update(buf);
+                Ok(n)
+            }
+            err => err,
+        }
+    }
+}
+
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
 
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<TeeHashFileReader, std::io::Error> {
             // Try with O_NOATIME first; if it fails, e.g. because the user we
             // run as is not the file owner, retry without. See #106.
             let f = std::fs::OpenOptions::new()
@@ -573,17 +605,17 @@ cfg_if::cfg_if! {
                 Err(err) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("fadvise failed: {}", err))),
             };
 
-            Ok(f)
+            Ok(TeeHashFileReader::new(f))
         }
 
     // XXX More platforms should support NOATIME or at the very least POSIX_FADV_NOREUSE
     } else {
 
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<TeeHashFileReader, std::io::Error> {
             let f = std::fs::OpenOptions::new()
                 .read(true)
                 .open(fpath)?;
-            Ok(f)
+            Ok(TeeHashFileReader::new(f))
         }
     }
 }
@@ -603,7 +635,7 @@ fn send_dir(
         if !metadata.is_dir() {
             anyhow::bail!("{} is not a directory", base.display());
         }
-        let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(
+        let ent = index::VersionedIndexEntry::V2(dir_ent_to_index_ent(
             &base,
             &".".into(),
             &metadata,
@@ -621,7 +653,6 @@ fn send_dir(
         )?;
     }
 
-    let mut addresses: Vec<u8> = Vec::new();
     let mut work_list = Vec::new();
 
     let mut initial_paths = std::collections::HashSet::new();
@@ -650,7 +681,7 @@ fn send_dir(
             initial_paths.remove(&cur_dir);
 
             let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-            let ent = index::VersionedIndexEntry::V1(dir_ent_to_index_ent(
+            let ent = index::VersionedIndexEntry::V2(dir_ent_to_index_ent(
                 &cur_dir,
                 &index_path,
                 &cur_dir_md,
@@ -669,7 +700,6 @@ fn send_dir(
             )?;
         }
 
-        addresses.clear();
         let mut hash_state = crypto::HashState::new(Some(&ctx.idx_hash_key));
 
         // Incorporate the absolute dir in our cache key.
@@ -679,7 +709,7 @@ fn send_dir(
 
         let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
             Ok(dir_ents) => dir_ents,
-            // If the directory was from under us, treat it as empty.
+            // If the directory was deleted from under us, treat it as empty.
             Err(err) if likely_smear_error(&err) => vec![],
             Err(err) => return Err(err.into()),
         };
@@ -700,7 +730,7 @@ fn send_dir(
 
             let metadata = match entry.metadata() {
                 Ok(metadata) => metadata,
-                // If the directory was from under us, treat it as if it was excluded.
+                // If the entry was deleted from under us, treat it as if it was excluded.
                 Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
                 Err(err) => return Err(err.into()),
             };
@@ -745,27 +775,20 @@ fn send_dir(
         };
 
         match cache_lookup {
-            Some((total_size, cached_addresses, cached_index_offsets_buf)) => {
-                debug_assert!(cached_addresses.len() % ADDRESS_SZ == 0);
-
+            Some(cache_entry) => {
                 let dir_data_chunk_idx = st.tw.data_chunk_count();
 
-                let mut address = Address::default();
-                for cached_address in cached_addresses.chunks(ADDRESS_SZ) {
-                    address.bytes[..].clone_from_slice(cached_address);
-                    st.tw.add_data_addr(st.sink, &address)?;
+                for address in &cache_entry.addresses {
+                    st.tw.add_data_addr(st.sink, address)?;
                 }
-                st.tw.add_stream_size(total_size);
+                st.tw.add_stream_size(cache_entry.total_size);
 
-                let cached_index_offsets: Vec<index::IndexEntryOffsets> =
-                    serde_bare::from_slice(&cached_index_offsets_buf).unwrap();
+                assert!(cache_entry.base_offsets.len() == index_ents.len());
+                assert!(cache_entry.hashes.len() == index_ents.len());
 
-                assert!(index_ents.len() == cached_index_offsets.len());
-
-                for ((_, mut index_ent), base_offsets) in
-                    index_ents.drain(..).zip(cached_index_offsets.iter())
-                {
-                    index_ent.offsets = *base_offsets;
+                for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
+                    index_ent.content = cache_entry.hashes[i];
+                    index_ent.offsets = cache_entry.base_offsets[i];
                     index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
                     index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
                     send_chunks(
@@ -776,7 +799,7 @@ fn send_dir(
                         st.idx_chunker,
                         st.idx_tw,
                         &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_ent))
+                            &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
                                 .unwrap(),
                         ),
                         None,
@@ -788,26 +811,31 @@ fn send_dir(
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .add_stat_cache_data(
-                        &hash[..],
-                        total_size,
-                        &addresses,
-                        &cached_index_offsets_buf,
-                    )?;
+                    .add_stat_cache_data(&hash[..], &cache_entry)?;
 
-                ctx.progress.inc(total_size);
+                ctx.progress.inc(cache_entry.total_size);
             }
             None => {
                 let mut total_size: u64 = 0;
+                let mut addresses = Vec::new();
 
-                let mut on_chunk = |addr: &Address| {
-                    if ctx.use_stat_cache {
-                        addresses.extend_from_slice(&addr.bytes[..]);
-                    }
+                let cache_vec_capacity = if ctx.use_stat_cache {
+                    index_ents.len()
+                } else {
+                    0
                 };
 
                 let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
-                    Vec::with_capacity(index_ents.len());
+                    Vec::with_capacity(cache_vec_capacity);
+
+                let mut content_hashes: Vec<index::ContentCryptoHash> =
+                    Vec::with_capacity(cache_vec_capacity);
+
+                let mut on_chunk = |addr: &Address| {
+                    if ctx.use_stat_cache {
+                        addresses.push(*addr);
+                    }
+                };
 
                 let dir_data_chunk_idx = st.tw.data_chunk_count();
 
@@ -842,6 +870,7 @@ fn send_dir(
                         // The true size is just what we read from disk. In the case
                         // of snapshotting an modified file we can't guarantee consistency anyway.
                         index_ent.size.0 = file_len;
+                        index_ent.content = index::ContentCryptoHash::Blake3(f.finalize());
                         total_size += file_len as u64;
 
                         ent_data_chunk_end_idx = st.tw.data_chunk_count();
@@ -857,7 +886,10 @@ fn send_dir(
                         data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
                     };
 
-                    dir_index_offsets.push(cur_offsets);
+                    if ctx.use_stat_cache {
+                        dir_index_offsets.push(cur_offsets);
+                        content_hashes.push(index_ent.content)
+                    }
 
                     index_ent.offsets = cur_offsets;
                     index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
@@ -871,7 +903,7 @@ fn send_dir(
                         st.idx_chunker,
                         st.idx_tw,
                         &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&index::VersionedIndexEntry::V1(index_ent))
+                            &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
                                 .unwrap(),
                         ),
                         None,
@@ -897,9 +929,12 @@ fn send_dir(
                         .borrow_mut()
                         .add_stat_cache_data(
                             &hash[..],
-                            total_size,
-                            &addresses,
-                            &serde_bare::to_vec(&dir_index_offsets).unwrap(),
+                            &sendlog::StatCacheEntry {
+                                total_size,
+                                addresses,
+                                base_offsets: dir_index_offsets,
+                                hashes: content_hashes,
+                            },
                         )?;
                 }
             }
