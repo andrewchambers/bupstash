@@ -4,8 +4,11 @@ use std::io::Write;
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VersionedIndexEntry {
-    V1(IndexEntry),
+    V1(V1IndexEntry),
+    V2(IndexEntry),
 }
+
+const CURRENT_INDEX_ENTRY_KIND: u8 = 1;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum IndexEntryKind {
@@ -16,6 +19,31 @@ pub enum IndexEntryKind {
     Block,
     Directory,
     Fifo,
+}
+
+// Deprecated format kept for backwards compatibility.
+// Was deprecated to add support for adding checksums
+// for individual files. This is an important feature
+// for snapshot diffs as well as bandwidth efficient restore.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct V1IndexEntry {
+    pub path: String,
+    pub mode: serde_bare::Uint,
+    pub size: serde_bare::Uint,
+    pub uid: serde_bare::Uint,
+    pub gid: serde_bare::Uint,
+    pub mtime: serde_bare::Uint,
+    pub mtime_nsec: serde_bare::Uint,
+    pub ctime: serde_bare::Uint,
+    pub ctime_nsec: serde_bare::Uint,
+    pub dev: serde_bare::Uint,
+    pub ino: serde_bare::Uint,
+    pub nlink: serde_bare::Uint,
+    pub link_target: Option<String>,
+    pub dev_major: serde_bare::Uint,
+    pub dev_minor: serde_bare::Uint,
+    pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
+    pub offsets: IndexEntryOffsets,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -37,6 +65,33 @@ pub struct IndexEntry {
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
     pub offsets: IndexEntryOffsets,
+    pub content: ContentCryptoHash,
+}
+
+// Migration path from index entry without hash.
+impl From<V1IndexEntry> for IndexEntry {
+    fn from(ent: V1IndexEntry) -> Self {
+        IndexEntry {
+            path: ent.path,
+            mode: ent.mode,
+            size: ent.size,
+            uid: ent.uid,
+            gid: ent.gid,
+            mtime: ent.mtime,
+            mtime_nsec: ent.mtime_nsec,
+            ctime: ent.ctime,
+            ctime_nsec: ent.ctime_nsec,
+            dev: ent.dev,
+            ino: ent.ino,
+            nlink: ent.nlink,
+            link_target: ent.link_target,
+            dev_major: ent.dev_major,
+            dev_minor: ent.dev_minor,
+            xattrs: ent.xattrs,
+            offsets: ent.offsets,
+            content: ContentCryptoHash::None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
@@ -45,6 +100,12 @@ pub struct IndexEntryOffsets {
     pub data_chunk_end_idx: serde_bare::Uint,
     pub data_chunk_offset: serde_bare::Uint,
     pub data_chunk_end_offset: serde_bare::Uint,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum ContentCryptoHash {
+    None,
+    Blake3([u8; 32]),
 }
 
 impl IndexEntry {
@@ -366,7 +427,8 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
 
     fn next(&mut self) -> Option<Result<IndexEntry, anyhow::Error>> {
         match serde_bare::from_reader(&mut self.reader) {
-            Ok(VersionedIndexEntry::V1(ent)) => Some(Ok(ent)),
+            Ok(VersionedIndexEntry::V1(ent)) => Some(Ok(ent.into())),
+            Ok(VersionedIndexEntry::V2(ent)) => Some(Ok(ent)),
             Err(serde_bare::error::Error::Io(err))
                 if err.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
@@ -393,7 +455,7 @@ impl CompressedIndexWriter {
 
     pub fn add(&mut self, ent: &IndexEntry) {
         // Manually write BARE kind so we don't need to copy the ent.
-        self.encoder.write(&[0]).unwrap();
+        self.encoder.write_all(&[CURRENT_INDEX_ENTRY_KIND]).unwrap();
         self.encoder
             .write_all(&serde_bare::to_vec(ent).unwrap())
             .unwrap();
