@@ -1317,15 +1317,32 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             for ent in content_index.iter() {
                 let ent = ent?;
                 write!(out, "{{")?;
-                write!(out, "\"mode\":{},", serde_json::to_string(&ent.mode.0)?)?;
-                write!(out, "\"size\":{},", ent.size.0)?;
-                write!(out, "\"path\":{},", serde_json::to_string(&ent.path)?)?;
-                write!(out, "\"ctime\":{},", serde_json::to_string(&ent.ctime.0)?)?;
+                write!(out, "\"mode\":{}", serde_json::to_string(&ent.mode.0)?)?;
+                write!(out, ",\"size\":{}", ent.size.0)?;
+                write!(out, ",\"path\":{}", serde_json::to_string(&ent.path)?)?;
+                write!(out, ",\"mtime\":{}", serde_json::to_string(&ent.mtime.0)?)?;
                 write!(
                     out,
-                    "\"ctime_nsec\":{}",
+                    ",\"mtime_nsec\":{}",
+                    serde_json::to_string(&ent.mtime_nsec.0)?
+                )?;
+                write!(out, ",\"ctime\":{}", serde_json::to_string(&ent.ctime.0)?)?;
+                write!(
+                    out,
+                    ",\"ctime_nsec\":{}",
                     serde_json::to_string(&ent.ctime_nsec.0)?
                 )?;
+                match ent.content {
+                    index::ContentCryptoHash::None => (),
+                    index::ContentCryptoHash::Blake3(h) => write!(
+                        out,
+                        ",\"content\":{}",
+                        serde_json::to_string(&format!(
+                            "blake3:{}",
+                            hex::easy_encode_to_string(&h)
+                        ))?
+                    )?,
+                }
                 writeln!(out, "}}")?;
             }
         }
