@@ -167,9 +167,8 @@ pub struct PickMap {
 
 pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Error> {
     let mut iter = index.iter();
-    while let Some(versioned_ent) = iter.next() {
-        let versioned_ent = versioned_ent?;
-        let VersionedIndexEntry::V1(ref ent) = versioned_ent;
+    while let Some(ent) = iter.next() {
+        let ent = ent?;
 
         if ent.path != path {
             continue;
@@ -190,17 +189,17 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
                 > = std::collections::HashMap::new();
 
                 let mut sub_index_writer = CompressedIndexWriter::new();
-                sub_index_writer.add(&versioned_ent);
+                sub_index_writer.add(&ent);
 
-                for versioned_ent in iter {
-                    let versioned_ent = versioned_ent?;
-                    let VersionedIndexEntry::V1(ref ent) = versioned_ent;
+                for ent in iter {
+                    let ent = ent?;
+
                     // Match the directory and its children.
                     if !ent.path.starts_with(&prefix) {
                         continue;
                     }
 
-                    sub_index_writer.add(&versioned_ent);
+                    sub_index_writer.add(&ent);
 
                     if ent.size.0 == 0 {
                         continue;
@@ -280,7 +279,7 @@ pub fn pick(path: &str, index: &CompressedIndex) -> Result<PickMap, anyhow::Erro
                 let mut incomplete_data_chunks = std::collections::HashMap::new();
 
                 let mut sub_index_writer = CompressedIndexWriter::new();
-                sub_index_writer.add(&versioned_ent);
+                sub_index_writer.add(&ent);
                 let sub_index = sub_index_writer.finish();
 
                 if ent.size.0 == 0 {
@@ -363,11 +362,11 @@ pub struct CompressedIndexIterator<'a> {
 }
 
 impl<'a> Iterator for CompressedIndexIterator<'a> {
-    type Item = Result<VersionedIndexEntry, anyhow::Error>;
+    type Item = Result<IndexEntry, anyhow::Error>;
 
-    fn next(&mut self) -> Option<Result<VersionedIndexEntry, anyhow::Error>> {
+    fn next(&mut self) -> Option<Result<IndexEntry, anyhow::Error>> {
         match serde_bare::from_reader(&mut self.reader) {
-            Ok(v) => Some(Ok(v)),
+            Ok(VersionedIndexEntry::V1(ent)) => Some(Ok(ent)),
             Err(serde_bare::error::Error::Io(err))
                 if err.kind() == std::io::ErrorKind::UnexpectedEof =>
             {
@@ -392,7 +391,9 @@ impl CompressedIndexWriter {
         }
     }
 
-    pub fn add(&mut self, ent: &VersionedIndexEntry) {
+    pub fn add(&mut self, ent: &IndexEntry) {
+        // Manually write BARE kind so we don't need to copy the ent.
+        self.encoder.write(&[0]).unwrap();
         self.encoder
             .write_all(&serde_bare::to_vec(ent).unwrap())
             .unwrap();
