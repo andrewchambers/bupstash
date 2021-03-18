@@ -1275,68 +1275,58 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         ListFormat::Human => {
             let mut max_size_digits = 0;
             for ent in content_index.iter() {
-                match ent? {
-                    index::VersionedIndexEntry::V1(ent) => {
-                        max_size_digits =
-                            std::cmp::max(ent.size.0.to_string().len(), max_size_digits)
-                    }
-                }
+                let ent = ent?;
+                max_size_digits = std::cmp::max(ent.size.0.to_string().len(), max_size_digits)
             }
 
             for ent in content_index.iter() {
-                match ent? {
-                    index::VersionedIndexEntry::V1(ent) => {
-                        let ts = chrono::NaiveDateTime::from_timestamp(
-                            ent.ctime.0 as i64,
-                            ent.ctime_nsec.0 as u32,
-                        );
-                        let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
+                let ent = ent?;
+                let ts = chrono::NaiveDateTime::from_timestamp(
+                    ent.ctime.0 as i64,
+                    ent.ctime_nsec.0 as u32,
+                );
+                let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
 
-                        let tsfmt = "%Y/%m/%d %T";
+                let tsfmt = "%Y/%m/%d %T";
 
-                        let ts = if utc_timestamps {
-                            ts.format(tsfmt).to_string()
-                        } else {
-                            chrono::DateTime::<chrono::Local>::from(ts)
-                                .format(tsfmt)
-                                .to_string()
-                        };
+                let ts = if utc_timestamps {
+                    ts.format(tsfmt).to_string()
+                } else {
+                    chrono::DateTime::<chrono::Local>::from(ts)
+                        .format(tsfmt)
+                        .to_string()
+                };
 
-                        let size = format!("{}", ent.size.0);
-                        let size_padding: String = std::iter::repeat(' ')
-                            .take(max_size_digits - size.len())
-                            .collect();
+                let size = format!("{}", ent.size.0);
+                let size_padding: String = std::iter::repeat(' ')
+                    .take(max_size_digits - size.len())
+                    .collect();
 
-                        writeln!(
-                            out,
-                            "{} {}{} {} {}",
-                            ent.display_mode(),
-                            size,
-                            size_padding,
-                            ts,
-                            ent.path,
-                        )?;
-                    }
-                }
+                writeln!(
+                    out,
+                    "{} {}{} {} {}",
+                    ent.display_mode(),
+                    size,
+                    size_padding,
+                    ts,
+                    ent.path,
+                )?;
             }
         }
         ListFormat::Jsonl => {
             for ent in content_index.iter() {
-                match ent? {
-                    index::VersionedIndexEntry::V1(ent) => {
-                        write!(out, "{{")?;
-                        write!(out, "\"mode\":{},", serde_json::to_string(&ent.mode.0)?)?;
-                        write!(out, "\"size\":{},", ent.size.0)?;
-                        write!(out, "\"path\":{},", serde_json::to_string(&ent.path)?)?;
-                        write!(out, "\"ctime\":{},", serde_json::to_string(&ent.ctime.0)?)?;
-                        write!(
-                            out,
-                            "\"ctime_nsec\":{}",
-                            serde_json::to_string(&ent.ctime_nsec.0)?
-                        )?;
-                        writeln!(out, "}}")?;
-                    }
-                }
+                let ent = ent?;
+                write!(out, "{{")?;
+                write!(out, "\"mode\":{},", serde_json::to_string(&ent.mode.0)?)?;
+                write!(out, "\"size\":{},", ent.size.0)?;
+                write!(out, "\"path\":{},", serde_json::to_string(&ent.path)?)?;
+                write!(out, "\"ctime\":{},", serde_json::to_string(&ent.ctime.0)?)?;
+                write!(
+                    out,
+                    "\"ctime_nsec\":{}",
+                    serde_json::to_string(&ent.ctime_nsec.0)?
+                )?;
+                writeln!(out, "}}")?;
             }
         }
     }

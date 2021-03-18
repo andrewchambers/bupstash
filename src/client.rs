@@ -1148,43 +1148,40 @@ fn write_index_as_tarball(
         std::collections::HashMap::new();
 
     for ent in index.iter() {
-        match ent? {
-            index::VersionedIndexEntry::V1(ent) => {
-                if matches!(ent.kind(), index::IndexEntryKind::Other) {
-                    // We can't convert this to a tar header, so just discard the
-                    // data and skip it.
-                    copy_n(&mut std::io::sink(), ent.size.0)?;
-                    continue;
-                }
+        let ent = ent?;
+        if matches!(ent.kind(), index::IndexEntryKind::Other) {
+            // We can't convert this to a tar header, so just discard the
+            // data and skip it.
+            copy_n(&mut std::io::sink(), ent.size.0)?;
+            continue;
+        }
 
-                let hardlink = if !ent.is_dir() && ent.nlink.0 > 1 {
-                    let dev_ino = (ent.dev.0, ent.ino.0);
-                    match hardlinks.get(&dev_ino) {
-                        None => {
-                            hardlinks.insert(dev_ino, ent.path.clone());
-                            None
-                        }
-                        l => l,
-                    }
-                } else {
+        let hardlink = if !ent.is_dir() && ent.nlink.0 > 1 {
+            let dev_ino = (ent.dev.0, ent.ino.0);
+            match hardlinks.get(&dev_ino) {
+                None => {
+                    hardlinks.insert(dev_ino, ent.path.clone());
                     None
-                };
-
-                out.write_all(&xtar::index_entry_to_tarheader(&ent, hardlink)?)?;
-
-                if hardlink.is_none() {
-                    copy_n(out, ent.size.0)?;
-                    /* Tar entries are rounded to 512 bytes */
-                    let remaining = 512 - (ent.size.0 % 512);
-                    if remaining < 512 {
-                        let buf = [0; 512];
-                        out.write_all(&buf[..remaining as usize])?;
-                    }
-                } else {
-                    /* Hardlinks are uploaded as normal files, so we just skip the data. */
-                    copy_n(&mut std::io::sink(), ent.size.0)?;
                 }
+                l => l,
             }
+        } else {
+            None
+        };
+
+        out.write_all(&xtar::index_entry_to_tarheader(&ent, hardlink)?)?;
+
+        if hardlink.is_none() {
+            copy_n(out, ent.size.0)?;
+            /* Tar entries are rounded to 512 bytes */
+            let remaining = 512 - (ent.size.0 % 512);
+            if remaining < 512 {
+                let buf = [0; 512];
+                out.write_all(&buf[..remaining as usize])?;
+            }
+        } else {
+            /* Hardlinks are uploaded as normal files, so we just skip the data. */
+            copy_n(&mut std::io::sink(), ent.size.0)?;
         }
     }
 
