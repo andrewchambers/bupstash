@@ -1,36 +1,27 @@
-bupstash-list-contents(1) 
-=========================
+bupstash-diff(1) 
+================
 
 ## SYNOPSIS
 
-List snapshot contents.
+Diff two snapshots printing the summary to stdout.
 
-`bupstash list-contents [OPTIONS] QUERY... `
+`bupstash diff [OPTIONS] QUERY1... :: QUERY2... `
 
 ## DESCRIPTION
 
-`bupstash list-contents` lists the contents of the item matching the given query.
+`bupstash diff` fetches two snapshot listings from the remote server and compares them, printing
+the diff line output to stdout. 
 
-Items created by using `bupstash put` on a directory will have an associated index, other items
-are not listable.
+`bupstash diff` is preferred over running traditional `diff` against the output of `bupstash list-contents`
+because it takes the full precision of timestamps and also the stored file hash into account when performing
+the diff operation.
 
-## OUTPUT FORMATS
+## OUTPUT FORMAT
 
-### Human
+Output is consistent with that of `bupstash list-contents`, except each line is
+prefixed with either `+` or `-` representing removed or added items respectively.
 
-When `--format` is set to `human`, `bupstash list-contents` outputs aligned rows consisting of:
-
-```
-PERMS SIZE YYYY/MM/DD HH:MM:SS PATH...
-```
-
-The included date is the time of the last change to a given file as reported by the
-operating system at the time of the snapshot.
-
-### Jsonl
-
-When `--format` is set to `jsonl`, `bupstash list-contents` outputs one json object per line.
-The output json object format is pending stabilization so is not documented.
+Specifying `--format` alters the underlying output format as described by bupstash-list-contents(1). Lines are still prefixed with either `+` or `-` regardless of the output format.
 
 ## QUERY LANGUAGE
 
@@ -38,7 +29,7 @@ For full documentation on the query language, see bupstash-query-language(7).
 
 ## QUERY CACHING
 
-The list-contents command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The diff command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
@@ -51,20 +42,20 @@ more information on the query cache.
   Key used to decrypt data and metadata. If not set, defaults
   to `BUPSTASH_KEY`.
 
-* --format FORMAT:
-  Set output format to one of the following 'human', 'jsonl'.
-
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
-* -q, --quiet:
-  Suppress progress indicators (Progress indicators are also suppressed when stderr
-  is not an interactive terminal).
+* --format FORMAT:
+  Set output format to one of the following 'human', 'jsonl'.
 
 * --utc-timestamps:
   Display and search against timestamps in utc time instead of local time.
+
+* -q, --quiet:
+  Suppress progress indicators (Progress indicators are also suppressed when stderr
+  is not an interactive terminal).
 
 ## ENVIRONMENT
 
@@ -86,17 +77,16 @@ more information on the query cache.
 * BUPSTASH_QUERY_CACHE:
   Path to the query cache file to use.
 
-
 ## EXAMPLES
 
-### Get an item with a specific id from the repository
+### Compare two snapshots by query
 
 ```
-$ bupstash list-contents id="14eb*"
-drwxr-xr-x 0     2020/10/30 13:32:04 .
--rw-r--r-- 1967  2020/10/30 13:32:04 data.txt
+$ bupstash diff id="14eb*" :: id="57de"
+- -rw-r--r-- 1191 hello.txt
++ -rw-r--r-- 1191 goodbye.txt
 ```
 
 ## SEE ALSO
 
-bupstash(1), bupstash-put(1), bupstash-diff(1), bupstash-keyfiles(7), bupstash-query-language(7)
+bupstash(1), bupstash-list(1), bupstash-keyfiles(7), bupstash-query-language(7)

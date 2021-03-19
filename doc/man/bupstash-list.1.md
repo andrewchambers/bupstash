@@ -3,7 +3,7 @@ bupstash-list(1)
 
 ## SYNOPSIS
 
-List items in a bupstash repository
+List items in a bupstash repository.
 
 `bupstash list [OPTIONS] QUERY... `
 
@@ -126,4 +126,4 @@ id="d271ec0b989cfc20e10d01380115747e" name="backup.tar" timestamp="2020-07-29 15
 
 ## SEE ALSO
 
-bupstash(1), bupstash-query-language(7)
+bupstash(1), bupstash-list-contents(1), bupstash-keyfiles(7), bupstash-query-language(7)

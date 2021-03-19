@@ -1,6 +1,6 @@
 bupstash list-contents [OPTIONS] QUERY
 
-List contents of a bupstash directory snapshot
+List contents of a bupstash directory snapshot.
 
 See the bupstash user manual for a description of the query language.
 
