@@ -65,7 +65,29 @@ pub struct IndexEntry {
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
     pub offsets: IndexEntryOffsets,
-    pub content: ContentCryptoHash,
+    pub data_hash: ContentCryptoHash,
+}
+
+impl IndexEntry {
+    pub fn eq_no_offsets(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.mode == other.mode
+            && self.size == other.size
+            && self.uid == other.uid
+            && self.gid == other.gid
+            && self.mtime == other.mtime
+            && self.mtime_nsec == other.mtime_nsec
+            && self.ctime == other.ctime
+            && self.ctime_nsec == other.ctime_nsec
+            && self.dev == other.dev
+            && self.ino == other.ino
+            && self.nlink == other.nlink
+            && self.link_target == other.link_target
+            && self.dev_major == other.dev_major
+            && self.dev_minor == other.dev_minor
+            && self.xattrs == other.xattrs
+            && self.data_hash == other.data_hash
+    }
 }
 
 // Migration path from index entry without hash.
@@ -89,7 +111,7 @@ impl From<V1IndexEntry> for IndexEntry {
             dev_minor: ent.dev_minor,
             xattrs: ent.xattrs,
             offsets: ent.offsets,
-            content: ContentCryptoHash::None,
+            data_hash: ContentCryptoHash::None,
         }
     }
 }
@@ -102,7 +124,7 @@ pub struct IndexEntryOffsets {
     pub data_chunk_end_offset: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
 pub enum ContentCryptoHash {
     None,
     Blake3([u8; 32]),
