@@ -582,6 +582,19 @@ _concurrent_modify_worker () {
   readlink "$SCRATCH/restore/c"
 }
 
+@test "simple diff put key" {
+  mkdir "$SCRATCH/d"
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  id1="$(bupstash put --no-send-log "$SCRATCH/d")"
+  echo -n "def" > "$SCRATCH/d/b.txt"
+  id2="$(bupstash put --no-send-log "$SCRATCH/d")"
+  echo -n "hij" >> "$SCRATCH/d/b.txt"
+  id3="$(bupstash put --no-send-log "$SCRATCH/d")"
+  test 3 = "$(bupstash diff id=$id1 :: id=$id2 | expr $(wc -l))"
+  test 2 = "$(bupstash diff id=$id1 :: id=$id2 | grep "^\\+" | expr $(wc -l))"
+  test 2 = "$(bupstash diff id=$id2 :: id=$id3 | expr $(wc -l))"
+  test 1 = "$(bupstash diff id=$id2 :: id=$id3 | grep "^\\+" | expr $(wc -l))"
+}
 
 @test "pick torture" {
   if test -z "$PICK_TORTURE_DIR"

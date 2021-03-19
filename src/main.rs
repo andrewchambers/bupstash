@@ -60,6 +60,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "put" => include_str!("../doc/cli/put.txt"),
         "list" => include_str!("../doc/cli/list.txt"),
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
+        "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
@@ -723,7 +724,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         compression::Scheme::Lz4
     };
 
-    let use_stat_cache = !matches.opt_present("no-stat-caching");
+    let use_stat_cache =
+        !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
     let mut exclusions = Vec::new();
     for e in matches.opt_strs("exclude") {
@@ -975,7 +977,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
     query_cli_opts(&mut opts);
-    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
+    opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
     opts.optopt(
         "",
         "pick",
@@ -1131,11 +1133,95 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn repr_digits(mut v: u64) -> usize {
+    let mut n = 0;
+    while v != 0 {
+        v /= 10;
+        n += 1;
+    }
+    n.max(1)
+}
+
+fn format_human_content_listing(
+    ent: &index::IndexEntry,
+    utc_timestamps: bool,
+    max_size_digits: usize,
+) -> String {
+    let mut result = String::new();
+    std::fmt::write(&mut result, format_args!("{}", ent.display_mode())).unwrap();
+    let size = format!("{}", ent.size.0);
+    let size_padding: String = std::iter::repeat(' ')
+        .take(max_size_digits - size.len())
+        .collect();
+    std::fmt::write(&mut result, format_args!(" {}{}", size, size_padding)).unwrap();
+    let ts = chrono::NaiveDateTime::from_timestamp(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32);
+    let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
+    let tsfmt = "%Y/%m/%d %T";
+    let ts = if utc_timestamps {
+        ts.format(tsfmt).to_string()
+    } else {
+        chrono::DateTime::<chrono::Local>::from(ts)
+            .format(tsfmt)
+            .to_string()
+    };
+    std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();
+    std::fmt::write(&mut result, format_args!(" {}", ent.path)).unwrap();
+    result
+}
+
+fn format_json_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
+    let mut result = String::new();
+    std::fmt::write(&mut result, format_args!("{{"))?;
+    std::fmt::write(
+        &mut result,
+        format_args!("\"mode\":{}", serde_json::to_string(&ent.mode.0)?),
+    )?;
+    std::fmt::write(&mut result, format_args!(",\"size\":{}", ent.size.0))?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"path\":{}", serde_json::to_string(&ent.path)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"mtime\":{}", serde_json::to_string(&ent.mtime.0)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(
+            ",\"mtime_nsec\":{}",
+            serde_json::to_string(&ent.mtime_nsec.0)?
+        ),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"ctime\":{}", serde_json::to_string(&ent.ctime.0)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(
+            ",\"ctime_nsec\":{}",
+            serde_json::to_string(&ent.ctime_nsec.0)?
+        ),
+    )?;
+    match ent.data_hash {
+        index::ContentCryptoHash::None => (),
+        index::ContentCryptoHash::Blake3(h) => std::fmt::write(
+            &mut result,
+            format_args!(
+                ",\"data_hash\":{}",
+                serde_json::to_string(&format!("blake3:{}", hex::easy_encode_to_string(&h)))?
+            ),
+        )?,
+    };
+    std::fmt::write(&mut result, format_args!("}}"))?;
+    Ok(result)
+}
+
 fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
     query_cli_opts(&mut opts);
-    opts.optopt("k", "key", "Primary key to decrypt data with.", "PATH");
+    opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
     opts.optopt(
         "",
         "format",
@@ -1244,7 +1330,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
     if metadata.plain_text_metadata.index_tree.is_none() {
-        anyhow::bail!("list-contents is only supported for tarballs created by bupstash");
+        anyhow::bail!(
+            "list-contents is only supported for directory snapshots created by bupstash"
+        );
     }
 
     progress.set_message("fetching content index...");
@@ -1276,75 +1364,291 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut max_size_digits = 0;
             for ent in content_index.iter() {
                 let ent = ent?;
-                max_size_digits = std::cmp::max(ent.size.0.to_string().len(), max_size_digits)
+                max_size_digits = std::cmp::max(repr_digits(ent.size.0), max_size_digits)
             }
-
             for ent in content_index.iter() {
                 let ent = ent?;
-                let ts = chrono::NaiveDateTime::from_timestamp(
-                    ent.ctime.0 as i64,
-                    ent.ctime_nsec.0 as u32,
-                );
-                let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
-
-                let tsfmt = "%Y/%m/%d %T";
-
-                let ts = if utc_timestamps {
-                    ts.format(tsfmt).to_string()
-                } else {
-                    chrono::DateTime::<chrono::Local>::from(ts)
-                        .format(tsfmt)
-                        .to_string()
-                };
-
-                let size = format!("{}", ent.size.0);
-                let size_padding: String = std::iter::repeat(' ')
-                    .take(max_size_digits - size.len())
-                    .collect();
-
                 writeln!(
                     out,
-                    "{} {}{} {} {}",
-                    ent.display_mode(),
-                    size,
-                    size_padding,
-                    ts,
-                    ent.path,
+                    "{}",
+                    format_human_content_listing(&ent, utc_timestamps, max_size_digits),
                 )?;
             }
         }
         ListFormat::Jsonl => {
             for ent in content_index.iter() {
                 let ent = ent?;
-                write!(out, "{{")?;
-                write!(out, "\"mode\":{}", serde_json::to_string(&ent.mode.0)?)?;
-                write!(out, ",\"size\":{}", ent.size.0)?;
-                write!(out, ",\"path\":{}", serde_json::to_string(&ent.path)?)?;
-                write!(out, ",\"mtime\":{}", serde_json::to_string(&ent.mtime.0)?)?;
-                write!(
-                    out,
-                    ",\"mtime_nsec\":{}",
-                    serde_json::to_string(&ent.mtime_nsec.0)?
-                )?;
-                write!(out, ",\"ctime\":{}", serde_json::to_string(&ent.ctime.0)?)?;
-                write!(
-                    out,
-                    ",\"ctime_nsec\":{}",
-                    serde_json::to_string(&ent.ctime_nsec.0)?
-                )?;
-                match ent.content {
-                    index::ContentCryptoHash::None => (),
-                    index::ContentCryptoHash::Blake3(h) => write!(
-                        out,
-                        ",\"content\":{}",
-                        serde_json::to_string(&format!(
-                            "blake3:{}",
-                            hex::easy_encode_to_string(&h)
-                        ))?
-                    )?,
-                }
-                writeln!(out, "}}")?;
+                writeln!(out, "{}", format_json_content_listing(&ent)?)?;
             }
+        }
+    }
+
+    out.flush()?;
+
+    Ok(())
+}
+
+fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
+    opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
+    opts.optopt(
+        "",
+        "format",
+        "Output format, valid values are 'human' or 'jsonl'.",
+        "FORMAT",
+    );
+
+    let matches = parse_cli_opts(opts, &args[..]);
+    let utc_timestamps = matches.opt_present("utc-timestamps");
+    let list_format = match matches.opt_str("format") {
+        Some(f) => match &f[..] {
+            "jsonl" => ListFormat::Jsonl,
+            "human" => ListFormat::Human,
+            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+        },
+        None => ListFormat::Human,
+    };
+
+    let mut queries = vec![vec![]];
+    {
+        for a in &matches.free {
+            if a == "::" {
+                queries.push(vec![]);
+                continue;
+            }
+            queries.last_mut().unwrap().push(a.to_string());
+        }
+
+        if queries.len() != 2 {
+            anyhow::bail!("expected two queries separated by '::'");
+        }
+    }
+
+    let key = cli_to_key(&matches)?;
+
+    if !key.is_list_key() || !key.is_list_contents_key() {
+        anyhow::bail!(
+            "only primary keys and sub keys created with '--list-contents' can diff contents"
+        );
+    }
+
+    let primary_key_id = key.primary_key_id();
+    let (idx_hash_key_part_1, metadata_dctx, idx_dctx) = match key {
+        keys::Key::PrimaryKeyV1(k) => {
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.clone();
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
+            (idx_hash_key_part_1, metadata_dctx, idx_dctx)
+        }
+        keys::Key::SubKeyV1(k) => {
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.unwrap();
+            let metadata_dctx =
+                crypto::DecryptionContext::new(k.metadata_sk.unwrap(), k.metadata_psk.unwrap());
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk.unwrap(), k.idx_psk.unwrap());
+            (idx_hash_key_part_1, metadata_dctx, idx_dctx)
+        }
+    };
+
+    let progress = cli_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
+
+    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
+
+    let mut to_diff = vec![];
+
+    for query in queries {
+        let (id, query) = match query::parse(&query.join("•")) {
+            Ok(query) => (query::get_id_query(&query), query),
+            Err(e) => {
+                query::report_parse_error(e);
+                anyhow::bail!("query parse error");
+            }
+        };
+
+        let id = match (id, query) {
+            (Some(id), _) => id,
+            (_, query) => {
+                let mut query_cache = cli_to_query_cache(&matches)?;
+
+                // Only sync the client if we have a non id query.
+                client::sync(
+                    progress.clone(),
+                    &mut query_cache,
+                    &mut serve_out,
+                    &mut serve_in,
+                )?;
+
+                let mut n_matches: u64 = 0;
+                let mut id = xid::Xid::default();
+
+                let mut on_match =
+                    |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                        n_matches += 1;
+                        id = item_id;
+
+                        if n_matches > 1 {
+                            anyhow::bail!(
+                                "provided query matched {} items, need a single match",
+                                n_matches
+                            );
+                        }
+
+                        Ok(())
+                    };
+
+                let mut tx = query_cache.transaction()?;
+                tx.list(
+                    querycache::ListOptions {
+                        primary_key_id: Some(primary_key_id),
+                        metadata_dctx: Some(metadata_dctx.clone()),
+                        list_encrypted: matches.opt_present("query-encrypted"),
+                        query: Some(query),
+                        now: chrono::Utc::now(),
+                        utc_timestamps,
+                    },
+                    &mut on_match,
+                )?;
+
+                id
+            }
+        };
+
+        progress.set_message("fetching item metadata...");
+        let itemset::VersionedItemMetadata::V1(metadata) =
+            client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+
+        if metadata.plain_text_metadata.index_tree.is_none() {
+            anyhow::bail!("diff is only supported for directory snapshots created by bupstash");
+        }
+
+        progress.set_message("fetching content index...");
+        let content_index = client::request_index(
+            client::IndexRequestContext {
+                primary_key_id,
+                idx_hash_key_part_1: idx_hash_key_part_1.clone(),
+                metadata_dctx: metadata_dctx.clone(),
+                idx_dctx: idx_dctx.clone(),
+            },
+            id,
+            &metadata,
+            &mut serve_out,
+            &mut serve_in,
+        )?;
+
+        to_diff.push(content_index);
+    }
+
+    client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
+
+    progress.finish_and_clear();
+
+    // Sort order that matches our snapshotting code.
+    let path_cmp = |l: &str, r: &str| {
+        if l == r {
+            std::cmp::Ordering::Equal
+        } else if l == "." {
+            std::cmp::Ordering::Greater
+        } else if r == "." {
+            std::cmp::Ordering::Less
+        } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count()
+        {
+            std::cmp::Ordering::Greater
+        } else {
+            l.cmp(r)
+        }
+    };
+
+    let walk_diff = |on_diff_ent: &mut dyn FnMut(
+        char,
+        &index::IndexEntry,
+    ) -> Result<(), anyhow::Error>|
+     -> Result<(), anyhow::Error> {
+        let mut liter = to_diff[0].iter();
+        let mut riter = to_diff[1].iter();
+        let mut lent = liter.next();
+        let mut rent = riter.next();
+
+        while lent.is_some() && rent.is_some() {
+            let l = lent.as_ref().unwrap().as_ref().unwrap();
+            let r = rent.as_ref().unwrap().as_ref().unwrap();
+            match path_cmp(&l.path, &r.path) {
+                std::cmp::Ordering::Equal => {
+                    if !l.eq_no_offsets(r) {
+                        on_diff_ent('-', l)?;
+                        on_diff_ent('+', r)?;
+                    }
+                    lent = liter.next();
+                    rent = riter.next();
+                }
+                std::cmp::Ordering::Less => {
+                    on_diff_ent('-', l)?;
+                    lent = liter.next();
+                }
+                std::cmp::Ordering::Greater => {
+                    on_diff_ent('+', r)?;
+                    rent = riter.next();
+                }
+            }
+        }
+        while lent.is_some() {
+            let l = lent.unwrap().unwrap();
+            on_diff_ent('-', &l)?;
+            lent = liter.next();
+        }
+        while rent.is_some() {
+            let r = rent.unwrap().unwrap();
+            on_diff_ent('+', &r)?;
+            rent = riter.next();
+        }
+        Ok(())
+    };
+
+    let out = std::io::stdout();
+    let mut out = out.lock();
+
+    match list_format {
+        ListFormat::Human => {
+            let mut max_size_digits = 1;
+            // Can we avoid walking twice?
+            walk_diff(
+                &mut |_: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
+                    Ok(())
+                },
+            )?;
+            walk_diff(
+                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    writeln!(
+                        std::io::stdout(),
+                        "{} {}",
+                        op,
+                        format_human_content_listing(e, utc_timestamps, max_size_digits)
+                    )?;
+                    Ok(())
+                },
+            )?;
+        }
+        ListFormat::Jsonl => {
+            walk_diff(
+                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    writeln!(
+                        std::io::stdout(),
+                        "{} {}",
+                        op,
+                        format_json_content_listing(e)?
+                    )?;
+                    Ok(())
+                },
+            )?;
         }
     }
 
@@ -1358,12 +1662,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     repo_cli_opts(&mut opts);
     query_cli_opts(&mut opts);
 
-    opts.optopt(
-        "k",
-        "key",
-        "Primary or metadata key to decrypt metadata with.",
-        "PATH",
-    );
+    opts.optopt("k", "key", "Key to decrypt metadata with.", "PATH");
 
     opts.optflag(
         "",
@@ -1792,6 +2091,7 @@ fn main() {
         "new-sub-key" => new_sub_key_main(args),
         "list" => list_main(args),
         "list-contents" => list_contents_main(args),
+        "diff" => diff_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
         "gc" => gc_main(args),

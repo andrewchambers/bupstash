@@ -16,7 +16,6 @@ use super::xid::*;
 use super::xtar;
 use std::collections::BTreeMap;
 use std::convert::TryInto;
-use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
@@ -526,7 +525,7 @@ fn dir_ent_to_index_ent(
             data_chunk_offset: serde_bare::Uint(0),
             data_chunk_end_offset: serde_bare::Uint(0),
         },
-        content: index::ContentCryptoHash::None, // Added later.
+        data_hash: index::ContentCryptoHash::None, // Set by caller.
     })
 }
 
@@ -562,7 +561,7 @@ impl std::io::Read for TeeHashFileReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self.f.read(buf) {
             Ok(n) => {
-                self.h.update(buf);
+                self.h.update(&buf[0..n]);
                 Ok(n)
             }
             err => err,
@@ -573,7 +572,7 @@ impl std::io::Read for TeeHashFileReader {
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
 
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<TeeHashFileReader, std::io::Error> {
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
             // Try with O_NOATIME first; if it fails, e.g. because the user we
             // run as is not the file owner, retry without. See #106.
             let f = std::fs::OpenOptions::new()
@@ -582,7 +581,7 @@ cfg_if::cfg_if! {
                 .open(fpath)
                 .or_else(|error| {
                     match error.kind() {
-                        ErrorKind::PermissionDenied => {
+                        std::io::ErrorKind::PermissionDenied => {
                             std::fs::OpenOptions::new()
                                 .read(true)
                                 .open(fpath)
@@ -605,17 +604,17 @@ cfg_if::cfg_if! {
                 Err(err) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("fadvise failed: {}", err))),
             };
 
-            Ok(TeeHashFileReader::new(f))
+            Ok(f)
         }
 
     // XXX More platforms should support NOATIME or at the very least POSIX_FADV_NOREUSE
     } else {
 
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<TeeHashFileReader, std::io::Error> {
+        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
             let f = std::fs::OpenOptions::new()
                 .read(true)
                 .open(fpath)?;
-            Ok(TeeHashFileReader::new(f))
+            Ok(f)
         }
     }
 }
@@ -653,7 +652,7 @@ fn send_dir(
         )?;
     }
 
-    let mut work_list = Vec::new();
+    let mut work_list = std::collections::VecDeque::new();
 
     let mut initial_paths = std::collections::HashSet::new();
     for p in paths {
@@ -665,13 +664,13 @@ fn send_dir(
                 p.display()
             );
         }
-        work_list.push((p.clone(), initial_md));
+        work_list.push_back((p.clone(), initial_md));
         if p != base {
             initial_paths.insert(p.clone());
         }
     }
 
-    while let Some((cur_dir, cur_dir_md)) = work_list.pop() {
+    while let Some((cur_dir, cur_dir_md)) = work_list.pop_front() {
         assert!(cur_dir_md.is_dir());
         ctx.progress.set_message(&cur_dir.to_string_lossy());
 
@@ -752,7 +751,7 @@ fn send_dir(
                 };
 
             if metadata.is_dir() && ((cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system) {
-                work_list.push((ent_path.clone(), metadata));
+                work_list.push_back((ent_path.clone(), metadata));
             }
 
             if ctx.use_stat_cache {
@@ -787,7 +786,7 @@ fn send_dir(
                 assert!(cache_entry.hashes.len() == index_ents.len());
 
                 for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
-                    index_ent.content = cache_entry.hashes[i];
+                    index_ent.data_hash = cache_entry.hashes[i];
                     index_ent.offsets = cache_entry.base_offsets[i];
                     index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
                     index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
@@ -846,9 +845,9 @@ fn send_dir(
                     let mut ent_data_chunk_end_idx = ent_data_chunk_idx;
                     let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
 
-                    if index_ent.is_file() && index_ent.size.0 != 0 {
+                    if index_ent.is_file() {
                         let mut f = match open_file_for_sending(&ent_path) {
-                            Ok(f) => f,
+                            Ok(f) => TeeHashFileReader::new(f),
                             // The file was deleted, treat it like it did not exist.
                             // It's unlikely this stat cache entry will hit again as
                             // the ctime definitely would change in this case.
@@ -870,7 +869,7 @@ fn send_dir(
                         // The true size is just what we read from disk. In the case
                         // of snapshotting an modified file we can't guarantee consistency anyway.
                         index_ent.size.0 = file_len;
-                        index_ent.content = index::ContentCryptoHash::Blake3(f.finalize());
+                        index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
                         total_size += file_len as u64;
 
                         ent_data_chunk_end_idx = st.tw.data_chunk_count();
@@ -888,7 +887,7 @@ fn send_dir(
 
                     if ctx.use_stat_cache {
                         dir_index_offsets.push(cur_offsets);
-                        content_hashes.push(index_ent.content)
+                        content_hashes.push(index_ent.data_hash)
                     }
 
                     index_ent.offsets = cur_offsets;
