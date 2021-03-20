@@ -495,3 +495,64 @@ impl Default for CompressedIndexWriter {
         CompressedIndexWriter::new()
     }
 }
+
+pub fn diff(
+    left_index: &CompressedIndex,
+    right_index: &CompressedIndex,
+    on_diff_ent: &mut dyn FnMut(char, &IndexEntry) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    let mut liter = left_index.iter();
+    let mut riter = right_index.iter();
+    let mut lent = liter.next();
+    let mut rent = riter.next();
+
+    // Sort order that matches our snapshotting code.
+    let path_cmp = |l: &str, r: &str| {
+        if l == r {
+            std::cmp::Ordering::Equal
+        } else if l == "." {
+            std::cmp::Ordering::Greater
+        } else if r == "." {
+            std::cmp::Ordering::Less
+        } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count()
+        {
+            std::cmp::Ordering::Greater
+        } else {
+            l.cmp(r)
+        }
+    };
+
+    while lent.is_some() && rent.is_some() {
+        let l = lent.as_ref().unwrap().as_ref().unwrap();
+        let r = rent.as_ref().unwrap().as_ref().unwrap();
+        match path_cmp(&l.path, &r.path) {
+            std::cmp::Ordering::Equal => {
+                if !l.eq_no_offsets(r) {
+                    on_diff_ent('-', l)?;
+                    on_diff_ent('+', r)?;
+                }
+                lent = liter.next();
+                rent = riter.next();
+            }
+            std::cmp::Ordering::Less => {
+                on_diff_ent('-', l)?;
+                lent = liter.next();
+            }
+            std::cmp::Ordering::Greater => {
+                on_diff_ent('+', r)?;
+                rent = riter.next();
+            }
+        }
+    }
+    while lent.is_some() {
+        let l = lent.unwrap().unwrap();
+        on_diff_ent('-', &l)?;
+        lent = liter.next();
+    }
+    while rent.is_some() {
+        let r = rent.unwrap().unwrap();
+        on_diff_ent('+', &r)?;
+        rent = riter.next();
+    }
+    Ok(())
+}

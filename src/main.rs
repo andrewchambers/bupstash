@@ -1551,67 +1551,6 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    // Sort order that matches our snapshotting code.
-    let path_cmp = |l: &str, r: &str| {
-        if l == r {
-            std::cmp::Ordering::Equal
-        } else if l == "." {
-            std::cmp::Ordering::Greater
-        } else if r == "." {
-            std::cmp::Ordering::Less
-        } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count()
-        {
-            std::cmp::Ordering::Greater
-        } else {
-            l.cmp(r)
-        }
-    };
-
-    let walk_diff = |on_diff_ent: &mut dyn FnMut(
-        char,
-        &index::IndexEntry,
-    ) -> Result<(), anyhow::Error>|
-     -> Result<(), anyhow::Error> {
-        let mut liter = to_diff[0].iter();
-        let mut riter = to_diff[1].iter();
-        let mut lent = liter.next();
-        let mut rent = riter.next();
-
-        while lent.is_some() && rent.is_some() {
-            let l = lent.as_ref().unwrap().as_ref().unwrap();
-            let r = rent.as_ref().unwrap().as_ref().unwrap();
-            match path_cmp(&l.path, &r.path) {
-                std::cmp::Ordering::Equal => {
-                    if !l.eq_no_offsets(r) {
-                        on_diff_ent('-', l)?;
-                        on_diff_ent('+', r)?;
-                    }
-                    lent = liter.next();
-                    rent = riter.next();
-                }
-                std::cmp::Ordering::Less => {
-                    on_diff_ent('-', l)?;
-                    lent = liter.next();
-                }
-                std::cmp::Ordering::Greater => {
-                    on_diff_ent('+', r)?;
-                    rent = riter.next();
-                }
-            }
-        }
-        while lent.is_some() {
-            let l = lent.unwrap().unwrap();
-            on_diff_ent('-', &l)?;
-            lent = liter.next();
-        }
-        while rent.is_some() {
-            let r = rent.unwrap().unwrap();
-            on_diff_ent('+', &r)?;
-            rent = riter.next();
-        }
-        Ok(())
-    };
-
     let out = std::io::stdout();
     let mut out = out.lock();
 
@@ -1619,36 +1558,45 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         ListFormat::Human => {
             let mut max_size_digits = 1;
             // Can we avoid walking twice?
-            walk_diff(
-                &mut |_: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
-                    max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
-                    Ok(())
-                },
-            )?;
-            walk_diff(
-                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
-                    writeln!(
-                        std::io::stdout(),
-                        "{} {}",
-                        op,
-                        format_human_content_listing(e, utc_timestamps, max_size_digits)
-                    )?;
-                    Ok(())
-                },
-            )?;
+            index::diff(&to_diff[0], &to_diff[1], &mut |_: char,
+                                                        e: &index::IndexEntry|
+             -> Result<
+                (),
+                anyhow::Error,
+            > {
+                max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
+                Ok(())
+            })?;
+            index::diff(&to_diff[0], &to_diff[1], &mut |op: char,
+                                                        e: &index::IndexEntry|
+             -> Result<
+                (),
+                anyhow::Error,
+            > {
+                writeln!(
+                    std::io::stdout(),
+                    "{} {}",
+                    op,
+                    format_human_content_listing(e, utc_timestamps, max_size_digits)
+                )?;
+                Ok(())
+            })?;
         }
         ListFormat::Jsonl => {
-            walk_diff(
-                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
-                    writeln!(
-                        std::io::stdout(),
-                        "{} {}",
-                        op,
-                        format_json_content_listing(e)?
-                    )?;
-                    Ok(())
-                },
-            )?;
+            index::diff(&to_diff[0], &to_diff[1], &mut |op: char,
+                                                        e: &index::IndexEntry|
+             -> Result<
+                (),
+                anyhow::Error,
+            > {
+                writeln!(
+                    std::io::stdout(),
+                    "{} {}",
+                    op,
+                    format_json_content_listing(e)?
+                )?;
+                Ok(())
+            })?;
         }
     }
 
