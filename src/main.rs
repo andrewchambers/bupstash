@@ -270,9 +270,16 @@ struct ServeProcess {
 
 impl ServeProcess {
     fn wait(mut self) -> Result<(), anyhow::Error> {
-        self.proc.wait()?;
+        let status = self.proc.wait()?;
         if let Some(handle) = self.stderr_reader.take() {
             handle.join().unwrap();
+        }
+        if !status.success() {
+            if let Some(code) = status.code() {
+                anyhow::bail!("bupstash serve failed (exit-code={})", code);
+            } else {
+                anyhow::bail!("bupstash serve failed");
+            }
         }
         Ok(())
     }
@@ -1942,6 +1949,11 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "allow-get",
         "Allow client to get data from the repository.",
     );
+    opts.optflag(
+        "",
+        "allow-list",
+        "Allow client to list snapshots and snapshot file lists.",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -1954,18 +1966,23 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut allow_remove = true;
     let mut allow_gc = true;
     let mut allow_get = true;
+    let mut allow_list = true;
 
     if matches.opt_present("allow-init")
         || matches.opt_present("allow-put")
         || matches.opt_present("allow-remove")
         || matches.opt_present("allow-gc")
         || matches.opt_present("allow-get")
+        || matches.opt_present("allow-list")
     {
         allow_init = matches.opt_present("allow-init");
         allow_put = matches.opt_present("allow-put");
         allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
         allow_get = matches.opt_present("allow-get");
+        // --allow-get and --allow-remove implies --allow-list because they
+        // are essentially useless without being able to list items.
+        allow_list = allow_get || allow_remove || matches.opt_present("allow-list");
     }
 
     if atty::is(atty::Stream::Stdout) {
@@ -2010,6 +2027,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             allow_remove,
             allow_gc,
             allow_get,
+            allow_list,
             repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut std::io::stdin().lock(),

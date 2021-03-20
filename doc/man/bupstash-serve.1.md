@@ -15,6 +15,9 @@ interaction with a repository. Most bupstash commands operate via an instance of
 The serve command has flags that can be set to restrict access permissions, by default
 all access is permitted until the first --allow-* option is provided.
 
+Clients with permission to read data will still not be able to decrypt it unless they 
+have the correct client side decryption key.
+
 Typically users won't need to interact with `bupstash serve` unless they need
 to create a custom connection via an arbitrary command or they wish to configure
 via an ssh forced command access controls.
@@ -25,10 +28,12 @@ via an ssh forced command access controls.
   Allow the client to initialize new repositories.
 * --allow-put:
   Allow client to put more items into the repository.
+* --allow-list:
+  Allow client to retrieve metadata and snapshot indexes for search and listing.
 * --allow-get:
-  Allow client to list and retrieve data from the repository.
+  Allow client to retrieve data from the repository, implies --allow-list.
 * --allow-remove:
-  Allow client to list and remove repository items.
+  Allow client to remove repository items, implies --allow-list.
 * --allow-gc:
   Allow client to run the repository garbage collector.
 

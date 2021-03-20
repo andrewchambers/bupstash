@@ -15,6 +15,7 @@ pub struct ServerConfig {
     pub allow_get: bool,
     pub allow_put: bool,
     pub allow_remove: bool,
+    pub allow_list: bool,
 }
 
 pub fn serve(
@@ -87,8 +88,8 @@ fn serve_repository(
                 if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
                     anyhow::bail!("client opened repository in wrong mode for TRequestMetadata, expected Read|ReadWrite")
                 }
-                if !cfg.allow_get {
-                    anyhow::bail!("server has disabled get for this client")
+                if !cfg.allow_list {
+                    anyhow::bail!("server has disabled listing for this client")
                 }
                 send_metadata(repo, req.id, w)?;
             }
@@ -105,8 +106,8 @@ fn serve_repository(
                 if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
                     anyhow::bail!("client opened repository in wrong mode for RequestIndex, expected Read|ReadWrite")
                 }
-                if !cfg.allow_get {
-                    anyhow::bail!("server has disabled get for this client")
+                if !cfg.allow_list {
+                    anyhow::bail!("server has disabled listing for this client")
                 }
                 send_index(repo, req.id, w)?;
             }
@@ -123,7 +124,7 @@ fn serve_repository(
                 if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
                     anyhow::bail!("client opened repository in wrong mode for TRequestItemSync, expected Read|ReadWrite")
                 }
-                if !cfg.allow_get && !cfg.allow_remove {
+                if !cfg.allow_list {
                     anyhow::bail!("server has disabled query and search for this client")
                 }
                 item_sync(repo, req.after, req.gc_generation, w)?;
@@ -146,8 +147,8 @@ fn serve_repository(
                 if !matches!(open_mode, OpenMode::ReadWrite) {
                     anyhow::bail!("client opened repository in wrong mode for TRestoreRemoved, expected ReadWrite")
                 }
-                if !cfg.allow_put || !cfg.allow_get {
-                    anyhow::bail!("server has disabled restore for this client (restore requires get and put permissions).")
+                if !cfg.allow_get || !cfg.allow_put || !cfg.allow_list {
+                    anyhow::bail!("server has disabled restore for this client (restore requires get, put and list permissions).")
                 }
                 let n_restored = repo.restore_removed()?;
                 write_packet(
