@@ -596,6 +596,73 @@ _concurrent_modify_worker () {
   test 1 = "$(bupstash diff id=$id2 :: id=$id3 | grep "^\\+" | expr $(wc -l))"
 }
 
+@test "access controls" {
+  if ! test -d "$BUPSTASH_REPOSITORY" || test -n "$BUPSTASH_REPOSITORY_COMMAND"
+  then
+    skip "test requires a local repository"
+  fi
+
+  mkdir "$SCRATCH/d"
+  id="$(bupstash put "$SCRATCH/d")"
+
+  REPO="$BUPSTASH_REPOSITORY"
+  unset BUPSTASH_REPOSITORY
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-get $REPO"
+  bupstash get id=$id > /dev/null
+  bupstash list
+  bupstash list-contents id=$id
+  if bupstash init ; then exit 1 ; fi
+  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash rm id=$id ; then exit 1 ; fi
+  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash gc ; then exit 1 ; fi
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-put $REPO"
+  bupstash put -e echo hi
+  if bupstash init ; then exit 1 ; fi
+  if bupstash get id=$id > /dev/null ; then exit 1 ; fi
+  if bupstash list  ; then exit 1 ; fi
+  if bupstash list-contents id=$id  ; then exit 1 ; fi
+  if bupstash rm id=$id ; then exit 1 ; fi
+  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash gc ; then exit 1 ; fi
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-list $REPO"
+  bupstash list
+  bupstash list-contents id=$id
+  if bupstash init ; then exit 1 ; fi
+  if bupstash get id=$id > /dev/null ; then exit 1 ; fi
+  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash rm id=$id ; then exit 1 ; fi
+  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash gc ; then exit 1 ; fi
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-gc $REPO"
+  if bupstash init ; then exit 1 ; fi
+  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash get id=$id > /dev/null ; then exit 1 ; fi
+  if bupstash list  ; then exit 1 ; fi
+  if bupstash list-contents id=$id  ; then exit 1 ; fi
+  if bupstash rm id=$id ; then exit 1 ; fi
+  if bupstash restore-removed ; then exit 1 ; fi
+  bupstash gc
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-remove $REPO"
+  bupstash list
+  bupstash list-contents id=$id
+  if bupstash init ; then exit 1 ; fi
+  if bupstash get id=$id > /dev/null ; then exit 1 ; fi
+  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash gc ; then exit 1 ; fi
+  # delete as the last test
+  bupstash rm id=$id
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-get --allow-put $REPO"
+  bupstash restore-removed
+}
+
 @test "pick torture" {
   if test -z "$PICK_TORTURE_DIR"
   then
