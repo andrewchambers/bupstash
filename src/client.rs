@@ -629,34 +629,35 @@ fn send_dir(
     let mut data_ectx = ctx.data_ectx.clone();
     let mut idx_ectx = ctx.idx_ectx.clone();
 
-    {
-        let metadata = std::fs::metadata(&base)?;
-        if !metadata.is_dir() {
-            anyhow::bail!("{} is not a directory", base.display());
-        }
-        let ent = index::VersionedIndexEntry::V2(dir_ent_to_index_ent(
-            &base,
-            &".".into(),
-            &metadata,
-            ctx.want_xattrs,
-        )?);
-        send_chunks(
-            ctx,
-            st.sink,
-            &ctx.idx_hash_key,
-            &mut idx_ectx,
-            st.idx_chunker,
-            st.idx_tw,
-            &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
-            None,
-        )?;
+    let metadata = std::fs::metadata(&base).map_err(|err| {
+        anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
+    })?;
+    if !metadata.is_dir() {
+        anyhow::bail!("{} is not a directory", base.display());
     }
+    let ent = index::VersionedIndexEntry::V2(
+        dir_ent_to_index_ent(&base, &".".into(), &metadata, ctx.want_xattrs).map_err(|err| {
+            anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
+        })?,
+    );
+    send_chunks(
+        ctx,
+        st.sink,
+        &ctx.idx_hash_key,
+        &mut idx_ectx,
+        st.idx_chunker,
+        st.idx_tw,
+        &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
+        None,
+    )?;
 
     let mut work_list = std::collections::VecDeque::new();
 
     let mut initial_paths = std::collections::HashSet::new();
     for p in paths {
-        let initial_md = std::fs::metadata(&p)?;
+        let initial_md = std::fs::metadata(&p).map_err(|err| {
+            anyhow::format_err!("unable to fetch metadata for {}: {}", p.display(), err)
+        })?;
         if !initial_md.is_dir() {
             // We should be able to lift this restriction in the future.
             anyhow::bail!(
@@ -680,12 +681,17 @@ fn send_dir(
             initial_paths.remove(&cur_dir);
 
             let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-            let ent = index::VersionedIndexEntry::V2(dir_ent_to_index_ent(
-                &cur_dir,
-                &index_path,
-                &cur_dir_md,
-                ctx.want_xattrs,
-            )?);
+            let ent = index::VersionedIndexEntry::V2(
+                dir_ent_to_index_ent(&cur_dir, &index_path, &cur_dir_md, ctx.want_xattrs).map_err(
+                    |err| {
+                        anyhow::format_err!(
+                            "unable build index entry for {}: {}",
+                            cur_dir.display(),
+                            err
+                        )
+                    },
+                )?,
+            );
 
             send_chunks(
                 ctx,
@@ -710,10 +716,11 @@ fn send_dir(
             Ok(dir_ents) => dir_ents,
             // If the directory was deleted from under us, treat it as empty.
             Err(err) if likely_smear_error(&err) => vec![],
-            Err(err) => return Err(err.into()),
+            Err(err) => anyhow::bail!("unable list {}: {}", cur_dir.display(), err),
         };
 
-        // XXX sorting by extension or reverse filename might give better compression.
+        // Note sorting by extension or reverse filename might give better compression,
+        // but we should not add this without checking how it affects the diff command.
         dir_ents.sort_by_key(|a| a.file_name());
 
         let mut index_ents = Vec::new();
@@ -731,7 +738,11 @@ fn send_dir(
                 Ok(metadata) => metadata,
                 // If the entry was deleted from under us, treat it as if it was excluded.
                 Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                Err(err) => return Err(err.into()),
+                Err(err) => anyhow::bail!(
+                    "unable to fetch metadata for {}: {}",
+                    ent_path.display(),
+                    err
+                ),
             };
 
             // There is no meaningful way to backup a unix socket.
@@ -747,7 +758,11 @@ fn send_dir(
                     // in a way that was unrecoverable. For example a symlink was removed so
                     // we cannot do a valid readlink.
                     Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                    Err(err) => return Err(err.into()),
+                    Err(err) => anyhow::bail!(
+                        "unable build index entry for {}: {}",
+                        ent_path.display(),
+                        err
+                    ),
                 };
 
             if metadata.is_dir() && ((cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system) {
@@ -852,7 +867,9 @@ fn send_dir(
                             // It's unlikely this stat cache entry will hit again as
                             // the ctime definitely would change in this case.
                             Err(err) if likely_smear_error(&err) => continue 'add_dir_ents,
-                            Err(err) => return Err(err.into()),
+                            Err(err) => {
+                                anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
+                            }
                         };
 
                         let file_len = send_chunks(
