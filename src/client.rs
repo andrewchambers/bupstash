@@ -721,7 +721,12 @@ fn send_dir(
 
         // Note sorting by extension or reverse filename might give better compression,
         // but we should not add this without checking how it affects the diff command.
-        dir_ents.sort_by_key(|a| a.file_name());
+        dir_ents.sort_by(|l, r| {
+            index::path_cmp(
+                &l.file_name().to_string_lossy(),
+                &r.file_name().to_string_lossy(),
+            )
+        });
 
         let mut index_ents = Vec::new();
 

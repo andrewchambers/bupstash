@@ -496,6 +496,29 @@ impl Default for CompressedIndexWriter {
     }
 }
 
+pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
+    // This sort order is aimed at creating better compression while creating a sensible
+    // order within the backup archives.
+    //
+    // '.' is always first.
+    // Tar entries with fewer slashes come next.
+    // Finally compare lexically.
+    //
+    // Experiments with sorting priority based on file extension did not show
+    // any consistent or measurable improvement, we could revisit in the future.
+    if l == r {
+        std::cmp::Ordering::Equal
+    } else if l == "." {
+        std::cmp::Ordering::Greater
+    } else if r == "." {
+        std::cmp::Ordering::Less
+    } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count() {
+        std::cmp::Ordering::Greater
+    } else {
+        l.cmp(r)
+    }
+}
+
 pub fn diff(
     left_index: &CompressedIndex,
     right_index: &CompressedIndex,
@@ -505,22 +528,6 @@ pub fn diff(
     let mut riter = right_index.iter();
     let mut lent = liter.next();
     let mut rent = riter.next();
-
-    // Sort order that matches our snapshotting code.
-    let path_cmp = |l: &str, r: &str| {
-        if l == r {
-            std::cmp::Ordering::Equal
-        } else if l == "." {
-            std::cmp::Ordering::Greater
-        } else if r == "." {
-            std::cmp::Ordering::Less
-        } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count()
-        {
-            std::cmp::Ordering::Greater
-        } else {
-            l.cmp(r)
-        }
-    };
 
     while lent.is_some() && rent.is_some() {
         let l = lent.as_ref().unwrap().as_ref().unwrap();
