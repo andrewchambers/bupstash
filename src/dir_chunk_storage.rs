@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const MAX_READ_WORKERS: usize = 8;
-const MAX_WRITE_WORKERS: usize = 2;
+const MAX_READ_WORKERS: usize = 16;
+const MAX_WRITE_WORKERS: usize = 16;
 
 enum ReadWorkerMsg {
     GetChunk(
@@ -47,11 +47,9 @@ pub struct DirStorage {
     read_worker_rx: crossbeam_channel::Receiver<ReadWorkerMsg>,
 
     // Writing
-    rename_batch_size: usize,
     had_io_error: Arc<AtomicBool>,
     write_worker_handles: Vec<std::thread::JoinHandle<()>>,
     write_worker_tx: Vec<crossbeam_channel::Sender<WriteWorkerMsg>>,
-    write_chunk_count: u64,
     write_round_robin_index: usize,
 
     // Garbage collection
@@ -61,25 +59,8 @@ pub struct DirStorage {
 impl DirStorage {
     fn add_write_worker_thread(&mut self) {
         let mut data_path = self.dir_path.clone();
-        let rename_batch_size = self.rename_batch_size;
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
-
-        let mut pending_batch_rename = Vec::new();
-
-        fn do_batch_rename(
-            batch: &mut Vec<(PathBuf, PathBuf, std::fs::File)>,
-        ) -> Result<(), std::io::Error> {
-            for (_, _, f) in batch.iter() {
-                f.sync_data()?;
-            }
-
-            for (dest, tmp, _) in batch.drain(..) {
-                std::fs::rename(tmp, dest)?;
-            }
-
-            Ok(())
-        }
 
         macro_rules! worker_bail {
             ($err:expr) => {{
@@ -148,29 +129,18 @@ impl DirStorage {
                                 .open(&tmp));
 
                             worker_try!(tmp_file.write_all(&data));
-
-                            pending_batch_rename.push((dest, tmp.into(), tmp_file));
-                            if pending_batch_rename.len() >= rename_batch_size {
-                                worker_try!(do_batch_rename(&mut pending_batch_rename))
+                            worker_try!(tmp_file.sync_data());
+                            worker_try!(std::fs::rename(tmp, dest));
+                        }
+                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.sync_all() {
+                            Ok(()) => {
+                                let _ = rendezvous_tx.send(None);
                             }
-                        }
-                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => {
-                            match do_batch_rename(&mut pending_batch_rename) {
-                                Ok(()) => match dir_handle.sync_all() {
-                                    Ok(()) => {
-                                        let _ = rendezvous_tx.send(None);
-                                    }
-                                    Err(err) => {
-                                        let _ = rendezvous_tx.send(Some(err.into()));
-                                        worker_bail!(anyhow::format_err!("io error"));
-                                    }
-                                },
-                                Err(err) => {
-                                    let _ = rendezvous_tx.send(Some(err.into()));
-                                    worker_bail!(anyhow::format_err!("io error"));
-                                }
-                            };
-                        }
+                            Err(err) => {
+                                let _ = rendezvous_tx.send(Some(err.into()));
+                                worker_bail!(anyhow::format_err!("io error"));
+                            }
+                        },
                         Ok(WriteWorkerMsg::Exit) | Err(_) => {
                             return;
                         }
@@ -290,38 +260,6 @@ impl DirStorage {
             Err(err) => return Err(err.into()),
         }
 
-        let file_rlimit = {
-            // Not part of the Nix crate yet so we must resort to libc.
-            let mut rlim = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-
-            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
-                anyhow::bail!(
-                    "unable to query the open file limit: {}",
-                    std::io::Error::last_os_error()
-                );
-            };
-            rlim.rlim_cur as usize
-        };
-
-        const ESTIMATED_MINIMUM_FILES: usize = 10;
-        const MIN_FILES_PER_WRITE_WORKER: usize = 8;
-        const MAX_FILES_PER_WRITE_WORKER: usize = 256;
-        if (file_rlimit as usize)
-            < ESTIMATED_MINIMUM_FILES + (MAX_WRITE_WORKERS * MIN_FILES_PER_WRITE_WORKER)
-        {
-            anyhow::bail!(
-                "open file limit '{}' is too low for directory storage engine to function",
-                file_rlimit
-            );
-        }
-
-        // This limit is an approximation of what the bupstash serve process is likely to need.
-        let rename_batch_size = ((file_rlimit - ESTIMATED_MINIMUM_FILES) / MAX_WRITE_WORKERS)
-            .min(MAX_FILES_PER_WRITE_WORKER)
-            .max(MIN_FILES_PER_WRITE_WORKER);
         let read_worker_handles = Vec::new();
         let write_worker_handles = Vec::new();
         let write_worker_tx = Vec::new();
@@ -334,10 +272,8 @@ impl DirStorage {
             read_worker_tx,
             read_worker_rx,
             had_io_error,
-            rename_batch_size,
             write_worker_handles,
             write_worker_tx,
-            write_chunk_count: 0,
             write_round_robin_index: 0,
             gc_exclusive_lock: None,
         })
@@ -397,14 +333,9 @@ impl Engine for DirStorage {
         self.write_worker_tx[self.write_round_robin_index]
             .send(WriteWorkerMsg::AddChunk((*addr, buf)))?;
 
-        self.write_chunk_count += 1;
-
-        if self.write_chunk_count >= self.rename_batch_size as u64 {
-            self.write_chunk_count = 0;
-            self.write_round_robin_index += 1;
-            if self.write_round_robin_index >= MAX_WRITE_WORKERS {
-                self.write_round_robin_index = 0;
-            }
+        self.write_round_robin_index += 1;
+        if self.write_round_robin_index >= MAX_WRITE_WORKERS {
+            self.write_round_robin_index = 0;
         }
 
         Ok(())
