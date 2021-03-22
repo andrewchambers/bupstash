@@ -22,6 +22,9 @@ Typically users won't need to interact with `bupstash serve` unless they need
 to create a custom connection via an arbitrary command or they wish to configure
 via an ssh forced command access controls.
 
+Note that many errors are printed out of band via stderr, so alternative transports should consider
+how to also forward stderr data.
+
 ## OPTIONS
 
 * --allow-init:
