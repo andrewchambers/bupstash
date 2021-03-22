@@ -235,7 +235,9 @@ pub fn send(
                 &mut chunker,
                 &mut tw,
                 &mut data,
-                None,
+                &mut |_: &Address, chunk_len: usize| {
+                    ctx.progress.inc(chunk_len as u64);
+                },
             )?;
             let status = child.wait()?;
             if !status.success() {
@@ -255,7 +257,9 @@ pub fn send(
                 &mut chunker,
                 &mut tw,
                 data,
-                None,
+                &mut |_: &Address, chunk_len: usize| {
+                    ctx.progress.inc(chunk_len as u64);
+                },
             )?;
         }
         DataSource::Filesystem {
@@ -367,7 +371,7 @@ fn send_chunks(
     chunker: &mut chunker::RollsumChunker,
     tw: &mut htree::TreeWriter,
     data: &mut dyn std::io::Read,
-    mut on_chunk: Option<&mut dyn FnMut(&Address)>,
+    on_chunk: &mut dyn FnMut(&Address, usize),
 ) -> Result<u64, anyhow::Error> {
     let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     let mut n_written: u64 = 0;
@@ -382,14 +386,11 @@ fn send_chunks(
                     let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
                     n_chunked += n;
                     if let Some(chunk_data) = c {
-                        let data_len = chunk_data.len() as u64;
-                        ctx.progress.inc(data_len);
+                        let data_len = chunk_data.len();
                         let addr = crypto::keyed_content_address(&chunk_data, &hash_key);
                         let encrypted_chunk = ectx.encrypt_data(chunk_data, ctx.compression);
-                        if let Some(ref mut on_chunk) = on_chunk {
-                            on_chunk(&addr);
-                        }
-                        tw.add(sink, &addr, data_len, encrypted_chunk)?;
+                        on_chunk(&addr, data_len);
+                        tw.add(sink, &addr, data_len as u64, encrypted_chunk)?;
                     }
                 }
                 n_written += n_read as u64;
@@ -632,14 +633,21 @@ fn send_dir(
     let metadata = std::fs::metadata(&base).map_err(|err| {
         anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
     })?;
+
     if !metadata.is_dir() {
         anyhow::bail!("{} is not a directory", base.display());
     }
+
     let ent = index::VersionedIndexEntry::V2(
         dir_ent_to_index_ent(&base, &".".into(), &metadata, ctx.want_xattrs).map_err(|err| {
             anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
         })?,
     );
+
+    let mut on_index_chunk = |_: &Address, chunk_len: usize| {
+        ctx.progress.inc(chunk_len as u64);
+    };
+
     send_chunks(
         ctx,
         st.sink,
@@ -648,7 +656,7 @@ fn send_dir(
         st.idx_chunker,
         st.idx_tw,
         &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
-        None,
+        &mut on_index_chunk,
     )?;
 
     let mut work_list = std::collections::VecDeque::new();
@@ -701,7 +709,7 @@ fn send_dir(
                 st.idx_chunker,
                 st.idx_tw,
                 &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
-                None,
+                &mut on_index_chunk,
             )?;
         }
 
@@ -821,7 +829,7 @@ fn send_dir(
                             &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
                                 .unwrap(),
                         ),
-                        None,
+                        &mut on_index_chunk,
                     )?;
                 }
 
@@ -835,8 +843,16 @@ fn send_dir(
                 ctx.progress.inc(cache_entry.total_size);
             }
             None => {
-                let mut total_size: u64 = 0;
+                let mut dir_data_size: u64 = 0;
                 let mut addresses = Vec::new();
+
+                let mut on_data_chunk = |addr: &Address, chunk_len: usize| {
+                    dir_data_size += chunk_len as u64;
+                    ctx.progress.inc(chunk_len as u64);
+                    if ctx.use_stat_cache {
+                        addresses.push(*addr);
+                    }
+                };
 
                 let cache_vec_capacity = if ctx.use_stat_cache {
                     index_ents.len()
@@ -849,12 +865,6 @@ fn send_dir(
 
                 let mut content_hashes: Vec<index::ContentCryptoHash> =
                     Vec::with_capacity(cache_vec_capacity);
-
-                let mut on_chunk = |addr: &Address| {
-                    if ctx.use_stat_cache {
-                        addresses.push(*addr);
-                    }
-                };
 
                 let dir_data_chunk_idx = st.tw.data_chunk_count();
 
@@ -885,15 +895,13 @@ fn send_dir(
                             st.chunker,
                             st.tw,
                             &mut f,
-                            Some(&mut on_chunk),
+                            &mut on_data_chunk,
                         )?;
 
                         // The true size is just what we read from disk. In the case
                         // of snapshotting an modified file we can't guarantee consistency anyway.
                         index_ent.size.0 = file_len;
                         index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
-                        total_size += file_len as u64;
-
                         ent_data_chunk_end_idx = st.tw.data_chunk_count();
                         ent_data_chunk_end_offset = st.chunker.buffered_count() as u64;
                     }
@@ -927,18 +935,18 @@ fn send_dir(
                             &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
                                 .unwrap(),
                         ),
-                        None,
+                        &mut on_index_chunk,
                     )?;
                 }
 
                 if let Some(chunk_data) = st.chunker.force_split() {
-                    let data_len = chunk_data.len() as u64;
+                    let data_len = chunk_data.len();
                     let addr = crypto::keyed_content_address(&chunk_data, &ctx.data_hash_key);
-                    on_chunk(&addr);
+                    on_data_chunk(&addr, data_len);
                     st.tw.add(
                         st.sink,
                         &addr,
-                        data_len,
+                        data_len as u64,
                         data_ectx.encrypt_data(chunk_data, ctx.compression),
                     )?
                 }
@@ -951,8 +959,8 @@ fn send_dir(
                         .add_stat_cache_data(
                             &hash[..],
                             &sendlog::StatCacheEntry {
-                                total_size,
                                 addresses,
+                                total_size: dir_data_size,
                                 base_offsets: dir_index_offsets,
                                 hashes: content_hashes,
                             },
