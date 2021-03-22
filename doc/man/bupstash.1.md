@@ -13,6 +13,7 @@ Run one of the following `bupstash` subcommands.
 `bupstash put ...`<br>
 `bupstash list ...`<br>
 `bupstash list-contents ...`<br>
+`bupstash diff ...`<br>
 `bupstash get ...`<br>
 `bupstash rm ...`<br>
 `bupstash restore-removed ...`<br>
@@ -56,6 +57,8 @@ that each have their own documentation.
   List repository items matching a given query.
 * bupstash-list-contents(1):
   List directory snapshot contents.
+* bupstash-diff(1):
+  Diff snapshot contents.
 * bupstash-rm(1):
   Remove repository items matching a given query.
 * bupstash-restore-removed(1):

@@ -105,15 +105,13 @@ This directory is not used when the repository is configured for storage engines
 
 ### repo.lock
 
-A lockfile allowing concurrent repository access.
-
-This lock is held exclusively during garbage collection, and held in a shared way during operations that
-write to the database.
+This lock is held exclusively during garbage collection.
 
 ### storage-engine.json
 
 Contains the the storage engine specification, which allows storage of data chunks
-in external or alternative storage formats.
+in external or alternative storage formats. This file is human editable to assist
+manual data migrations between supported formats.
 
 ## The hash tree structure
 

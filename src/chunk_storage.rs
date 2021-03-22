@@ -12,7 +12,7 @@ pub trait Engine {
         on_chunk: &mut dyn FnMut(&Address, &[u8]) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error>;
 
-    // Get a chunk that may or may not have been prefetched from the storage engine.
+    // Get a chunk from the storage engine.
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error>;
 
     // Set the gc_id for the following call to gc. This is a form
