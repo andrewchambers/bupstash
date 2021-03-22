@@ -106,6 +106,24 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
+## Building man pages
+
+The man pages are currently build using a markdown to man page renderer called [ronn](https://github.com/rtomayko/ronn).
+
+```
+$ cd doc/man
+$ ronn -r *.md
+```
+
+## Generating release tarballs
+
+```
+$ sh support/src-release.sh $tag
+$ echo bupstash-*.tar.gz
+bupstash-v0.7.0-man.tar.gz
+bupstash-v0.7.0-src+deps.tar.gz
+```
+
 ## Test suites
 
 Install bash automated test framework and run the following to run both the unit tests, and cli integration test suite.
