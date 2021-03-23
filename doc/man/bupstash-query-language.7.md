@@ -154,6 +154,7 @@ Invert an expression.
 ### grouping
 
 Use brackets to alter the default precedence.
+
 ```
 [ EXPR ]
 ```
