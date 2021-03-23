@@ -87,8 +87,8 @@ $ bupstash get name=backup.tar and timestamp=2020/19/* > ./restore.tar
 ### Get a file or sub-tar from a directory snapshot
 
 ```
-$ bupstash get --pick=/path/to/file.txt id=$id
-$ bupstash get --pick=/path/to/dir id=$id | tar ...
+$ bupstash get --pick=path/to/file.txt id=$id
+$ bupstash get --pick=path/to/dir id=$id | tar ...
 ```
 
 ### Get a tarball
