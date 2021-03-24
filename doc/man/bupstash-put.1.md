@@ -64,8 +64,7 @@ $ bupstash put --send-log /root/bupstash-backups.sendlog /home/
 Bupstash supports uploading a filesystem that is concurrently being modified with
 the caveat that bupstash cannot guarantee the filesystem is in a consistent state. If bupstash
 is reading a file or directory while it is concurrently being modified by an application, it may
-be the case the bupstash snapshot contains data from multiple points in time with the combination
-being invalid corrupt.
+be the case the bupstash snapshot contains data from multiple points in time with the combination potentially being invalid and/or corrupt.
 
 The only sure way to ensure data consistency is to use in a filesystem with snapshot capabilities.
 Using filesystem snapshots you can create a consistent filesystem view and then perform a bupstash 
