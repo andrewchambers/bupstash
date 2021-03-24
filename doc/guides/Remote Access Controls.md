@@ -8,20 +8,30 @@ only run an instance of `bupstash serve` that has limited permissions.
 The following assumes you have a backup server with a user called `backups` that has openssh sshd running,
 and a client computer with an ssh client installed.
 
-In your sshd config file on your server add the following lines:
+In an your sshd config file in your server add the line:
 
 ```
 Match User backups
-    ForceCommand "bupstash serve --allow-put /home/backups/bupstash-repository"
+    ForceCommand "/bin/bupstash-put-force-command.sh"
 ```
 
-This means the backups user is only able to run the bupstash serve command with a hard coded set of permissions and repository
-path.
+Create /bin/bupstash-put-force-command.sh on your server:
 
-Next add an ssh key you intend to use for backups to `$SERVER/home/backups/.ssh/authorized_keys`, such that the user sending
-backups can connect to the remote server using ssh based login.
+```
+$ echo 'exec bupstash serve --allow-put /home/backups/bupstash-backups' > bupstash-put-force-command.sh
+$ sudo cp bupstash-put-force-command.sh /bin/bupstash-put-force-command.sh
+$ sudo chown root:root /bin/bupstash-put-force-command.sh
+$ sudo chmod +x /bin/bupstash-put-force-command.sh
+```
 
-Because of our sshd configruation, the client is only authorized to create new backups, but not list or remove them:
+Next add an ssh key you intend to use for backups to `$SERVER/home/backups/.ssh/authorized_keys`,
+such that the user sending backups can connect to the remote server using ssh key based login.
+
+Now when the backups user attempts to run a backup via ssh they are only able to
+run the bupstash serve command with a hard coded set of permissions and
+repository path.
+
+Now the client is only authorized to create new backups, but not list or remove them:
 
 ```
 export BUPSTASH_REPOSITORY="ssh://backups@$SERVER/backups"

@@ -96,14 +96,15 @@ Default tags can be overidden manually by simply specifying them.
   to `BUPSTASH_KEY`.
 
 * -e, --exec:
-  WHAT is a command to execute, where stdout is saved as an entry
+  COMMAND is a command to execute, where stdout is saved as an entry
   in the bupstash repository. Only create the entry if the command
   exited with a successful status code.
 
 * --exclude PATTERN:
   Add an exclusion glob pattern to filter entries from the resulting tarball.
   The glob is matched against the absolute path of the directory entry.
-  This option may be passed multiple times, and is ignored if WHAT is not a directory.
+  This option may be passed multiple times, and is ignored if not
+  uploading a directory snapshot.
 
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided

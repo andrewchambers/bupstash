@@ -35,7 +35,7 @@ more information on the query cache.
   to `BUPSTASH_KEY`.
 
 * --pick PATH:
-  Fetch an individual file or sub-directory from a tarball, as shown in `list-contents`.
+  Fetch an individual file or sub-directory from a snapshot.
 
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
