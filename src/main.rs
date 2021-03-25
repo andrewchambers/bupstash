@@ -1401,6 +1401,12 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     query_cli_opts(&mut opts);
     opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
     opts.optopt(
+        "i",
+        "ignore",
+        "command separated list of file attributes to ignore in comparisons. Valid items are 'content,times,mode'.",
+        "IGNORE",
+    );
+    opts.optopt(
         "",
         "format",
         "Output format, valid values are 'human' or 'jsonl'.",
@@ -1417,6 +1423,23 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         None => ListFormat::Human,
     };
+    let mut diff_mask = index::INDEX_COMPARE_MASK_OFFSETS;
+
+    if let Some(ignore) = matches.opt_str("ignore") {
+        for ignore in ignore.split(',') {
+            match ignore {
+                "mode" => diff_mask |= index::INDEX_COMPARE_MASK_MODE,
+                "content" => {
+                    diff_mask |=
+                        index::INDEX_COMPARE_MASK_SIZE | index::INDEX_COMPARE_MASK_DATA_HASH
+                }
+                "times" => {
+                    diff_mask |= index::INDEX_COMPARE_MASK_MTIME | index::INDEX_COMPARE_MASK_CTIME
+                }
+                _ => anyhow::bail!("'{}' is not a valid ignore value", ignore),
+            }
+        }
+    }
 
     let mut queries = vec![vec![]];
     {
@@ -1565,45 +1588,45 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         ListFormat::Human => {
             let mut max_size_digits = 1;
             // Can we avoid walking twice?
-            index::diff(&to_diff[0], &to_diff[1], &mut |_: char,
-                                                        e: &index::IndexEntry|
-             -> Result<
-                (),
-                anyhow::Error,
-            > {
-                max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
-                Ok(())
-            })?;
-            index::diff(&to_diff[0], &to_diff[1], &mut |op: char,
-                                                        e: &index::IndexEntry|
-             -> Result<
-                (),
-                anyhow::Error,
-            > {
-                writeln!(
-                    std::io::stdout(),
-                    "{} {}",
-                    op,
-                    format_human_content_listing(e, utc_timestamps, max_size_digits)
-                )?;
-                Ok(())
-            })?;
+            index::diff(
+                &to_diff[0],
+                &to_diff[1],
+                diff_mask,
+                &mut |_: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
+                    Ok(())
+                },
+            )?;
+            index::diff(
+                &to_diff[0],
+                &to_diff[1],
+                diff_mask,
+                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    writeln!(
+                        std::io::stdout(),
+                        "{} {}",
+                        op,
+                        format_human_content_listing(e, utc_timestamps, max_size_digits)
+                    )?;
+                    Ok(())
+                },
+            )?;
         }
         ListFormat::Jsonl => {
-            index::diff(&to_diff[0], &to_diff[1], &mut |op: char,
-                                                        e: &index::IndexEntry|
-             -> Result<
-                (),
-                anyhow::Error,
-            > {
-                writeln!(
-                    std::io::stdout(),
-                    "{} {}",
-                    op,
-                    format_json_content_listing(e)?
-                )?;
-                Ok(())
-            })?;
+            index::diff(
+                &to_diff[0],
+                &to_diff[1],
+                diff_mask,
+                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    writeln!(
+                        std::io::stdout(),
+                        "{} {}",
+                        op,
+                        format_json_content_listing(e)?
+                    )?;
+                    Ok(())
+                },
+            )?;
         }
     }
 
