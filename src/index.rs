@@ -68,25 +68,44 @@ pub struct IndexEntry {
     pub data_hash: ContentCryptoHash,
 }
 
+// We can add more masks as needed.
+pub const INDEX_COMPARE_MASK_MODE: u64 = 1 << 0;
+pub const INDEX_COMPARE_MASK_SIZE: u64 = 1 << 1;
+pub const INDEX_COMPARE_MASK_DATA_HASH: u64 = 1 << 2;
+pub const INDEX_COMPARE_MASK_MTIME: u64 = 1 << 3;
+pub const INDEX_COMPARE_MASK_CTIME: u64 = 1 << 4;
+pub const INDEX_COMPARE_MASK_DEV: u64 = 1 << 5;
+pub const INDEX_COMPARE_MASK_UID: u64 = 1 << 6;
+pub const INDEX_COMPARE_MASK_GID: u64 = 1 << 7;
+pub const INDEX_COMPARE_MASK_INO: u64 = 1 << 8;
+pub const INDEX_COMPARE_MASK_NLINK: u64 = 1 << 9;
+pub const INDEX_COMPARE_MASK_LINK_TARGET: u64 = 1 << 10;
+pub const INDEX_COMPARE_MASK_DEV_NUMS: u64 = 1 << 11;
+pub const INDEX_COMPARE_MASK_XATTRS: u64 = 1 << 12;
+pub const INDEX_COMPARE_MASK_OFFSETS: u64 = 1 << 13;
+
 impl IndexEntry {
-    pub fn eq_no_offsets(&self, other: &Self) -> bool {
+    pub fn masked_compare_eq(&self, compare_mask: u64, other: &Self) -> bool {
         self.path == other.path
-            && self.mode == other.mode
-            && self.size == other.size
-            && self.uid == other.uid
-            && self.gid == other.gid
-            && self.mtime == other.mtime
-            && self.mtime_nsec == other.mtime_nsec
-            && self.ctime == other.ctime
-            && self.ctime_nsec == other.ctime_nsec
-            && self.dev == other.dev
-            && self.ino == other.ino
-            && self.nlink == other.nlink
-            && self.link_target == other.link_target
-            && self.dev_major == other.dev_major
-            && self.dev_minor == other.dev_minor
-            && self.xattrs == other.xattrs
-            && self.data_hash == other.data_hash
+            && ((compare_mask & INDEX_COMPARE_MASK_MODE != 0) || self.mode == other.mode)
+            && ((compare_mask & INDEX_COMPARE_MASK_SIZE != 0) || self.size == other.size)
+            && ((compare_mask & INDEX_COMPARE_MASK_DATA_HASH != 0)
+                || self.data_hash == other.data_hash)
+            && ((compare_mask & INDEX_COMPARE_MASK_UID != 0) || self.uid == other.uid)
+            && ((compare_mask & INDEX_COMPARE_MASK_GID != 0) || self.gid == other.gid)
+            && ((compare_mask & INDEX_COMPARE_MASK_MTIME != 0)
+                || (self.mtime == other.mtime && self.mtime_nsec == other.mtime_nsec))
+            && ((compare_mask & INDEX_COMPARE_MASK_CTIME != 0)
+                || (self.ctime == other.ctime && self.ctime_nsec == other.ctime_nsec))
+            && ((compare_mask & INDEX_COMPARE_MASK_DEV != 0) || self.dev == other.dev)
+            && ((compare_mask & INDEX_COMPARE_MASK_XATTRS != 0) || self.xattrs == other.xattrs)
+            && ((compare_mask & INDEX_COMPARE_MASK_INO != 0) || self.ino == other.ino)
+            && ((compare_mask & INDEX_COMPARE_MASK_NLINK != 0) || self.nlink == other.nlink)
+            && ((compare_mask & INDEX_COMPARE_MASK_LINK_TARGET != 0)
+                || self.link_target == other.link_target)
+            && ((compare_mask & INDEX_COMPARE_MASK_DEV_NUMS != 0)
+                || (self.dev_major == other.dev_major && self.dev_minor == other.dev_minor))
+            && ((compare_mask & INDEX_COMPARE_MASK_OFFSETS != 0) || self.offsets == other.offsets)
     }
 }
 
@@ -116,7 +135,7 @@ impl From<V1IndexEntry> for IndexEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
 pub struct IndexEntryOffsets {
     pub data_chunk_idx: serde_bare::Uint,
     pub data_chunk_end_idx: serde_bare::Uint,
@@ -522,6 +541,7 @@ pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
 pub fn diff(
     left_index: &CompressedIndex,
     right_index: &CompressedIndex,
+    compare_mask: u64,
     on_diff_ent: &mut dyn FnMut(char, &IndexEntry) -> Result<(), anyhow::Error>,
 ) -> Result<(), anyhow::Error> {
     let mut liter = left_index.iter();
@@ -534,7 +554,7 @@ pub fn diff(
         let r = rent.as_ref().unwrap().as_ref().unwrap();
         match path_cmp(&l.path, &r.path) {
             std::cmp::Ordering::Equal => {
-                if !l.eq_no_offsets(r) {
+                if !l.masked_compare_eq(compare_mask, r) {
                     on_diff_ent('-', l)?;
                     on_diff_ent('+', r)?;
                 }

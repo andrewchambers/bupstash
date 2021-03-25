@@ -582,7 +582,7 @@ _concurrent_modify_worker () {
   readlink "$SCRATCH/restore/c"
 }
 
-@test "simple diff put key" {
+@test "simple diff" {
   mkdir "$SCRATCH/d"
   echo -n "abc" > "$SCRATCH/d/a.txt"
   id1="$(bupstash put --no-send-log "$SCRATCH/d")"
@@ -594,6 +594,19 @@ _concurrent_modify_worker () {
   test 2 = "$(bupstash diff id=$id1 :: id=$id2 | grep "^\\+" | expr $(wc -l))"
   test 2 = "$(bupstash diff id=$id2 :: id=$id3 | expr $(wc -l))"
   test 1 = "$(bupstash diff id=$id2 :: id=$id3 | grep "^\\+" | expr $(wc -l))"
+}
+
+@test "diff ignore" {
+  mkdir "$SCRATCH/d"
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  id1="$(bupstash put --no-send-log "$SCRATCH/d")"
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  id2="$(bupstash put --no-send-log "$SCRATCH/d")"
+  echo -n "def" > "$SCRATCH/d/a.txt"
+  id3="$(bupstash put --no-send-log "$SCRATCH/d")"
+  test 0 = "$(bupstash diff --ignore times id=$id1 :: id=$id2 | expr $(wc -l))"
+  test 2 = "$(bupstash diff --ignore times id=$id2 :: id=$id3 | expr $(wc -l))"
+  test 0 = "$(bupstash diff --ignore times,content id=$id2 :: id=$id3 | expr $(wc -l))"
 }
 
 @test "access controls" {

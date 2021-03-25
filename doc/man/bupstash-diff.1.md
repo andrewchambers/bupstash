@@ -16,6 +16,9 @@ the diff line output to stdout.
 because it takes the full precision of timestamps and also the stored file hash into account when performing
 the diff operation.
 
+Bupstash supports ignoring items in the diff comparison to aid in analysis. Most useful are the `--ignore` values
+`times` to ignore file modification timestamps and `content` to ignore file size and hash changes.
+
 ## OUTPUT FORMAT
 
 Output is consistent with that of `bupstash list-contents`, except each line is
@@ -46,6 +49,10 @@ more information on the query cache.
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
+
+* -i, --ignore:
+  Comman separated list of file attributes to ignore in comparisons.
+  Valid items are 'content,times,mode'
 
 * --format FORMAT:
   Set output format to one of the following 'human', 'jsonl'.
