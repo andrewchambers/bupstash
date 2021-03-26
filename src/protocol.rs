@@ -106,10 +106,12 @@ pub enum Progress {
     SetMessage(String),
 }
 
+pub const ABORT_CODE_SERVER_OVERLOADED: u64 = 0x9cf5c3ce325d27a6;
+
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Abort {
     pub message: String,
-    pub code: Option<serde_bare::Uint>,
+    pub code: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
