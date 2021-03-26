@@ -430,13 +430,16 @@ fn cli_to_opened_serve_process(
                 return Ok(remote);
             }
             Err(err) => {
-                if let Some(client::ClientError::ServerUnavailable) =
+                if let Some(protocol::AbortError::ServerUnavailable { message, .. }) =
                     err.root_cause().downcast_ref()
                 {
                     if retry_count == 1 {
                         // Print after the second retry so that DNS load balancing can resolve
                         // the problem if the server supports this.
-                        progress.println("server is overloaded, retrying after delay.");
+                        progress.println(format!(
+                            "server is unavailable ({}), retrying after delay.",
+                            message
+                        ));
                     }
                     std::thread::sleep(std::time::Duration::from_secs(retry_duration));
                     retry_duration = (retry_duration * 2).min(180);

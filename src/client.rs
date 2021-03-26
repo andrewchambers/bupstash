@@ -36,8 +36,6 @@ pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 pub enum ClientError {
     #[error("corrupt or tampered data")]
     CorruptOrTamperedData,
-    #[error("server overloaded")]
-    ServerUnavailable,
 }
 
 pub fn open_repository(
@@ -53,11 +51,7 @@ pub fn open_repository(
         }),
     )?;
 
-    match read_packet_raw(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::Abort(Abort { code, .. }) if code == Some(ABORT_CODE_SERVER_UNAVAILABLE) => {
-            return Err(ClientError::ServerUnavailable.into())
-        }
-        Packet::Abort(Abort { message, .. }) => anyhow::bail!("remote error: {}", message),
+    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ROpenRepository(resp) => {
             let clock_skew = chrono::Utc::now().signed_duration_since(resp.now);
             const MAX_SKEW_MINS: i64 = 15;
