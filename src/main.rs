@@ -409,6 +409,47 @@ fn cli_to_serve_process(
     })
 }
 
+fn cli_to_opened_serve_process(
+    matches: &getopts::Matches,
+    progress: &indicatif::ProgressBar,
+    open_mode: protocol::OpenMode,
+) -> Result<ServeProcess, anyhow::Error> {
+    let mut retry_duration = 2;
+    let mut retry_count: u64 = 0;
+
+    loop {
+        let mut remote = cli_to_serve_process(matches, progress)?;
+        // Temporary borrow of the stdin/stdout so we can handle
+        // server retry back pressure if the server implements this.
+        let mut proc_stdin = remote.proc.stdin.take().unwrap();
+        let mut proc_stdout = remote.proc.stdout.take().unwrap();
+        match client::open_repository(&mut proc_stdin, &mut proc_stdout, open_mode) {
+            Ok(()) => {
+                remote.proc.stdin = Some(proc_stdin);
+                remote.proc.stdout = Some(proc_stdout);
+                return Ok(remote);
+            }
+            Err(err) => {
+                if let Some(client::ClientError::ServerOverloaded) = err.root_cause().downcast_ref()
+                {
+                    if retry_count == 1 {
+                        // Print after the second retry so that DNS load balancing can resolve
+                        // the problem if the server supports this.
+                        progress.println("server is overloaded, retrying after delay.");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(retry_duration));
+                    retry_duration = (retry_duration * 2).min(180);
+                    retry_count += 1;
+                    if retry_count < 50 {
+                        continue;
+                    }
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
 fn cli_to_progress_bar(
     matches: &getopts::Matches,
     style: indicatif::ProgressStyle,
@@ -566,11 +607,11 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let mut query_cache = cli_to_query_cache(&matches)?;
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
     client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -942,7 +983,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
     }
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
     let mut ctx = client::SendContext {
@@ -962,7 +1004,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         one_file_system,
     };
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
     let id = client::send(
         &mut ctx,
         &mut serve_out,
@@ -1021,11 +1062,10 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1278,11 +1318,10 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
 
     let id = match (id, query) {
         (Some(id), _) => id,
@@ -1486,11 +1525,10 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Read)?;
 
     let mut to_diff = vec![];
 
@@ -1675,19 +1713,19 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         n_removed = ids.len();
 
-        let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+        let mut serve_proc =
+            cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-        client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
         client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     } else {
-        let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+        let mut serve_proc =
+            cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-        client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
 
         let ids: Vec<xid::Xid> = match cli_to_id_and_query(&matches)? {
             (Some(id), _) => vec![id],
@@ -1785,11 +1823,10 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Gc)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::Gc)?;
     let stats = client::gc(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -1827,11 +1864,11 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::open_repository(&mut serve_in, &mut serve_out, protocol::OpenMode::ReadWrite)?;
     let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
