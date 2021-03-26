@@ -430,7 +430,8 @@ fn cli_to_opened_serve_process(
                 return Ok(remote);
             }
             Err(err) => {
-                if let Some(client::ClientError::ServerOverloaded) = err.root_cause().downcast_ref()
+                if let Some(client::ClientError::ServerUnavailable) =
+                    err.root_cause().downcast_ref()
                 {
                     if retry_count == 1 {
                         // Print after the second retry so that DNS load balancing can resolve
