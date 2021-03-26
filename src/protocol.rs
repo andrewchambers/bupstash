@@ -6,6 +6,7 @@ use super::repository;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
+use thiserror::Error;
 
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
@@ -243,13 +244,26 @@ fn flush_remote(w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+#[derive(Error, Debug)]
+pub enum AbortError {
+    #[error("remote error: server unavailable ({message})")]
+    ServerUnavailable { message: String },
+    #[error("remote error: {message}")]
+    Other { message: String },
+}
+
 pub fn read_packet(
     r: &mut dyn std::io::Read,
     max_packet_size: usize,
 ) -> Result<Packet, anyhow::Error> {
     let pkt = read_packet_raw(r, max_packet_size)?;
-    if let Packet::Abort(Abort { message, .. }) = pkt {
-        return Err(anyhow::format_err!("remote error: {}", message));
+    if let Packet::Abort(Abort { message, code }) = pkt {
+        match code {
+            Some(code) if code == ABORT_CODE_SERVER_UNAVAILABLE => {
+                return Err(AbortError::ServerUnavailable { message }.into())
+            }
+            _ => return Err(AbortError::Other { message }.into()),
+        }
     }
     Ok(pkt)
 }
