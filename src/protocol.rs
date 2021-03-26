@@ -9,7 +9,7 @@ use std::convert::TryInto;
 
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum OpenMode {
     Read,
     ReadWrite,

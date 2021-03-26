@@ -35,7 +35,11 @@ pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("corrupt or tampered data")]
-    CorruptOrTamperedDataError,
+    CorruptOrTamperedData,
+    #[error("server overloaded")]
+    ServerOverloaded,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 pub fn open_repository(
@@ -51,7 +55,11 @@ pub fn open_repository(
         }),
     )?;
 
-    match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+    match read_packet_raw(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::Abort(Abort { code, .. }) if code == Some(ABORT_CODE_SERVER_OVERLOADED) => {
+            return Err(ClientError::ServerOverloaded.into())
+        }
+        Packet::Abort(Abort { message, .. }) => anyhow::bail!("remote error: {}", message),
         Packet::ROpenRepository(resp) => {
             let clock_skew = chrono::Utc::now().signed_duration_since(resp.now);
             const MAX_SKEW_MINS: i64 = 15;
@@ -1121,7 +1129,7 @@ fn receive_and_authenticate_htree_chunk(
     let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::Chunk(chunk) => {
             if address != chunk.address {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
+                return Err(ClientError::CorruptOrTamperedData.into());
             }
             chunk.data
         }
@@ -1129,7 +1137,7 @@ fn receive_and_authenticate_htree_chunk(
     };
     let data = compression::unauthenticated_decompress(data)?;
     if address != htree::tree_block_address(&data) {
-        return Err(ClientError::CorruptOrTamperedDataError.into());
+        return Err(ClientError::CorruptOrTamperedData.into());
     }
     Ok(data)
 }
@@ -1146,7 +1154,7 @@ fn receive_htree(
             let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                 Packet::Chunk(chunk) => {
                     if addr != chunk.address {
-                        return Err(ClientError::CorruptOrTamperedDataError.into());
+                        return Err(ClientError::CorruptOrTamperedData.into());
                     }
                     chunk.data
                 }
@@ -1155,7 +1163,7 @@ fn receive_htree(
 
             let data = dctx.decrypt_data(data)?;
             if addr != crypto::keyed_content_address(&data, &hash_key) {
-                return Err(ClientError::CorruptOrTamperedDataError.into());
+                return Err(ClientError::CorruptOrTamperedData.into());
             }
             out.write_all(&data)?;
         } else {
@@ -1270,7 +1278,7 @@ fn receive_indexed_htree_as_tarball(
                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                     Packet::Chunk(chunk) => {
                         if addr != chunk.address {
-                            return Err(ClientError::CorruptOrTamperedDataError.into());
+                            return Err(ClientError::CorruptOrTamperedData.into());
                         }
                         chunk.data
                     }
@@ -1279,7 +1287,7 @@ fn receive_indexed_htree_as_tarball(
 
                 let data = dctx.decrypt_data(data)?;
                 if addr != crypto::keyed_content_address(&data, &hash_key) {
-                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                    return Err(ClientError::CorruptOrTamperedData.into());
                 }
                 return Ok(Some(data));
             } else {
@@ -1362,9 +1370,7 @@ fn receive_partial_htree(
                                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                                     Packet::Chunk(chunk) => {
                                         if chunk_address != chunk.address {
-                                            return Err(
-                                                ClientError::CorruptOrTamperedDataError.into()
-                                            );
+                                            return Err(ClientError::CorruptOrTamperedData.into());
                                         }
                                         chunk.data
                                     }
@@ -1374,7 +1380,7 @@ fn receive_partial_htree(
                                 let data = dctx.decrypt_data(data)?;
                                 if chunk_address != crypto::keyed_content_address(&data, &hash_key)
                                 {
-                                    return Err(ClientError::CorruptOrTamperedDataError.into());
+                                    return Err(ClientError::CorruptOrTamperedData.into());
                                 }
 
                                 match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
