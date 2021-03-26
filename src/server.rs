@@ -171,8 +171,8 @@ fn recv(
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let gc_generation = match repo.gc_status()? {
-        repository::GCStatus::Complete(gc_generation) => gc_generation,
-        repository::GCStatus::Running(_) => {
+        repository::GcStatus::Complete(gc_generation) => gc_generation,
+        repository::GcStatus::Running(_) => {
             // We can only start a recv if we aren't currently
             // performing a garbage collection, otherwise we might
             // accept an upload that occured during the sweep

@@ -66,9 +66,9 @@ static ASCII_ARMOR: Lazy<Regex> = Lazy::new(|| Regex::new(REGEX_STR).unwrap());
 #[derive(Debug, Clone, Copy)]
 pub enum LineEnding {
     /// Windows-like (`\r\n`)
-    CRLF,
+    Crlf,
     /// Unix-like (`\n`)
-    LF,
+    Lf,
 }
 
 /// Configuration for Pem encoding
@@ -90,7 +90,7 @@ pub struct Pem {
 impl Pem {
     fn new_from_captures(caps: Captures) -> Result<Pem> {
         fn as_utf8(bytes: &[u8]) -> Result<&str> {
-            Ok(str::from_utf8(bytes).map_err(PemError::NotUtf8)?)
+            str::from_utf8(bytes).map_err(PemError::NotUtf8)
         }
 
         // Verify that the begin section exists
@@ -277,7 +277,7 @@ pub fn encode(pem: &Pem) -> String {
     encode_config(
         pem,
         EncodeConfig {
-            line_ending: LineEnding::CRLF,
+            line_ending: LineEnding::Crlf,
         },
     )
 }
@@ -293,12 +293,12 @@ pub fn encode(pem: &Pem) -> String {
 ///     tag: String::from("FOO"),
 ///     contents: vec![1, 2, 3, 4],
 ///   };
-///   encode_config(&pem, EncodeConfig { line_ending: LineEnding::LF });
+///   encode_config(&pem, EncodeConfig { line_ending: LineEnding::Lf });
 /// ```
 pub fn encode_config(pem: &Pem, config: EncodeConfig) -> String {
     let line_ending = match config.line_ending {
-        LineEnding::CRLF => "\r\n",
-        LineEnding::LF => "\n",
+        LineEnding::Crlf => "\r\n",
+        LineEnding::Lf => "\n",
     };
 
     let mut output = String::new();
@@ -362,12 +362,12 @@ pub fn encode_many(pems: &[Pem]) -> String {
 ///         contents: vec![5, 6, 7, 8],
 ///     },
 ///   ];
-///   encode_many_config(&data, EncodeConfig { line_ending: LineEnding::LF });
+///   encode_many_config(&data, EncodeConfig { line_ending: LineEnding::Lf });
 /// ```
 pub fn encode_many_config(pems: &[Pem], config: EncodeConfig) -> String {
     let line_ending = match config.line_ending {
-        LineEnding::CRLF => "\r\n",
-        LineEnding::LF => "\n",
+        LineEnding::Crlf => "\r\n",
+        LineEnding::Lf => "\n",
     };
     pems.iter()
         .map(|value| encode_config(value, config))
@@ -536,7 +536,7 @@ RzHX0lkJl9Stshd/7Gbt65/QYq+v+xvAeT0CoyIg
             contents: vec![1, 2, 3, 4],
         };
         let config = EncodeConfig {
-            line_ending: LineEnding::LF,
+            line_ending: LineEnding::Lf,
         };
         let encoded = encode_config(&pem, config);
         assert!(encoded != "");
@@ -549,7 +549,7 @@ RzHX0lkJl9Stshd/7Gbt65/QYq+v+xvAeT0CoyIg
     fn test_encode_many_config() {
         let pems = parse_many(SAMPLE_LF);
         let config = EncodeConfig {
-            line_ending: LineEnding::LF,
+            line_ending: LineEnding::Lf,
         };
         let encoded = encode_many_config(&pems, config);
 

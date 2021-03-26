@@ -74,7 +74,7 @@ pub struct TGc {}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RGc {
-    pub stats: repository::GCStats,
+    pub stats: repository::GcStats,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -158,12 +158,12 @@ pub enum Packet {
     TStorageWriteBarrier,
     RStorageWriteBarrier,
     StorageConnect(StorageConnect),
-    TStoragePrepareForGC(Xid),
-    RStoragePrepareForGC,
-    StorageBeginGC(abloom::ABloom),
-    StorageGCComplete(repository::GCStats),
-    TStorageGCCompleted(Xid),
-    RStorageGCCompleted(bool),
+    TStoragePrepareForGc(Xid),
+    RStoragePrepareForGc,
+    StorageBeginGc(abloom::ABloom),
+    StorageGcComplete(repository::GcStats),
+    TStorageGcCompleted(Xid),
+    RStorageGcCompleted(bool),
     TStorageEstimateCount,
     RStorageEstimateCount(RStorageEstimateCount),
     StoragePipelineGetChunks(Vec<Address>),
@@ -327,20 +327,20 @@ pub fn read_packet_raw(
         PACKET_KIND_R_RESTORE_REMOVED => Packet::RRestoreRemoved(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_PREPARE_FOR_GC => {
-            Packet::TStoragePrepareForGC(serde_bare::from_slice(&buf)?)
+            Packet::TStoragePrepareForGc(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_R_STORAGE_PREPARE_FOR_GC => Packet::RStoragePrepareForGC,
+        PACKET_KIND_R_STORAGE_PREPARE_FOR_GC => Packet::RStoragePrepareForGc,
         PACKET_KIND_T_STORAGE_ESTIMATE_COUNT => Packet::TStorageEstimateCount,
         PACKET_KIND_R_STORAGE_ESTIMATE_COUNT => {
             Packet::RStorageEstimateCount(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGC(abloom::ABloom::from_bytes(buf)),
-        PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGCComplete(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_STORAGE_BEGIN_GC => Packet::StorageBeginGc(abloom::ABloom::from_bytes(buf)),
+        PACKET_KIND_STORAGE_GC_COMPLETE => Packet::StorageGcComplete(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_GC_COMPLETED => {
-            Packet::TStorageGCCompleted(serde_bare::from_slice(&buf)?)
+            Packet::TStorageGcCompleted(serde_bare::from_slice(&buf)?)
         }
         PACKET_KIND_R_STORAGE_GC_COMPLETED => {
-            Packet::RStorageGCCompleted(serde_bare::from_slice(&buf)?)
+            Packet::RStorageGcCompleted(serde_bare::from_slice(&buf)?)
         }
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
         PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
@@ -556,12 +556,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TStoragePrepareForGC(ref v) => {
+        Packet::TStoragePrepareForGc(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_STORAGE_PREPARE_FOR_GC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RStoragePrepareForGC => {
+        Packet::RStoragePrepareForGc => {
             send_hdr(w, PACKET_KIND_R_STORAGE_PREPARE_FOR_GC, 0)?;
         }
         Packet::TStorageEstimateCount => {
@@ -572,20 +572,20 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_STORAGE_ESTIMATE_COUNT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::StorageBeginGC(ref v) => {
+        Packet::StorageBeginGc(ref v) => {
             return write_begin_gc(w, &v);
         }
-        Packet::StorageGCComplete(ref v) => {
+        Packet::StorageGcComplete(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_STORAGE_GC_COMPLETE, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TStorageGCCompleted(ref v) => {
+        Packet::TStorageGcCompleted(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_T_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RStorageGCCompleted(v) => {
+        Packet::RStorageGcCompleted(v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;

@@ -454,8 +454,8 @@ cfg_if::cfg_if! {
 }
 
 fn dir_ent_to_index_ent(
-    full_path: &std::path::PathBuf,
-    short_path: &std::path::PathBuf,
+    full_path: &std::path::Path,
+    short_path: &std::path::Path,
     metadata: &std::fs::Metadata,
     want_xattrs: bool,
 ) -> Result<index::IndexEntry, std::io::Error> {
@@ -631,7 +631,7 @@ cfg_if::cfg_if! {
 fn send_dir(
     ctx: &SendContext,
     st: &mut SendDirState,
-    base: &std::path::PathBuf,
+    base: &std::path::Path,
     paths: &[std::path::PathBuf],
     exclusions: &[glob::Pattern],
 ) -> Result<(), anyhow::Error> {
@@ -647,7 +647,13 @@ fn send_dir(
     }
 
     let ent = index::VersionedIndexEntry::V2(
-        dir_ent_to_index_ent(&base, &".".into(), &metadata, ctx.want_xattrs).map_err(|err| {
+        dir_ent_to_index_ent(
+            &base,
+            &std::path::PathBuf::from("."),
+            &metadata,
+            ctx.want_xattrs,
+        )
+        .map_err(|err| {
             anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
         })?,
     );
@@ -1459,7 +1465,7 @@ pub fn gc(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<repository::GCStats, anyhow::Error> {
+) -> Result<repository::GcStats, anyhow::Error> {
     progress.set_message("collecting garbage...");
 
     write_packet(w, &Packet::TGc(TGc {}))?;

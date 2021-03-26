@@ -364,7 +364,7 @@ impl Engine for DirStorage {
         Ok(std::fs::read_dir(&self.dir_path)?.count().try_into()?)
     }
 
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error> {
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
         self.stop_workers();
 
         assert!(self.gc_exclusive_lock.is_some());
@@ -408,7 +408,7 @@ impl Engine for DirStorage {
 
         self.gc_exclusive_lock = None;
 
-        Ok(repository::GCStats {
+        Ok(repository::GcStats {
             chunks_remaining: Some(chunks_remaining),
             chunks_deleted: Some(chunks_deleted),
             bytes_deleted: Some(bytes_deleted),

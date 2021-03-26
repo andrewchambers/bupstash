@@ -2,7 +2,7 @@ use super::address::*;
 use super::index;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::Path;
 
 pub struct SendLog {
     // We retain two connections, the send log, and an anonymous
@@ -32,7 +32,7 @@ pub struct StatCacheEntry {
 const SCHEMA_VERSION: i64 = 4;
 
 impl SendLog {
-    pub fn open(p: &PathBuf) -> Result<SendLog, anyhow::Error> {
+    pub fn open(p: &Path) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
 
         db_conn.busy_timeout(std::time::Duration::new(600, 0))?;
@@ -59,7 +59,7 @@ impl SendLog {
         let sequence_number = match tx.query_row(
             "select Value from LogMeta where Key = 'sequence-number';",
             rusqlite::NO_PARAMS,
-            |r| Ok(r.get(0)?),
+            |r| r.get(0),
         ) {
             Ok(n) => {
                 tx.execute(
@@ -367,12 +367,13 @@ impl<'a> Drop for SendLogSession<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn cache_commit() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let log_path = {
-            let mut d = PathBuf::from(tmp_dir.path());
+            let mut d = std::path::PathBuf::from(tmp_dir.path());
             d.push("send.log");
             d
         };
