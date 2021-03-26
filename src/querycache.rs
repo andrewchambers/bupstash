@@ -2,7 +2,7 @@ use super::crypto;
 use super::itemset;
 use super::query;
 use super::xid::*;
-use std::path::PathBuf;
+use std::path::Path;
 
 pub struct QueryCache {
     conn: rusqlite::Connection,
@@ -22,7 +22,7 @@ pub struct ListOptions {
 }
 
 impl QueryCache {
-    pub fn open(p: &PathBuf) -> Result<QueryCache, anyhow::Error> {
+    pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
         conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
 

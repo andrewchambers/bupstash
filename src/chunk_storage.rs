@@ -21,7 +21,7 @@ pub trait Engine {
     fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
 
     // Remove all chunks not in the reachable set.
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error>;
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error>;
 
     // Check that a previous invocation of gc has finished.
     fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;

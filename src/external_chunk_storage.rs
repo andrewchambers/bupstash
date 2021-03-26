@@ -72,11 +72,11 @@ impl Engine for ExternalStorage {
     fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
         protocol::write_packet(
             &mut self.sock,
-            &protocol::Packet::TStoragePrepareForGC(gc_id),
+            &protocol::Packet::TStoragePrepareForGc(gc_id),
         )?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::RStoragePrepareForGC) => (),
-            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForGC"),
+            Ok(protocol::Packet::RStoragePrepareForGc) => (),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForGc"),
             Err(err) => return Err(err),
         }
         Ok(())
@@ -86,21 +86,21 @@ impl Engine for ExternalStorage {
         protocol::write_packet(&mut self.sock, &protocol::Packet::TStorageEstimateCount)?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
             Ok(protocol::Packet::RStorageEstimateCount(v)) => Ok(v.count.0),
-            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForGC"),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected RStorageEstimateCount"),
             Err(err) => Err(err),
         }
     }
 
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GCStats, anyhow::Error> {
+    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
         protocol::write_begin_gc(&mut self.sock, &reachable)?;
         std::mem::drop(reachable);
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::StorageGCComplete(stats)) => {
+            Ok(protocol::Packet::StorageGcComplete(stats)) => {
                 let _ =
                     protocol::write_packet(&mut self.sock, &protocol::Packet::EndOfTransmission);
                 Ok(stats)
             }
-            Ok(_) => anyhow::bail!("unexpected packet response, expected StorageGCComplete"),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected StorageGcComplete"),
             Err(err) => Err(err),
         }
     }
@@ -108,11 +108,11 @@ impl Engine for ExternalStorage {
     fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
         protocol::write_packet(
             &mut self.sock,
-            &protocol::Packet::TStorageGCCompleted(gc_id),
+            &protocol::Packet::TStorageGcCompleted(gc_id),
         )?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE)? {
-            protocol::Packet::RStorageGCCompleted(completed) => Ok(completed),
-            _ => anyhow::bail!("unexpected packet response, expected RStorageAwaitGCCompletion"),
+            protocol::Packet::RStorageGcCompleted(completed) => Ok(completed),
+            _ => anyhow::bail!("unexpected packet response, expected RStorageGcCompleted"),
         }
     }
 }

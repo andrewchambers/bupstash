@@ -23,7 +23,7 @@ pub enum StorageEngineSpec {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct GCStats {
+pub struct GcStats {
     pub chunks_deleted: Option<usize>,
     pub bytes_deleted: Option<usize>,
     pub chunks_remaining: Option<usize>,
@@ -41,7 +41,7 @@ pub enum ItemSyncEvent {
     End,
 }
 
-pub enum GCStatus {
+pub enum GcStatus {
     Running(Xid),
     Complete(Xid),
 }
@@ -448,7 +448,7 @@ impl Repo {
         Ok(n_restored)
     }
 
-    pub fn gc_status(&mut self) -> Result<GCStatus, anyhow::Error> {
+    pub fn gc_status(&mut self) -> Result<GcStatus, anyhow::Error> {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -465,9 +465,9 @@ impl Repo {
                     "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
                     rusqlite::params![&gc_generation],
                 )?;
-                GCStatus::Complete(gc_generation)
+                GcStatus::Complete(gc_generation)
             } else {
-                GCStatus::Running(gc_generation)
+                GcStatus::Running(gc_generation)
             }
         } else {
             let gc_generation = tx.query_row(
@@ -475,7 +475,7 @@ impl Repo {
                 rusqlite::NO_PARAMS,
                 |row| row.get(0),
             )?;
-            GCStatus::Complete(gc_generation)
+            GcStatus::Complete(gc_generation)
         };
 
         tx.commit()?;
@@ -485,7 +485,7 @@ impl Repo {
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
-    ) -> Result<GCStats, anyhow::Error> {
+    ) -> Result<GcStats, anyhow::Error> {
         let gc_generation = Xid::new();
         let storage_engine = &mut self.storage_engine;
         let conn = &mut self.conn;

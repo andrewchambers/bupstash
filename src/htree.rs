@@ -164,7 +164,7 @@ impl TreeWriter {
         // The tree blocks must contain whole addresses.
         assert!((self.tree_blocks[level].len() % (8 + ADDRESS_SZ)) == 0);
         self.clear_level(sink, level)?;
-        Ok(self.finish_level(sink, level + 1)?)
+        self.finish_level(sink, level + 1)
     }
 
     pub fn finish(
