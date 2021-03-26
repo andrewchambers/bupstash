@@ -106,7 +106,7 @@ pub enum Progress {
     SetMessage(String),
 }
 
-pub const ABORT_CODE_SERVER_OVERLOADED: u64 = 0x9cf5c3ce325d27a6;
+pub const ABORT_CODE_SERVER_UNAVAILABLE: u64 = 0x9cf5c3ce325d27a6;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Abort {

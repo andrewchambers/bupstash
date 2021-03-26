@@ -37,9 +37,7 @@ pub enum ClientError {
     #[error("corrupt or tampered data")]
     CorruptOrTamperedData,
     #[error("server overloaded")]
-    ServerOverloaded,
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
+    ServerUnavailable,
 }
 
 pub fn open_repository(
@@ -56,8 +54,8 @@ pub fn open_repository(
     )?;
 
     match read_packet_raw(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::Abort(Abort { code, .. }) if code == Some(ABORT_CODE_SERVER_OVERLOADED) => {
-            return Err(ClientError::ServerOverloaded.into())
+        Packet::Abort(Abort { code, .. }) if code == Some(ABORT_CODE_SERVER_UNAVAILABLE) => {
+            return Err(ClientError::ServerUnavailable.into())
         }
         Packet::Abort(Abort { message, .. }) => anyhow::bail!("remote error: {}", message),
         Packet::ROpenRepository(resp) => {
