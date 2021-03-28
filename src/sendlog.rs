@@ -175,11 +175,11 @@ impl<'a> SendLogSession<'a> {
         if had_send_id {
             self.log.tmp_conn.execute(
                 "delete from Sent where (GCGeneration != ?) and (ItemId != ?);",
-                rusqlite::params![self.gc_generation, last_send_id],
+                rusqlite::params![self.gc_generation, last_send_id.unwrap()],
             )?;
             self.log.tmp_conn.execute(
                 "delete from StatCache where (GCGeneration != ?) and (ItemId != ?);",
-                rusqlite::params![self.gc_generation, last_send_id],
+                rusqlite::params![self.gc_generation, last_send_id.unwrap()],
             )?;
         } else {
             self.log.tmp_conn.execute(
@@ -206,14 +206,11 @@ impl<'a> SendLogSession<'a> {
         let has_address = self.cached_address(addr)?;
 
         if has_address {
-            let mut stmt = self.log.tmp_conn.prepare_cached(
-                "update Sent set LatestSessionId = $2 where GCGeneration = $1 and Address = $3;",
-            )?;
-            stmt.execute(rusqlite::params![
-                self.gc_generation,
-                self.session_id,
-                &addr.bytes[..]
-            ])?;
+            let mut stmt = self
+                .log
+                .tmp_conn
+                .prepare_cached("update Sent set LatestSessionId = $1 where Address = $2;")?;
+            stmt.execute(rusqlite::params![self.session_id, &addr.bytes[..]])?;
         } else {
             let mut stmt = self.log.tmp_conn.prepare_cached(
                 "insert into Sent(GCGeneration, LatestSessionId, Address) values($1, $2, $3);",
@@ -487,7 +484,7 @@ mod tests {
         let mut sendlog = SendLog::open(&log_path).unwrap();
         {
             let session = sendlog.session(gc_generation).unwrap();
-            session.perform_cache_invalidations(true).unwrap();
+            session.perform_cache_invalidations(false).unwrap();
             // gc_generation is the same so we keep cache.
             assert!(session.cached_address(&addr).unwrap());
             assert!(session.stat_cache_lookup(&[32; 0]).unwrap().is_some());
