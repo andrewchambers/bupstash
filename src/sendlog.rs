@@ -99,7 +99,7 @@ impl SendLog {
             )?;
 
             tx.execute(
-                "insert into LogMeta(Key, Value) values('schema-version', $1);",
+                "insert into LogMeta(Key, Value) values('schema-version', ?);",
                 &[&SCHEMA_VERSION],
             )?;
 
@@ -109,7 +109,7 @@ impl SendLog {
             )?;
 
             tx.execute(
-                "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+                "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid;",
                 rusqlite::NO_PARAMS,
             )?;
 
@@ -200,20 +200,18 @@ impl<'a> SendLogSession<'a> {
             anyhow::bail!("no active transaction");
         };
 
-        // There does not seem to be a way to do this in a single query due
-        // to the fact that we are using a 'without rowid' table. We can't change this
-        // without upgrading the send logs that are out there.
+        // TODO I think we can do this in one query instead of two.
         let has_address = self.cached_address(addr)?;
 
         if has_address {
             let mut stmt = self
                 .log
                 .tmp_conn
-                .prepare_cached("update Sent set LatestSessionId = $1 where Address = $2;")?;
+                .prepare_cached("update Sent set LatestSessionId = ? where Address = ?;")?;
             stmt.execute(rusqlite::params![self.session_id, &addr.bytes[..]])?;
         } else {
             let mut stmt = self.log.tmp_conn.prepare_cached(
-                "insert into Sent(GCGeneration, LatestSessionId, Address) values($1, $2, $3);",
+                "insert into Sent(GCGeneration, LatestSessionId, Address) values(?, ?, ?);",
             )?;
             stmt.execute(rusqlite::params![
                 self.gc_generation,
@@ -251,8 +249,8 @@ impl<'a> SendLogSession<'a> {
 
         // We update and not replace so we can keep an old item id if it exists.
         let mut stmt = self.log.tmp_conn.prepare_cached(
-            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Cached) Values($1, $2, $3, $4) \
-            on conflict(Hash) do update set LatestSessionId = $2;"
+            "insert into StatCache(GCGeneration, LatestSessionId, Hash, Cached) Values(?1, ?2, ?3, ?4) \
+            on conflict(Hash) do update set LatestSessionId = ?2;"
         )?;
 
         stmt.execute(rusqlite::params![
@@ -269,7 +267,7 @@ impl<'a> SendLogSession<'a> {
         let mut stmt = self
             .log
             .tmp_conn
-            .prepare_cached("select Cached from StatCache where Hash = $1;")?;
+            .prepare_cached("select Cached from StatCache where Hash = ?;")?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
             let data: Vec<u8> = r.get(0)?;
