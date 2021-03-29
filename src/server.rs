@@ -26,7 +26,7 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.protocol_version != "5" {
+                if req.protocol_version != "6" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.protocol_version
@@ -200,14 +200,13 @@ fn recv(
                 repo.add_chunk(&chunk.address, chunk.data)?;
             }
             Packet::TSendSync => {
-                repo.sync()?;
-                write_packet(w, &Packet::RSendSync)?;
+                let stats = repo.sync()?;
+                write_packet(w, &Packet::RSendSync(stats))?;
             }
             Packet::TAddItem(add_item) => {
                 if add_item.gc_generation != gc_generation {
                     anyhow::bail!("client sent an unexpected gc_generation");
                 }
-                repo.sync()?;
                 let item_id = repo.add_item(add_item.gc_generation, add_item.item)?;
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;

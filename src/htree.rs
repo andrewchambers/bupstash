@@ -41,10 +41,19 @@ impl Source for HashMap<Address, Vec<u8>> {
     }
 }
 
+pub struct TreeMeta {
+    pub height: usize,
+    pub address: Address,
+    pub total_chunk_count: u64,
+    pub data_chunk_count: u64,
+    pub stream_size: u64,
+}
+
 pub struct TreeWriter {
     min_addr_chunk_size: usize,
     max_addr_chunk_size: usize,
     tree_blocks: Vec<Vec<u8>>,
+    total_chunk_count: u64,
     data_chunk_count: u64,
     stream_size: u64,
 }
@@ -64,6 +73,7 @@ impl TreeWriter {
             min_addr_chunk_size,
             max_addr_chunk_size,
             tree_blocks: Vec::new(),
+            total_chunk_count: 0,
             data_chunk_count: 0,
             stream_size: 0,
         }
@@ -81,6 +91,7 @@ impl TreeWriter {
             }
             let block = compression::compress(compression::Scheme::None, block);
             sink.add_chunk(&block_address, block)?;
+            self.total_chunk_count += 1;
             self.add_addr(sink, level + 1, leaf_count, &block_address)?;
         }
         Ok(())
@@ -121,6 +132,7 @@ impl TreeWriter {
         addr: &Address,
     ) -> Result<(), anyhow::Error> {
         self.data_chunk_count += 1;
+        self.total_chunk_count += 1;
         self.add_addr(sink, 0, 1, addr)?;
         Ok(())
     }
@@ -167,10 +179,7 @@ impl TreeWriter {
         self.finish_level(sink, level + 1)
     }
 
-    pub fn finish(
-        mut self,
-        sink: &mut dyn Sink,
-    ) -> Result<(usize, u64, u64, Address), anyhow::Error> {
+    pub fn finish(mut self, sink: &mut dyn Sink) -> Result<TreeMeta, anyhow::Error> {
         // Its a bug to call finish without adding a single chunk.
         // Either the number of tree_blocks grew larger than 1, or the root
         // block has at at least one address.
@@ -179,7 +188,13 @@ impl TreeWriter {
                 || ((self.tree_blocks.len() == 1) && self.tree_blocks[0].len() >= (8 + ADDRESS_SZ))
         );
         let (height, address) = self.finish_level(sink, 0)?;
-        Ok((height, self.data_chunk_count, self.stream_size, address))
+        Ok(TreeMeta {
+            height,
+            address,
+            total_chunk_count: self.total_chunk_count,
+            data_chunk_count: self.data_chunk_count,
+            stream_size: self.stream_size,
+        })
     }
 }
 
@@ -282,12 +297,13 @@ mod tests {
         let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
         let addr = Address::from_bytes(&[1; ADDRESS_SZ]);
         tw.add(&mut chunks, &addr, 3, vec![1, 2, 3]).unwrap();
-        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
+        let meta = tw.finish(&mut chunks).unwrap();
         // root = chunk1
-        assert_eq!(n_data, 1);
-        assert_eq!(data_sz, 3);
+        assert_eq!(meta.data_chunk_count, 1);
+        assert_eq!(meta.total_chunk_count, 1);
+        assert_eq!(meta.stream_size, 3);
         assert_eq!(chunks.len(), 1);
-        let addr_chunk = chunks.get_mut(&result).unwrap();
+        let addr_chunk = chunks.get_mut(&meta.address).unwrap();
         assert_eq!(addr_chunk.len(), 3);
     }
 
@@ -312,15 +328,16 @@ mod tests {
         )
         .unwrap();
 
-        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
+        let meta = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2]
         // chunk1, chunk2
-        assert_eq!(n_data, 2);
-        assert_eq!(data_sz, 1);
+        assert_eq!(meta.data_chunk_count, 2);
+        assert_eq!(meta.total_chunk_count, 3);
+        assert_eq!(meta.stream_size, 1);
         assert_eq!(chunks.len(), 3);
-        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = chunks.get_mut(&meta.address).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
@@ -353,16 +370,17 @@ mod tests {
         )
         .unwrap();
 
-        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
+        let meta = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0 .. chunk1]
         // address2 = [chunk3]
         // chunk0, chunk1, chunk3
-        assert_eq!(n_data, 3);
-        assert_eq!(data_sz, 4);
+        assert_eq!(meta.data_chunk_count, 3);
+        assert_eq!(meta.total_chunk_count, 6);
+        assert_eq!(meta.stream_size, 4);
         assert_eq!(chunks.len(), 6);
-        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = chunks.get_mut(&meta.address).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
@@ -388,15 +406,16 @@ mod tests {
         )
         .unwrap();
 
-        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
+        let meta = tw.finish(&mut chunks).unwrap();
 
         // One chunk per added. One for addresses.
         // root = [chunk1 .. chunk2 ]
         // chunk1, chunk2
-        assert_eq!(n_data, 2);
-        assert_eq!(data_sz, 1);
+        assert_eq!(meta.data_chunk_count, 2);
+        assert_eq!(meta.total_chunk_count, 3);
+        assert_eq!(meta.stream_size, 1);
         assert_eq!(chunks.len(), 3);
-        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = chunks.get_mut(&meta.address).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
@@ -429,16 +448,17 @@ mod tests {
         )
         .unwrap();
 
-        let (_, n_data, data_sz, result) = tw.finish(&mut chunks).unwrap();
+        let meta = tw.finish(&mut chunks).unwrap();
 
         // root = [address1 .. address2]
         // address1 = [chunk0, chunk1]
         // address2 = [chunk3]
         // chunk0, chunk1, chunk3
-        assert_eq!(n_data, 3);
-        assert_eq!(data_sz, 4);
+        assert_eq!(meta.data_chunk_count, 3);
+        assert_eq!(meta.total_chunk_count, 6);
+        assert_eq!(meta.stream_size, 4);
         assert_eq!(chunks.len(), 6);
-        let addr_chunk = chunks.get_mut(&result).unwrap().clone();
+        let addr_chunk = chunks.get_mut(&meta.address).unwrap().clone();
         let addr_chunk = compression::unauthenticated_decompress(addr_chunk).unwrap();
         assert_eq!(addr_chunk.len(), 2 * (8 + ADDRESS_SZ));
     }
@@ -446,11 +466,7 @@ mod tests {
     #[test]
     fn test_tree_reader_walk() {
         let mut chunks = HashMap::<Address, Vec<u8>>::new();
-        let height: usize;
-        let n_data: u64;
-        let addr: Address;
-
-        {
+        let meta = {
             // Chunks that can only fit two addresses.
             let mut tw = TreeWriter::new(MINIMUM_ADDR_CHUNK_SIZE, MINIMUM_ADDR_CHUNK_SIZE);
             tw.add(
@@ -475,13 +491,10 @@ mod tests {
             )
             .unwrap();
 
-            let result = tw.finish(&mut chunks).unwrap();
-            height = result.0;
-            n_data = result.1;
-            addr = result.3;
-        }
+            tw.finish(&mut chunks).unwrap()
+        };
 
-        let mut tr = TreeReader::new(height, n_data, &addr);
+        let mut tr = TreeReader::new(meta.height, meta.data_chunk_count, &meta.address);
 
         // First address is already counted
         let mut count = 0;
@@ -513,6 +526,7 @@ mod tests {
         // chunk0, chunk1, chunk3
         assert_eq!(count, 6);
         assert_eq!(leaf_count, 3);
-        assert_eq!(n_data, leaf_count);
+        assert_eq!(meta.total_chunk_count, count);
+        assert_eq!(meta.data_chunk_count, leaf_count);
     }
 }

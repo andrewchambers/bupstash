@@ -16,7 +16,7 @@ impl ExternalStorage {
         protocol::write_packet(
             &mut sock,
             &protocol::Packet::StorageConnect(protocol::StorageConnect {
-                protocol: "s-3".to_string(),
+                protocol: "s-4".to_string(),
                 path: path.to_string(),
             }),
         )?;
@@ -61,10 +61,10 @@ impl Engine for ExternalStorage {
         Ok(())
     }
 
-    fn sync(&mut self) -> Result<(), anyhow::Error> {
+    fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
         protocol::write_packet(&mut self.sock, &protocol::Packet::TStorageWriteBarrier)?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE)? {
-            protocol::Packet::RStorageWriteBarrier => Ok(()),
+            protocol::Packet::RStorageWriteBarrier(stats) => Ok(stats),
             _ => anyhow::bail!("unexpected packet reponse, expected RStorageWriteBarrier"),
         }
     }

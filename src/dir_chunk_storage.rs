@@ -4,6 +4,7 @@ use super::chunk_storage::Engine;
 use super::crypto;
 use super::fsutil;
 use super::hex;
+use super::protocol;
 use super::repository;
 use super::xid;
 
@@ -29,7 +30,7 @@ enum ReadWorkerMsg {
 
 enum WriteWorkerMsg {
     AddChunk((Address, Vec<u8>)),
-    Barrier(crossbeam_channel::Sender<Option<anyhow::Error>>),
+    Barrier(crossbeam_channel::Sender<Result<protocol::SyncStats, anyhow::Error>>),
     Exit,
 }
 
@@ -70,7 +71,7 @@ impl DirStorage {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk(_)) => (),
                         Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => {
-                            let _ = rendezvous_tx.send(Some(write_err));
+                            let _ = rendezvous_tx.send(Err(write_err));
                         }
                         Ok(WriteWorkerMsg::Exit) | Err(_) => {
                             return;
@@ -98,6 +99,9 @@ impl DirStorage {
                 // of any io errors that happen on that directory.
                 let dir_handle = worker_try!(std::fs::File::open(&data_path));
 
+                let mut added_chunks: u64 = 0;
+                let mut added_bytes: u64 = 0;
+
                 loop {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk((addr, data))) => {
@@ -108,6 +112,9 @@ impl DirStorage {
                             if dest.exists() {
                                 continue;
                             }
+
+                            added_chunks += 1;
+                            added_bytes += data.len() as u64;
 
                             let random_suffix = {
                                 let mut buf = [0; 12];
@@ -134,10 +141,15 @@ impl DirStorage {
                         }
                         Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.sync_all() {
                             Ok(()) => {
-                                let _ = rendezvous_tx.send(None);
+                                let _ = rendezvous_tx.send(Ok(protocol::SyncStats {
+                                    added_chunks,
+                                    added_bytes,
+                                }));
+                                added_chunks = 0;
+                                added_bytes = 0;
                             }
                             Err(err) => {
-                                let _ = rendezvous_tx.send(Some(err.into()));
+                                let _ = rendezvous_tx.send(Err(err.into()));
                                 worker_bail!(anyhow::format_err!("io error"));
                             }
                         },
@@ -212,7 +224,12 @@ impl DirStorage {
         }
     }
 
-    fn sync_write_workers(&mut self) -> Result<(), anyhow::Error> {
+    fn sync_write_workers(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
+        let mut aggregate_stats = protocol::SyncStats {
+            added_bytes: 0,
+            added_chunks: 0,
+        };
+
         let mut rendezvous = Vec::with_capacity(self.write_worker_handles.len());
 
         debug_assert!(self.write_worker_handles.len() == self.write_worker_tx.len());
@@ -224,21 +241,31 @@ impl DirStorage {
                 .unwrap();
         }
 
-        let mut result: Result<(), anyhow::Error> = Ok(());
+        let mut aggregate_err: Option<anyhow::Error> = None;
         for c in rendezvous.iter() {
-            if let Some(err) = c.recv().unwrap() {
-                if result.is_ok() {
-                    result = Err(err)
+            match c.recv().unwrap() {
+                Ok(stats) => {
+                    aggregate_stats.added_bytes += stats.added_bytes;
+                    aggregate_stats.added_chunks += stats.added_chunks;
+                }
+                Err(err) => {
+                    if aggregate_err.is_none() {
+                        aggregate_err = Some(err)
+                    }
                 }
             }
         }
-        result
+
+        match aggregate_err {
+            None => Ok(aggregate_stats),
+            Some(err) => Err(err),
+        }
     }
 
     fn check_write_worker_io_errors(&mut self) -> Result<(), anyhow::Error> {
         if self.had_io_error.load(Ordering::SeqCst) {
             match self.sync_write_workers() {
-                Ok(()) => Err(anyhow::format_err!("io error")),
+                Ok(_) => Err(anyhow::format_err!("io error")),
                 Err(err) => Err(err),
             }
         } else {
@@ -341,7 +368,7 @@ impl Engine for DirStorage {
         Ok(())
     }
 
-    fn sync(&mut self) -> Result<(), anyhow::Error> {
+    fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
         self.sync_write_workers()
     }
 
@@ -373,10 +400,10 @@ impl Engine for DirStorage {
         // worry about fs semantics when removing while iterating.
         let mut to_remove = Vec::new();
 
-        let mut chunks_remaining = 0;
-        let mut chunks_deleted = 0;
-        let mut bytes_deleted = 0;
-        let mut bytes_remaining = 0;
+        let mut chunks_remaining: u64 = 0;
+        let mut chunks_deleted: u64 = 0;
+        let mut bytes_deleted: u64 = 0;
+        let mut bytes_remaining: u64 = 0;
 
         for e in std::fs::read_dir(&self.dir_path)? {
             let e = e?;
@@ -384,12 +411,12 @@ impl Engine for DirStorage {
                 Ok(addr) => {
                     if reachable.probably_has(&addr) {
                         if let Ok(md) = e.metadata() {
-                            bytes_remaining += md.len() as usize
+                            bytes_remaining += md.len() as u64
                         }
                         chunks_remaining += 1
                     } else {
                         if let Ok(md) = e.metadata() {
-                            bytes_deleted += md.len() as usize
+                            bytes_deleted += md.len() as u64
                         }
                         to_remove.push(e.path());
                         chunks_deleted += 1;

@@ -125,6 +125,12 @@ pub struct RStorageEstimateCount {
     pub count: serde_bare::Uint,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct SyncStats {
+    pub added_chunks: u64,
+    pub added_bytes: u64,
+}
+
 #[non_exhaustive]
 #[derive(Debug, PartialEq)]
 pub enum Packet {
@@ -136,7 +142,7 @@ pub enum Packet {
     RBeginSend(RBeginSend),
     Chunk(Chunk),
     TSendSync,
-    RSendSync,
+    RSendSync(SyncStats),
     TAddItem(AddItem),
     RAddItem(Xid),
     TRmItems(Vec<Xid>),
@@ -157,7 +163,7 @@ pub enum Packet {
     RRestoreRemoved(RRestoreRemoved),
     RequestIndex(RequestIndex),
     TStorageWriteBarrier,
-    RStorageWriteBarrier,
+    RStorageWriteBarrier(SyncStats),
     StorageConnect(StorageConnect),
     TStoragePrepareForGc(Xid),
     RStoragePrepareForGc,
@@ -317,7 +323,7 @@ pub fn read_packet_raw(
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_SEND_SYNC => Packet::TSendSync,
-        PACKET_KIND_R_SEND_SYNC => Packet::RSendSync,
+        PACKET_KIND_R_SEND_SYNC => Packet::RSendSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
@@ -357,7 +363,9 @@ pub fn read_packet_raw(
             Packet::RStorageGcCompleted(serde_bare::from_slice(&buf)?)
         }
         PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
-        PACKET_KIND_R_STORAGE_WRITE_BARRIER => Packet::RStorageWriteBarrier,
+        PACKET_KIND_R_STORAGE_WRITE_BARRIER => {
+            Packet::RStorageWriteBarrier(serde_bare::from_slice(&buf)?)
+        }
         PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS => {
             if buf.len() % ADDRESS_SZ != 0 {
                 anyhow::bail!("protocol error, pipeline get chunks size error");
@@ -472,8 +480,10 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::TSendSync => {
             send_hdr(w, PACKET_KIND_T_SEND_SYNC, 0)?;
         }
-        Packet::RSendSync => {
-            send_hdr(w, PACKET_KIND_R_SEND_SYNC, 0)?;
+        Packet::RSendSync(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_SEND_SYNC, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TAddItem(ref v) => {
             let b = serde_bare::to_vec(&v)?;
@@ -599,7 +609,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RStorageGcCompleted(v) => {
+        Packet::RStorageGcCompleted(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_R_STORAGE_GC_COMPLETED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
@@ -607,11 +617,13 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::TStorageWriteBarrier => {
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
         }
-        Packet::RStorageWriteBarrier => {
-            send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, 0)?;
+        Packet::RStorageWriteBarrier(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
         }
-        Packet::StoragePipelineGetChunks(a) => {
-            return write_storage_pipelined_get_chunks(w, &a);
+        Packet::StoragePipelineGetChunks(ref a) => {
+            return write_storage_pipelined_get_chunks(w, a);
         }
         Packet::EndOfTransmission => {
             send_hdr(w, PACKET_KIND_END_OF_TRANSMISSION, 0)?;

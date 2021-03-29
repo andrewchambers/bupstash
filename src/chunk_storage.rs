@@ -1,6 +1,7 @@
 use super::abloom;
 use super::address::*;
 use super::htree;
+use super::protocol;
 use super::repository;
 use super::xid;
 
@@ -35,7 +36,7 @@ pub trait Engine {
     // A write barrier, any previously added chunks are only guaranteed to be
     // in stable storage after a call to sync has returned. A backend
     // can use this to implement concurrent background writes.
-    fn sync(&mut self) -> Result<(), anyhow::Error>;
+    fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error>;
 
     // Estimate how many chunks we have stored, the implementation is free to
     // make a rough guess to increase performance. One trick is sampling
