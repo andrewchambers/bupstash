@@ -9,6 +9,7 @@ pub mod compression;
 pub mod crypto;
 pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
+pub mod fmtutil;
 pub mod fsutil;
 pub mod hex;
 pub mod htree;
@@ -1038,25 +1039,29 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             std::io::stderr(),
             "{} chunk(s), {} processed",
             stats.total_chunks,
-            format_size(stats.uncompressed_bytes)
+            fmtutil::format_size(stats.uncompressed_bytes)
         )?;
         writeln!(
             std::io::stderr(),
             "{} chunk(s), {} (compressed) sent",
             stats.transferred_chunks,
-            format_size(stats.transferred_bytes),
+            fmtutil::format_size(stats.transferred_bytes),
         )?;
         writeln!(
             std::io::stderr(),
-            "{} chunk(s), {} (compressed) persisted",
+            "{} chunk(s), {} (compressed) new",
             stats.added_chunks,
-            format_size(stats.added_bytes)
+            fmtutil::format_size(stats.added_bytes)
         )?;
         if stats.added_bytes == 0 {
-            writeln!(std::io::stderr(), "infinite realized compression ratio")?;
+            writeln!(std::io::stderr(), "infinite effective compression ratio")?;
         } else {
-            let rcr = (stats.uncompressed_bytes as f64) / (stats.added_bytes as f64);
-            writeln!(std::io::stderr(), "{:.1}:1 realized compression ratio", rcr)?;
+            let ecr = (stats.uncompressed_bytes as f64) / (stats.added_bytes as f64);
+            writeln!(
+                std::io::stderr(),
+                "{:.1}:1 effective compression ratio",
+                ecr
+            )?;
         }
     }
 
@@ -1223,67 +1228,25 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn repr_digits(mut v: u64) -> usize {
-    let mut n = 0;
-    while v != 0 {
-        v /= 10;
-        n += 1;
-    }
-    n.max(1)
-}
-
-fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>, utc_timestamps: bool) -> String {
-    let tsfmt = "%Y/%m/%d %T";
-    if utc_timestamps {
-        ts.format(tsfmt).to_string()
-    } else {
-        chrono::DateTime::<chrono::Local>::from(*ts)
-            .format(tsfmt)
-            .to_string()
-    }
-}
-
-fn format_size(n: u64) -> String {
-    if n > 1_000_000_000_000_000 {
-        format!(
-            "{}.{}PB",
-            n / 1_000_000_000_000_000,
-            (n % 1_000_000_000_000_000) / 10_000_000_000_000
-        )
-    } else if n > 1_000_000_000_000 {
-        format!(
-            "{}.{}TB",
-            n / 1_000_000_000_000,
-            (n % 1_000_000_000_000 / 10_000_000_000)
-        )
-    } else if n > 1_000_000_000 {
-        format!(
-            "{}.{}GB",
-            n / 1_000_000_000,
-            (n % 1_000_000_000) / 10_000_000
-        )
-    } else if n > 1_000_000 {
-        format!("{}.{}MB", n / 1_000_000, (n % 1_000_000) / 10_000)
-    } else if n > 1_000 {
-        format!("{}.{}kB", n / 1_000, (n % 1_000) / 10)
-    } else {
-        format!("{}B", n)
-    }
-}
-
 fn format_human_content_listing(
     ent: &index::IndexEntry,
     utc_timestamps: bool,
-    padding: usize,
+    pad_size_to: usize,
 ) -> String {
     let mut result = String::new();
     std::fmt::write(&mut result, format_args!("{}", ent.display_mode())).unwrap();
-    let size = format!("{}", ent.size.0);
-    let size_padding: String = std::iter::repeat(' ').take(padding - size.len()).collect();
+    let size = if ent.is_file() {
+        fmtutil::format_size(ent.size.0)
+    } else {
+        "-".to_string()
+    };
+    let size_padding: String = std::iter::repeat(' ')
+        .take(pad_size_to - size.len())
+        .collect();
     std::fmt::write(&mut result, format_args!(" {}{}", size, size_padding)).unwrap();
     let ts = chrono::NaiveDateTime::from_timestamp(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32);
     let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
-    let ts = format_timestamp(&ts, utc_timestamps);
+    let ts = fmtutil::format_timestamp(&ts, utc_timestamps);
     std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();
     std::fmt::write(&mut result, format_args!(" {}", ent.path)).unwrap();
     result
@@ -1483,7 +1446,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut max_size_digits = 0;
             for ent in content_index.iter() {
                 let ent = ent?;
-                max_size_digits = std::cmp::max(repr_digits(ent.size.0), max_size_digits)
+                max_size_digits =
+                    std::cmp::max(fmtutil::format_size(ent.size.0).len(), max_size_digits)
             }
             for ent in content_index.iter() {
                 let ent = ent?;
@@ -1704,7 +1668,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &to_diff[1],
                 diff_mask,
                 &mut |_: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
-                    max_size_digits = std::cmp::max(repr_digits(e.size.0), max_size_digits);
+                    max_size_digits =
+                        std::cmp::max(fmtutil::format_size(e.size.0).len(), max_size_digits);
                     Ok(())
                 },
             )?;
@@ -1916,10 +1881,10 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         writeln!(out, "{} chunks remaining", chunks_remaining)?;
     }
     if let Some(bytes_deleted) = stats.bytes_deleted {
-        writeln!(out, "{} deleted", format_size(bytes_deleted))?;
+        writeln!(out, "{} deleted", fmtutil::format_size(bytes_deleted))?;
     }
     if let Some(bytes_remaining) = stats.bytes_remaining {
-        writeln!(out, "{} remaining", format_size(bytes_remaining))?;
+        writeln!(out, "{} remaining", fmtutil::format_size(bytes_remaining))?;
     }
 
     Ok(())

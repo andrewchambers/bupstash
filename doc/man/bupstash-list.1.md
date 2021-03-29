@@ -16,7 +16,6 @@ with the bupstash query language.
 Only the metadata needs to be decrypted to list items, so a metadata key is sufficient
 for item queries, even without access to the data decryption key.
 
-
 ## QUERY LANGUAGE
 
 For full documentation on the query language, see bupstash-query-language(7).
@@ -29,6 +28,26 @@ $ bupstash list name='*.tar'
 $ bupstash list timestamp='2020*'
 ...
 ```
+
+## SPECIAL TAGS
+
+Bupstash automatically inserts special tags that can be viewed and queried against, they are outlined below.
+
+### decryption-key-id
+
+This special tag is inserted when the `--query-encrypted` option is used, it allows searching against the
+key id that would be uesd for decrypting the given item. This tag is mostly useful for pruning
+backups for which you do not have the decryption key.
+
+### size
+
+This tag is the size of the data stream and any index metadata associated with the snapshot. This
+means the size may not exactly match the size of the data stream retrieved by bupstash-get(1) for the case
+of snapshots.
+
+### timestamp
+
+The time the item was created formatted as `YYYY/MM/DD HH:MM:SS`.
 
 ## QUERY CACHING
 
@@ -119,8 +138,8 @@ The output json object format is pending stabilization so is not documented.
 
 ```
 $ bupstash list name=backup.tar and timestamp=2020/07/* 
-id="aa87fdbc72241f363568bbb888c0834e" name="backup.tar" timestamp="2020-07-24 15:25:00"
-id="d271ec0b989cfc20e10d01380115747e" name="backup.tar" timestamp="2020-07-29 15:25:24"
+id="aa87fdbc72241f363568bbb888c0834e" name="backup.tar" size="106.34MB" timestamp="2020-07-24 15:25:00"
+id="d271ec0b989cfc20e10d01380115747e" name="backup.tar" size="146.38MB" timestamp="2020-07-29 15:25:24"
 ...
 ```
 
