@@ -8,6 +8,7 @@ use super::external_chunk_storage;
 use super::fsutil;
 use super::htree;
 use super::itemset;
+use super::protocol;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
@@ -24,10 +25,10 @@ pub enum StorageEngineSpec {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct GcStats {
-    pub chunks_deleted: Option<usize>,
-    pub bytes_deleted: Option<usize>,
-    pub chunks_remaining: Option<usize>,
-    pub bytes_remaining: Option<usize>,
+    pub chunks_deleted: Option<u64>,
+    pub bytes_deleted: Option<u64>,
+    pub chunks_remaining: Option<u64>,
+    pub bytes_remaining: Option<u64>,
 }
 
 pub struct Repo {
@@ -282,7 +283,7 @@ impl Repo {
         self.storage_engine.add_chunk(addr, buf)
     }
 
-    pub fn sync(&mut self) -> Result<(), anyhow::Error> {
+    pub fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
         self.storage_engine.sync()
     }
 

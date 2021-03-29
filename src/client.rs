@@ -47,7 +47,7 @@ pub fn open_repository(
         w,
         &Packet::TOpenRepository(TOpenRepository {
             open_mode,
-            protocol_version: "5".to_string(),
+            protocol_version: "6".to_string(),
         }),
     )?;
 
@@ -85,18 +85,33 @@ pub fn init_repository(
 struct ConnectionHtreeSink<'a, 'b> {
     checkpoint_bytes: u64,
     dirty_bytes: u64,
+    transferred_chunks: u64,
+    transferred_bytes: u64,
+    added_chunks: u64,
+    added_bytes: u64,
     send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
     acache: acache::ACache,
     r: &'a mut dyn std::io::Read,
     w: &'a mut dyn std::io::Write,
 }
 
+impl ConnectionHtreeSink<'_, '_> {
+    fn sync(&mut self) -> Result<(), anyhow::Error> {
+        write_packet(self.w, &Packet::TSendSync)?;
+        match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::RSendSync(stats) => {
+                self.added_bytes += stats.added_bytes;
+                self.added_chunks += stats.added_chunks;
+            }
+            _ => anyhow::bail!("protocol error, expected RSentSync packet"),
+        }
+        self.dirty_bytes = 0;
+        Ok(())
+    }
+}
+
 impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
-    fn add_chunk(
-        &mut self,
-        addr: &Address,
-        data: std::vec::Vec<u8>,
-    ) -> std::result::Result<(), anyhow::Error> {
+    fn add_chunk(&mut self, addr: &Address, data: std::vec::Vec<u8>) -> Result<(), anyhow::Error> {
         if !self.acache.add(addr) {
             return Ok(());
         }
@@ -106,25 +121,24 @@ impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
                 let mut send_log_session = send_log_session.borrow_mut();
 
                 if send_log_session.add_address(addr)? {
-                    self.dirty_bytes += data.len() as u64;
                     write_chunk(self.w, addr, &data)?;
+                    self.dirty_bytes += data.len() as u64;
+                    self.transferred_bytes += data.len() as u64;
+                    self.transferred_chunks += 1;
                 }
 
                 if self.dirty_bytes >= self.checkpoint_bytes {
-                    self.dirty_bytes = 0;
-                    write_packet(self.w, &Packet::TSendSync)?;
-                    match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
-                        Packet::RSendSync => {
-                            send_log_session.checkpoint()?;
-                        }
-                        _ => anyhow::bail!("protocol error, expected RSentSync packet"),
-                    }
+                    self.sync()?;
+                    send_log_session.checkpoint()?;
                 }
 
                 Ok(())
             }
             None => {
                 write_chunk(self.w, addr, &data)?;
+                self.dirty_bytes += data.len() as u64;
+                self.transferred_bytes += data.len() as u64;
+                self.transferred_chunks += 1;
                 Ok(())
             }
         }
@@ -161,6 +175,23 @@ pub enum DataSource {
     },
 }
 
+pub struct SendStats {
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    pub end_time: chrono::DateTime<chrono::Utc>,
+    // Total number of chunks processed.
+    pub total_chunks: u64,
+    // Total size of all data streams sent.
+    pub uncompressed_bytes: u64,
+    // Number of chunks actually sent to the remote after caching.
+    pub transferred_chunks: u64,
+    // Data actually sent after compression/caching.
+    pub transferred_bytes: u64,
+    // Number of chunks added to the remote server.
+    pub added_chunks: u64,
+    // Number of bytes added to the remote server.
+    pub added_bytes: u64,
+}
+
 pub fn send(
     ctx: &mut SendContext,
     r: &mut dyn std::io::Read,
@@ -168,7 +199,9 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: &mut DataSource,
-) -> Result<Xid, anyhow::Error> {
+) -> Result<(Xid, SendStats), anyhow::Error> {
+    let start_time = chrono::Utc::now();
+
     let send_id = match send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
         None => None,
@@ -184,7 +217,8 @@ pub fn send(
     };
 
     let mut index_tree = None;
-    let mut index_size = 0;
+    let mut index_stream_size = 0;
+    let mut index_chunk_count = 0;
 
     let send_log_session = match send_log {
         Some(ref mut send_log) => Some(std::cell::RefCell::new(
@@ -202,6 +236,10 @@ pub fn send(
     let mut sink = ConnectionHtreeSink {
         checkpoint_bytes: ctx.checkpoint_bytes,
         dirty_bytes: 0,
+        transferred_bytes: 0,
+        transferred_chunks: 0,
+        added_chunks: 0,
+        added_bytes: 0,
         send_log_session: &send_log_session,
         acache: acache::ACache::new(65536),
         w,
@@ -291,15 +329,15 @@ pub fn send(
                 ctx.idx_ectx.encrypt_data(chunk_data, ctx.compression),
             )?;
 
-            let (i_tree_height, i_tree_data_chunk_count, i_size, i_address) =
-                idx_tw.finish(&mut sink)?;
+            let i_tree_meta = idx_tw.finish(&mut sink)?;
 
             index_tree = Some(itemset::HTreeMetadata {
-                height: serde_bare::Uint(i_tree_height as u64),
-                data_chunk_count: serde_bare::Uint(i_tree_data_chunk_count),
-                address: i_address,
+                height: serde_bare::Uint(i_tree_meta.height as u64),
+                data_chunk_count: serde_bare::Uint(i_tree_meta.data_chunk_count),
+                address: i_tree_meta.address,
             });
-            index_size = i_size;
+            index_stream_size = i_tree_meta.stream_size;
+            index_chunk_count = i_tree_meta.total_chunk_count;
         }
     }
 
@@ -312,15 +350,22 @@ pub fn send(
         data_len,
         ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
     )?;
-    let (data_tree_height, data_tree_data_chunk_count, data_sz, data_tree_address) =
-        tw.finish(&mut sink)?;
+
+    let data_tree_meta = tw.finish(&mut sink)?;
+
+    sink.sync()?;
+
+    let transferred_chunks = sink.transferred_chunks;
+    let transferred_bytes = sink.transferred_bytes;
+    let added_chunks = sink.added_chunks;
+    let added_bytes = sink.added_bytes;
 
     let plain_text_metadata = itemset::PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
         data_tree: itemset::HTreeMetadata {
-            height: serde_bare::Uint(data_tree_height as u64),
-            data_chunk_count: serde_bare::Uint(data_tree_data_chunk_count),
-            address: data_tree_address,
+            height: serde_bare::Uint(data_tree_meta.height as u64),
+            data_chunk_count: serde_bare::Uint(data_tree_meta.data_chunk_count),
+            address: data_tree_meta.address,
         },
         index_tree,
     };
@@ -330,11 +375,18 @@ pub fn send(
         send_key_id: ctx.send_key_id,
         idx_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
-        timestamp: chrono::Utc::now(),
-        data_size: serde_bare::Uint(data_sz),
-        index_size: serde_bare::Uint(index_size),
+        timestamp: start_time,
+        data_size: serde_bare::Uint(data_tree_meta.stream_size),
+        index_size: serde_bare::Uint(index_stream_size),
         tags,
     };
+
+    let versioned_metadata = itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+        plain_text_metadata,
+        encrypted_metadata: ctx
+            .metadata_ectx
+            .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Lz4),
+    });
 
     ctx.progress.set_message("syncing storage...");
 
@@ -342,12 +394,7 @@ pub fn send(
         w,
         &Packet::TAddItem(AddItem {
             gc_generation: ack.gc_generation,
-            item: itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
-                plain_text_metadata,
-                encrypted_metadata: ctx
-                    .metadata_ectx
-                    .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Lz4),
-            }),
+            item: versioned_metadata,
         }),
     )?;
 
@@ -356,7 +403,19 @@ pub fn send(
             if send_log_session.is_some() {
                 send_log_session.unwrap().into_inner().commit(&id)?;
             }
-            Ok(id)
+            Ok((
+                id,
+                SendStats {
+                    start_time,
+                    end_time: chrono::Utc::now(),
+                    uncompressed_bytes: data_tree_meta.stream_size + index_stream_size,
+                    total_chunks: data_tree_meta.total_chunk_count + index_chunk_count,
+                    transferred_bytes,
+                    transferred_chunks,
+                    added_bytes,
+                    added_chunks,
+                },
+            ))
         }
         _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
     }
@@ -373,6 +432,7 @@ fn send_chunks(
     data: &mut dyn std::io::Read,
     on_chunk: &mut dyn FnMut(&Address, usize),
 ) -> Result<u64, anyhow::Error> {
+    // We don't bother initializing such a large buffer, it is a waste of time.
     let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
     let mut n_written: u64 = 0;
     loop {

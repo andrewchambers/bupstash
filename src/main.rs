@@ -697,7 +697,11 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
     opts.optflag("", "no-compression", "Disable compression.");
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
-
+    opts.optflag(
+        "",
+        "print-stats",
+        "Print put statistics to stderr on completion.",
+    );
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
     opts.optflag(
@@ -1008,7 +1012,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         one_file_system,
     };
 
-    let id = client::send(
+    let (id, stats) = client::send(
         &mut ctx,
         &mut serve_out,
         &mut serve_in,
@@ -1020,6 +1024,41 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     serve_proc.wait()?;
 
     progress.finish_and_clear();
+
+    if matches.opt_present("print-stats") {
+        let duration = stats.end_time.signed_duration_since(stats.start_time);
+        writeln!(
+            std::io::stderr(),
+            "{}m{}.{}s put duration",
+            duration.num_minutes(),
+            duration.num_seconds() % 60,
+            duration.num_milliseconds() % 1000
+        )?;
+        writeln!(
+            std::io::stderr(),
+            "{} chunk(s), {} processed",
+            stats.total_chunks,
+            format_size(stats.uncompressed_bytes)
+        )?;
+        writeln!(
+            std::io::stderr(),
+            "{} chunk(s), {} (compressed) sent",
+            stats.transferred_chunks,
+            format_size(stats.transferred_bytes),
+        )?;
+        writeln!(
+            std::io::stderr(),
+            "{} chunk(s), {} (compressed) persisted",
+            stats.added_chunks,
+            format_size(stats.added_bytes)
+        )?;
+        if stats.added_bytes == 0 {
+            writeln!(std::io::stderr(), "infinite realized compression ratio")?;
+        } else {
+            let rcr = (stats.uncompressed_bytes as f64) / (stats.added_bytes as f64);
+            writeln!(std::io::stderr(), "{:.1}:1 realized compression ratio", rcr)?;
+        }
+    }
 
     writeln!(std::io::stdout(), "{}", id)?;
     Ok(())
@@ -1193,28 +1232,58 @@ fn repr_digits(mut v: u64) -> usize {
     n.max(1)
 }
 
+fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>, utc_timestamps: bool) -> String {
+    let tsfmt = "%Y/%m/%d %T";
+    if utc_timestamps {
+        ts.format(tsfmt).to_string()
+    } else {
+        chrono::DateTime::<chrono::Local>::from(*ts)
+            .format(tsfmt)
+            .to_string()
+    }
+}
+
+fn format_size(n: u64) -> String {
+    if n > 1_000_000_000_000_000 {
+        format!(
+            "{}.{}PB",
+            n / 1_000_000_000_000_000,
+            (n % 1_000_000_000_000_000) / 10_000_000_000_000
+        )
+    } else if n > 1_000_000_000_000 {
+        format!(
+            "{}.{}TB",
+            n / 1_000_000_000_000,
+            (n % 1_000_000_000_000 / 10_000_000_000)
+        )
+    } else if n > 1_000_000_000 {
+        format!(
+            "{}.{}GB",
+            n / 1_000_000_000,
+            (n % 1_000_000_000) / 10_000_000
+        )
+    } else if n > 1_000_000 {
+        format!("{}.{}MB", n / 1_000_000, (n % 1_000_000) / 10_000)
+    } else if n > 1_000 {
+        format!("{}.{}kB", n / 1_000, (n % 1_000) / 10)
+    } else {
+        format!("{}B", n)
+    }
+}
+
 fn format_human_content_listing(
     ent: &index::IndexEntry,
     utc_timestamps: bool,
-    max_size_digits: usize,
+    padding: usize,
 ) -> String {
     let mut result = String::new();
     std::fmt::write(&mut result, format_args!("{}", ent.display_mode())).unwrap();
     let size = format!("{}", ent.size.0);
-    let size_padding: String = std::iter::repeat(' ')
-        .take(max_size_digits - size.len())
-        .collect();
+    let size_padding: String = std::iter::repeat(' ').take(padding - size.len()).collect();
     std::fmt::write(&mut result, format_args!(" {}{}", size, size_padding)).unwrap();
     let ts = chrono::NaiveDateTime::from_timestamp(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32);
     let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
-    let tsfmt = "%Y/%m/%d %T";
-    let ts = if utc_timestamps {
-        ts.format(tsfmt).to_string()
-    } else {
-        chrono::DateTime::<chrono::Local>::from(ts)
-            .format(tsfmt)
-            .to_string()
-    };
+    let ts = format_timestamp(&ts, utc_timestamps);
     std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();
     std::fmt::write(&mut result, format_args!(" {}", ent.path)).unwrap();
     result
@@ -1847,10 +1916,10 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         writeln!(out, "{} chunks remaining", chunks_remaining)?;
     }
     if let Some(bytes_deleted) = stats.bytes_deleted {
-        writeln!(out, "{} bytes deleted", bytes_deleted)?;
+        writeln!(out, "{} deleted", format_size(bytes_deleted))?;
     }
     if let Some(bytes_remaining) = stats.bytes_remaining {
-        writeln!(out, "{} bytes remaining", bytes_remaining)?;
+        writeln!(out, "{} remaining", format_size(bytes_remaining))?;
     }
 
     Ok(())

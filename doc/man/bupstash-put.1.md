@@ -130,6 +130,9 @@ Default tags can be overidden manually by simply specifying them.
 * --xattrs:
   Save directory entry xattrs, only used when saving a directory.
 
+* --print-stats:
+  Print put statistics to stderr on completion.
+
 * -q, --quiet:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
