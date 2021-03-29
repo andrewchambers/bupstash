@@ -1,4 +1,5 @@
 use super::crypto;
+use super::fmtutil;
 use super::itemset;
 use super::query;
 use super::xid::*;
@@ -202,17 +203,16 @@ impl<'a> QueryCacheTx<'a> {
                         let mut dmetadata =
                             metadata.decrypt_metadata(opts.metadata_dctx.as_mut().unwrap())?;
 
-                        let ts = if opts.utc_timestamps {
-                            dmetadata.timestamp.format("%Y/%m/%d %T").to_string()
-                        } else {
-                            let local_ts: chrono::DateTime<chrono::Local> =
-                                chrono::DateTime::from(dmetadata.timestamp);
-                            local_ts.format("%Y/%m/%d %T").to_string()
-                        };
-
                         // Add special builtin tags.
                         dmetadata.tags.insert("id".to_string(), item_id.to_string());
-                        dmetadata.tags.insert("timestamp".to_string(), ts);
+                        dmetadata.tags.insert(
+                            "timestamp".to_string(),
+                            fmtutil::format_timestamp(&dmetadata.timestamp, opts.utc_timestamps),
+                        );
+                        dmetadata.tags.insert(
+                            "size".to_string(),
+                            fmtutil::format_size(dmetadata.data_size.0 + dmetadata.index_size.0),
+                        );
 
                         let query_matches = match opts.query {
                             Some(ref query) => query::query_matches(

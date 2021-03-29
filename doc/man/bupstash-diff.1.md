@@ -90,8 +90,8 @@ more information on the query cache.
 
 ```
 $ bupstash diff id="14eb*" :: id="57de"
-- -rw-r--r-- 1191 hello.txt
-+ -rw-r--r-- 1191 goodbye.txt
+- -rw-r--r-- 1.1kB hello.txt
++ -rw-r--r-- 1.3kB goodbye.txt
 ```
 
 ## SEE ALSO

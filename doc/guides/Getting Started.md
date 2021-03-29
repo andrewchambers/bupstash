@@ -125,13 +125,7 @@ do not need to do this manually.
 
 ```
 $ bupstash list 
-id="dbca49b072c0f94b9e72bf81e7716ff9" name="backup.tar" timestamp="2020/08/03 15:47:32"
-...
-```
-
-```
-$ bupstash list --format=jsonl 
-{"id":"dbca49b072c0f94b9e72bf81e7716ff9", "name":"backup.tar", "timestamp":"2020/08/03 15:47:32"}
+id="dbca49b072c0f94b9e72bf81e7716ff9" name="backup.tar" size="10.23MB" timestamp="2020/08/03 15:47:32"
 ...
 ```
 
@@ -190,3 +184,7 @@ garbage collector.
 ```
 $ bupstash gc
 ```
+
+# Learning more
+
+Feel free to browse the manual pages for each command to get a feel for how to interact and administer with your bupstash backups.
