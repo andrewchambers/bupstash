@@ -1479,7 +1479,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "i",
         "ignore",
-        "command separated list of file attributes to ignore in comparisons. Valid items are 'content,times,mode'.",
+        "Comma separated list of file attributes to ignore in comparisons. Valid items are 'content,times,mode'.",
         "IGNORE",
     );
     opts.optopt(

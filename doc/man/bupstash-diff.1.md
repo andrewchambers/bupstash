@@ -51,7 +51,7 @@ more information on the query cache.
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
 * -i, --ignore:
-  Comman separated list of file attributes to ignore in comparisons.
+  Comma separated list of file attributes to ignore in comparisons.
   Valid items are 'content,times,mode'
 
 * --format FORMAT:
