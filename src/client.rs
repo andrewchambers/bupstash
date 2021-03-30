@@ -14,7 +14,7 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
@@ -505,7 +505,34 @@ cfg_if::cfg_if! {
     }
 }
 
+pub struct DevNormalizer {
+    count: u64,
+    tab: HashMap<u64, u64>,
+}
+
+impl DevNormalizer {
+    fn new() -> Self {
+        DevNormalizer {
+            count: 0,
+            tab: HashMap::new(),
+        }
+    }
+
+    fn normalize(&mut self, dev: u64) -> u64 {
+        match self.tab.get(&dev) {
+            Some(nd) => *nd,
+            None => {
+                let nd = self.count;
+                self.count += 1;
+                self.tab.insert(dev, nd);
+                nd
+            }
+        }
+    }
+}
+
 fn dir_ent_to_index_ent(
+    dev_normalizer: &mut DevNormalizer,
     full_path: &std::path::Path,
     short_path: &std::path::Path,
     metadata: &std::fs::Metadata,
@@ -577,7 +604,7 @@ fn dir_ent_to_index_ent(
         },
         dev_major: serde_bare::Uint(dev_major as u64),
         dev_minor: serde_bare::Uint(dev_minor as u64),
-        dev: serde_bare::Uint(metadata.dev()),
+        norm_dev: serde_bare::Uint(dev_normalizer.normalize(metadata.dev())),
         ino: serde_bare::Uint(metadata.ino()),
         xattrs,
         offsets: index::IndexEntryOffsets {
@@ -689,6 +716,7 @@ fn send_dir(
 ) -> Result<(), anyhow::Error> {
     let mut data_ectx = ctx.data_ectx.clone();
     let mut idx_ectx = ctx.idx_ectx.clone();
+    let mut dev_normalizer = DevNormalizer::new();
 
     let metadata = std::fs::metadata(&base).map_err(|err| {
         anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
@@ -700,6 +728,7 @@ fn send_dir(
 
     let ent = index::VersionedIndexEntry::V2(
         dir_ent_to_index_ent(
+            &mut dev_normalizer,
             &base,
             &std::path::PathBuf::from("."),
             &metadata,
@@ -756,15 +785,20 @@ fn send_dir(
 
             let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
             let ent = index::VersionedIndexEntry::V2(
-                dir_ent_to_index_ent(&cur_dir, &index_path, &cur_dir_md, ctx.want_xattrs).map_err(
-                    |err| {
-                        anyhow::format_err!(
-                            "unable build index entry for {}: {}",
-                            cur_dir.display(),
-                            err
-                        )
-                    },
-                )?,
+                dir_ent_to_index_ent(
+                    &mut dev_normalizer,
+                    &cur_dir,
+                    &index_path,
+                    &cur_dir_md,
+                    ctx.want_xattrs,
+                )
+                .map_err(|err| {
+                    anyhow::format_err!(
+                        "unable build index entry for {}: {}",
+                        cur_dir.display(),
+                        err
+                    )
+                })?,
             );
 
             send_chunks(
@@ -830,19 +864,24 @@ fn send_dir(
             }
 
             let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
-            let index_ent =
-                match dir_ent_to_index_ent(&ent_path, &index_path, &metadata, ctx.want_xattrs) {
-                    Ok(ent) => ent,
-                    // The entry was removed while we were it's metadata
-                    // in a way that was unrecoverable. For example a symlink was removed so
-                    // we cannot do a valid readlink.
-                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                    Err(err) => anyhow::bail!(
-                        "unable build index entry for {}: {}",
-                        ent_path.display(),
-                        err
-                    ),
-                };
+            let index_ent = match dir_ent_to_index_ent(
+                &mut dev_normalizer,
+                &ent_path,
+                &index_path,
+                &metadata,
+                ctx.want_xattrs,
+            ) {
+                Ok(ent) => ent,
+                // The entry was removed while we were it's metadata
+                // in a way that was unrecoverable. For example a symlink was removed so
+                // we cannot do a valid readlink.
+                Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
+                Err(err) => anyhow::bail!(
+                    "unable build index entry for {}: {}",
+                    ent_path.display(),
+                    err
+                ),
+            };
 
             if metadata.is_dir() && ((cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system) {
                 work_list.push_back((ent_path.clone(), metadata));
@@ -1287,7 +1326,7 @@ fn write_index_as_tarball(
         }
 
         let hardlink = if !ent.is_dir() && ent.nlink.0 > 1 {
-            let dev_ino = (ent.dev.0, ent.ino.0);
+            let dev_ino = (ent.norm_dev.0, ent.ino.0);
             match hardlinks.get(&dev_ino) {
                 None => {
                     hardlinks.insert(dev_ino, ent.path.clone());

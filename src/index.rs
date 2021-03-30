@@ -57,7 +57,7 @@ pub struct IndexEntry {
     pub mtime_nsec: serde_bare::Uint,
     pub ctime: serde_bare::Uint,
     pub ctime_nsec: serde_bare::Uint,
-    pub dev: serde_bare::Uint,
+    pub norm_dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
     pub link_target: Option<String>,
@@ -97,7 +97,7 @@ impl IndexEntry {
                 || (self.mtime == other.mtime && self.mtime_nsec == other.mtime_nsec))
             && ((compare_mask & INDEX_COMPARE_MASK_CTIME != 0)
                 || (self.ctime == other.ctime && self.ctime_nsec == other.ctime_nsec))
-            && ((compare_mask & INDEX_COMPARE_MASK_DEV != 0) || self.dev == other.dev)
+            && ((compare_mask & INDEX_COMPARE_MASK_DEV != 0) || self.norm_dev == other.norm_dev)
             && ((compare_mask & INDEX_COMPARE_MASK_XATTRS != 0) || self.xattrs == other.xattrs)
             && ((compare_mask & INDEX_COMPARE_MASK_INO != 0) || self.ino == other.ino)
             && ((compare_mask & INDEX_COMPARE_MASK_NLINK != 0) || self.nlink == other.nlink)
@@ -122,7 +122,7 @@ impl From<V1IndexEntry> for IndexEntry {
             mtime_nsec: ent.mtime_nsec,
             ctime: ent.ctime,
             ctime_nsec: ent.ctime_nsec,
-            dev: ent.dev,
+            norm_dev: ent.dev,
             ino: ent.ino,
             nlink: ent.nlink,
             link_target: ent.link_target,
