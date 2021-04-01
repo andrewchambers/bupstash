@@ -52,11 +52,11 @@ impl QueryCache {
                     "insert into QueryCacheMeta(Key, Value) values('schema-version', 1);",
                     rusqlite::NO_PARAMS,
                 )?;
+
+                itemset::init_tables(&tx)?;
             }
             Err(err) => return Err(err.into()),
         }
-
-        itemset::init_tables(&tx)?;
 
         let recently_cleared = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'recently-cleared';",
@@ -193,74 +193,69 @@ impl<'a> QueryCacheTx<'a> {
         ) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
         let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
-            match metadata {
-                itemset::VersionedItemMetadata::V1(metadata) => {
-                    if !opts.list_encrypted
-                        && opts.primary_key_id.is_some()
-                        && opts.primary_key_id.unwrap()
-                            == metadata.plain_text_metadata.primary_key_id
-                    {
-                        let mut dmetadata =
-                            metadata.decrypt_metadata(opts.metadata_dctx.as_mut().unwrap())?;
+            if !opts.list_encrypted
+                && opts.primary_key_id.is_some()
+                && opts.primary_key_id.unwrap() == *metadata.primary_key_id()
+            {
+                let mut dmetadata =
+                    metadata.decrypt_metadata(opts.metadata_dctx.as_mut().unwrap())?;
 
-                        // Add special builtin tags.
-                        dmetadata.tags.insert("id".to_string(), item_id.to_string());
-                        dmetadata.tags.insert(
-                            "timestamp".to_string(),
-                            fmtutil::format_timestamp(&dmetadata.timestamp, opts.utc_timestamps),
-                        );
-                        dmetadata.tags.insert(
-                            "size".to_string(),
-                            fmtutil::format_size(dmetadata.data_size.0 + dmetadata.index_size.0),
-                        );
+                // Add special builtin tags.
+                dmetadata.tags.insert("id".to_string(), item_id.to_string());
+                dmetadata.tags.insert(
+                    "timestamp".to_string(),
+                    fmtutil::format_timestamp(&dmetadata.timestamp, opts.utc_timestamps),
+                );
+                dmetadata.tags.insert(
+                    "size".to_string(),
+                    fmtutil::format_size(dmetadata.data_size.0 + dmetadata.index_size.0),
+                );
 
-                        let query_matches = match opts.query {
-                            Some(ref query) => query::query_matches(
-                                query,
-                                &query::QueryContext {
-                                    age: opts
-                                        .now
-                                        .signed_duration_since(dmetadata.timestamp)
-                                        .to_std()?,
-                                    tagset: &dmetadata.tags,
-                                },
-                            ),
-                            None => true,
-                        };
+                let query_matches = match opts.query {
+                    Some(ref query) => query::query_matches(
+                        query,
+                        &query::QueryContext {
+                            age: opts
+                                .now
+                                .signed_duration_since(dmetadata.timestamp)
+                                .to_std()?,
+                            tagset: &dmetadata.tags,
+                        },
+                    ),
+                    None => true,
+                };
 
-                        if query_matches {
-                            on_match(item_id, dmetadata.tags)?;
-                        }
-
-                        Ok(())
-                    } else {
-                        if !opts.list_encrypted {
-                            return Ok(());
-                        }
-
-                        let mut tags = std::collections::BTreeMap::new();
-
-                        tags.insert("id".to_string(), item_id.to_string());
-                        tags.insert(
-                            "decryption-key-id".to_string(),
-                            metadata.plain_text_metadata.primary_key_id.to_string(),
-                        );
-
-                        let query_matches = match opts.query {
-                            Some(ref query) => query::query_matches_encrypted(
-                                query,
-                                &query::QueryEncryptedContext { tagset: &tags },
-                            ),
-                            None => true,
-                        };
-
-                        if query_matches {
-                            on_match(item_id, tags)?;
-                        }
-
-                        Ok(())
-                    }
+                if query_matches {
+                    on_match(item_id, dmetadata.tags)?;
                 }
+
+                Ok(())
+            } else {
+                if !opts.list_encrypted {
+                    return Ok(());
+                }
+
+                let mut tags = std::collections::BTreeMap::new();
+
+                tags.insert("id".to_string(), item_id.to_string());
+                tags.insert(
+                    "decryption-key-id".to_string(),
+                    metadata.primary_key_id().to_string(),
+                );
+
+                let query_matches = match opts.query {
+                    Some(ref query) => query::query_matches_encrypted(
+                        query,
+                        &query::QueryEncryptedContext { tagset: &tags },
+                    ),
+                    None => true,
+                };
+
+                if query_matches {
+                    on_match(item_id, tags)?;
+                }
+
+                Ok(())
             }
         };
         itemset::walk_items(&self.tx, &mut f)
