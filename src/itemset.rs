@@ -75,7 +75,7 @@ pub enum VersionedItemMetadata {
 pub enum LogOp {
     AddItem(VersionedItemMetadata),
     // Note: There is an asymmetry here in that we can delete many items with one log op.
-    // This is because batch deleting is possible, but batch makes less sense.
+    // This is because batch deleting is possible, but batch add makes less sense.
     RemoveItems(Vec<Xid>),
 
     RestoreRemoved,
