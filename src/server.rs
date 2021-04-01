@@ -314,21 +314,17 @@ fn send_htree(
     loop {
         match tr.current_height() {
             Some(0) => {
-                let address_buf = tr.pop_level().unwrap();
-
-                let mut addresses =
-                    Vec::with_capacity(address_buf.len() / (8 + address::ADDRESS_SZ));
-
-                // XXX Can we avoid this potentially large allocation/copy?
-                // It serves very little purpose and could double ram usage
-                // of this function in a bad case.
-                addresses.extend(
-                    address_buf
-                        .chunks(8 + address::ADDRESS_SZ)
-                        .map(|x| address::Address::from_slice(&x[8..]).unwrap()),
-                );
-
-                repo.pipelined_get_chunks(&addresses, &mut on_chunk)?;
+                let mut address_buf = tr.pop_level().unwrap();
+                let n_addresses = address_buf.len() / (8 + address::ADDRESS_SZ);
+                // Shift addresses to contiguous part of buffer.
+                for i in 0..n_addresses {
+                    let src_offset = 8 + i * (8 + address::ADDRESS_SZ);
+                    let src_range = src_offset..(src_offset + address::ADDRESS_SZ);
+                    address_buf.copy_within(src_range, i * address::ADDRESS_SZ);
+                }
+                let addresses =
+                    address::bytes_to_addresses(&address_buf[0..n_addresses * address::ADDRESS_SZ]);
+                repo.pipelined_get_chunks(addresses, &mut on_chunk)?;
             }
             Some(_) => {
                 if let Some((height, chunk_address)) = tr.next_addr() {

@@ -80,6 +80,23 @@ impl Default for HexAddress {
     }
 }
 
+// Convert a slice of addresses to a slice of bytes without any copying.
+pub fn addresses_to_bytes(addresses: &[Address]) -> &[u8] {
+    assert!(std::mem::size_of::<Address>() == ADDRESS_SZ);
+    let n_bytes = addresses.len() * ADDRESS_SZ;
+    unsafe { std::slice::from_raw_parts(addresses.as_ptr() as *const u8, n_bytes) }
+}
+
+// Convert a slice of addresses to a slice of bytes without any copying.
+// panics if alignment is wrong.
+pub fn bytes_to_addresses(bytes: &[u8]) -> &[Address] {
+    // We rely on alignment, flag any places our assumption is not true.
+    assert!(((bytes.as_ptr() as usize) & (std::mem::align_of::<Address>() - 1)) == 0);
+    assert!(std::mem::size_of::<Address>() == ADDRESS_SZ);
+    let n_addresses = bytes.len() / ADDRESS_SZ;
+    unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const Address, n_addresses) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +104,25 @@ mod tests {
     #[test]
     fn test_addr_to_hex_addr() {
         assert!(Address::default().as_hex_addr().bytes[..] == HexAddress::default().bytes[..]);
+    }
+
+    #[test]
+    fn test_addresses_to_bytes() {
+        let v = vec![Address::default()];
+        let s = addresses_to_bytes(&v);
+        assert_eq!(Address::from_slice(s).unwrap(), v[0])
+    }
+
+    #[test]
+    fn test_bytes_to_addresses() {
+        // Try to create an poorly unaligned allocation if it is
+        // possible on the current platform.
+        for _i in 0..100 {
+            let bytes = [0; 64];
+            let mut b = Vec::new();
+            b.extend_from_slice(&bytes[..]);
+            let s = bytes_to_addresses(&b);
+            assert_eq!(Address::default(), s[0])
+        }
     }
 }

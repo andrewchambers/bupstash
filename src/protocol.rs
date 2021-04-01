@@ -415,20 +415,13 @@ pub fn write_storage_pipelined_get_chunks(
     w: &mut dyn std::io::Write,
     addresses: &[Address],
 ) -> Result<(), anyhow::Error> {
-    // This unsafe block means we don't pointlessly copy a potentially huge (8MB)
-    // address slice just to write the bytes to a buffer. Refactorings to remove this
-    // are welcome if they solve that problem.
-    unsafe {
-        assert!(std::mem::size_of::<Address>() == ADDRESS_SZ);
-        let n_bytes = addresses.len() * std::mem::size_of::<Address>();
-        let b = std::slice::from_raw_parts(addresses.as_ptr() as *const u8, n_bytes);
-        send_hdr(
-            w,
-            PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS,
-            b.len().try_into()?,
-        )?;
-        write_to_remote(w, &b)?;
-    }
+    let b = addresses_to_bytes(addresses);
+    send_hdr(
+        w,
+        PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS,
+        b.len().try_into()?,
+    )?;
+    write_to_remote(w, b)?;
     flush_remote(w)?;
     Ok(())
 }
