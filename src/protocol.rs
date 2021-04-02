@@ -29,7 +29,7 @@ pub struct TOpenRepository {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct ROpenRepository {
-    pub now: chrono::DateTime<chrono::Utc>,
+    pub unix_now_millis: u64,
 }
 
 #[derive(Debug, PartialEq)]

@@ -47,17 +47,16 @@ pub fn open_repository(
         w,
         &Packet::TOpenRepository(TOpenRepository {
             open_mode,
-            protocol_version: "6".to_string(),
+            protocol_version: "7".to_string(),
         }),
     )?;
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::ROpenRepository(resp) => {
-            let clock_skew = chrono::Utc::now().signed_duration_since(resp.now);
+            let clock_skew = (resp.unix_now_millis as i64) - chrono::Utc::now().timestamp_millis();
             const MAX_SKEW_MINS: i64 = 15;
-            if clock_skew > chrono::Duration::minutes(MAX_SKEW_MINS)
-                || clock_skew < chrono::Duration::minutes(-MAX_SKEW_MINS)
-            {
+            const MAX_SKEW_MILLIS: i64 = MAX_SKEW_MINS * 60 * 1000;
+            if clock_skew > MAX_SKEW_MILLIS || clock_skew < -MAX_SKEW_MILLIS {
                 // This helps protect against inaccurate item timestamps, which protects users from unintentionally
                 // deleting important backups when deleting based on timestamp queries. Instead they will be notified
                 // of the clock mismatch as soon as we know about it.
@@ -360,8 +359,9 @@ pub fn send(
     let added_chunks = sink.added_chunks;
     let added_bytes = sink.added_bytes;
 
-    let plain_text_metadata = itemset::PlainTextItemMetadata {
+    let plain_text_metadata = itemset::V2PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
+        unix_timestamp_millis: chrono::Utc::now().timestamp_millis().try_into()?,
         data_tree: itemset::HTreeMetadata {
             height: serde_bare::Uint(data_tree_meta.height as u64),
             data_chunk_count: serde_bare::Uint(data_tree_meta.data_chunk_count),
@@ -370,18 +370,17 @@ pub fn send(
         index_tree,
     };
 
-    let e_metadata = itemset::EncryptedItemMetadata {
+    let e_metadata = itemset::V2SecretItemMetadata {
         plain_text_hash: plain_text_metadata.hash(),
         send_key_id: ctx.send_key_id,
         idx_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
-        timestamp: start_time,
         data_size: serde_bare::Uint(data_tree_meta.stream_size),
         index_size: serde_bare::Uint(index_stream_size),
         tags,
     };
 
-    let versioned_metadata = itemset::VersionedItemMetadata::V1(itemset::ItemMetadata {
+    let versioned_metadata = itemset::VersionedItemMetadata::V2(itemset::V2ItemMetadata {
         plain_text_metadata,
         encrypted_metadata: ctx
             .metadata_ectx
@@ -1105,7 +1104,7 @@ pub struct DataRequestContext {
 pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,
-    metadata: &itemset::ItemMetadata,
+    metadata: &itemset::VersionedItemMetadata,
     pick: Option<index::PickMap>,
     index: Option<index::CompressedIndex>,
     r: &mut dyn std::io::Read,
@@ -1119,12 +1118,12 @@ pub fn request_data_stream(
         }
     }
 
-    if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
+    if ctx.primary_key_id != *metadata.primary_key_id() {
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
     let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
-    let plain_text_metadata = &metadata.plain_text_metadata;
+    let data_tree = metadata.data_tree();
 
     let hash_key = crypto::derive_hash_key(
         &ctx.data_hash_key_part_1,
@@ -1132,9 +1131,9 @@ pub fn request_data_stream(
     );
 
     let mut tr = htree::TreeReader::new(
-        plain_text_metadata.data_tree.height.0.try_into()?,
-        plain_text_metadata.data_tree.data_chunk_count.0,
-        &plain_text_metadata.data_tree.address,
+        data_tree.height.0.try_into()?,
+        data_tree.data_chunk_count.0,
+        &data_tree.address,
     );
 
     match pick {
@@ -1179,23 +1178,22 @@ pub struct IndexRequestContext {
 pub fn request_index(
     mut ctx: IndexRequestContext,
     id: Xid,
-    metadata: &itemset::ItemMetadata,
+    metadata: &itemset::VersionedItemMetadata,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<index::CompressedIndex, anyhow::Error> {
-    if ctx.primary_key_id != metadata.plain_text_metadata.primary_key_id {
+    if ctx.primary_key_id != *metadata.primary_key_id() {
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
     let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
-    let plain_text_metadata = &metadata.plain_text_metadata;
 
     let hash_key = crypto::derive_hash_key(
         &ctx.idx_hash_key_part_1,
         &encrypted_metadata.idx_hash_key_part_2,
     );
 
-    let index_tree = match &plain_text_metadata.index_tree {
+    let index_tree = match metadata.index_tree() {
         Some(index_tree) => index_tree,
         None => anyhow::bail!("requested item missing an index"),
     };
