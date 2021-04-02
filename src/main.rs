@@ -1049,7 +1049,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         )?;
         writeln!(
             std::io::stderr(),
-            "{} chunk(s), {} (compressed) new",
+            "{} chunk(s), {} (compressed) added",
             stats.added_chunks,
             fmtutil::format_size(stats.added_bytes)
         )?;
