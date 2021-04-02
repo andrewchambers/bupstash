@@ -143,7 +143,7 @@ impl Repo {
         )?;
         tx.execute(
             /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '3');",
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '4');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -193,7 +193,6 @@ impl Repo {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         tx.execute(
-            // Schema version is a string to keep all meta rows the same type.
             "update RepositoryMeta set value = '3' where key = 'schema-version';",
             rusqlite::NO_PARAMS,
         )?;
@@ -201,6 +200,26 @@ impl Repo {
         tx.commit()?;
         drop(repo_lock);
 
+        eprintln!("repository upgrade successful...");
+        Ok(())
+    }
+
+    fn upgrade_3_to_4(
+        conn: &mut rusqlite::Connection,
+        _repo_path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        eprintln!("upgrading repository schema from version 3 to version 4...");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Invalidate client side caches that would not understand the new metadata format.
+        tx.execute(
+            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
+            rusqlite::params![&Xid::new()],
+        )?;
+        tx.execute(
+            "update RepositoryMeta set value = '4' where key = 'schema-version';",
+            rusqlite::NO_PARAMS,
+        )?;
+        tx.commit()?;
         eprintln!("repository upgrade successful...");
         Ok(())
     }
@@ -228,9 +247,14 @@ impl Repo {
             schema_version = 3;
         }
 
-        if schema_version != 3 {
+        if schema_version == 3 {
+            Repo::upgrade_3_to_4(&mut conn, &repo_path)?;
+            schema_version = 4;
+        }
+
+        if schema_version != 4 {
             anyhow::bail!(
-                "repository has an unsupported schema version, want 3, got {}",
+                "repository has an unsupported schema version, want 4, got {}",
                 schema_version
             );
         }
@@ -318,18 +342,12 @@ impl Repo {
     ) -> Result<Xid, anyhow::Error> {
         const MAX_HTREE_HEIGHT: u64 = 10;
 
-        match item {
-            itemset::VersionedItemMetadata::V1(ref item) => {
-                if item.plain_text_metadata.data_tree.height.0 > MAX_HTREE_HEIGHT {
-                    anyhow::bail!("refusing to add data hash tree taller than application limit");
-                }
-                if let Some(index_tree) = &item.plain_text_metadata.index_tree {
-                    if index_tree.height.0 > MAX_HTREE_HEIGHT {
-                        anyhow::bail!(
-                            "refusing to add index hash tree taller than application limit"
-                        );
-                    }
-                }
+        if item.data_tree().height.0 > MAX_HTREE_HEIGHT {
+            anyhow::bail!("refusing to add data hash tree taller than application limit");
+        }
+        if let Some(index_tree) = item.index_tree() {
+            if index_tree.height.0 > MAX_HTREE_HEIGHT {
+                anyhow::bail!("refusing to add index hash tree taller than application limit");
             }
         }
 
@@ -526,47 +544,43 @@ impl Repo {
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
-        let mut walk_item = |_op_id, item_id, metadata| {
+        let mut walk_item = |_op_id, item_id, metadata: itemset::VersionedItemMetadata| {
             if !xid_wset.insert(item_id) {
                 return Ok(());
             }
 
-            match metadata {
-                itemset::VersionedItemMetadata::V1(metadata) => {
-                    // For garbage collection walking in order is not a concern,
-                    // we just need to ensure we touch each reachable node.
-                    //
-                    // Note that we could also do some sort of pipelining or parallel fetch,
-                    // when we walk the tree, for now keep it simple.
+            // For garbage collection walking in order is not a concern,
+            // we just need to ensure we touch each reachable node.
+            //
+            // Note that we could also do some sort of pipelining or parallel fetch,
+            // when we walk the tree, for now keep it simple.
 
-                    let data_tree = metadata.plain_text_metadata.data_tree;
+            let data_tree = metadata.data_tree();
 
-                    let trees = if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
-                        vec![data_tree, index_tree]
-                    } else {
-                        vec![data_tree]
-                    };
+            let trees = if let Some(index_tree) = metadata.index_tree() {
+                vec![data_tree, index_tree]
+            } else {
+                vec![data_tree]
+            };
 
-                    for tree in trees {
-                        let mut tr = htree::TreeReader::new(
-                            tree.height.0.try_into()?,
-                            tree.data_chunk_count.0,
-                            &tree.address,
-                        );
+            for tree in trees {
+                let mut tr = htree::TreeReader::new(
+                    tree.height.0.try_into()?,
+                    tree.data_chunk_count.0,
+                    &tree.address,
+                );
 
-                        while let Some((height, addr)) = tr.next_addr() {
-                            reachable.add(&addr);
+                while let Some((height, addr)) = tr.next_addr() {
+                    reachable.add(&addr);
 
-                            if height != 0 && address_wcache.add(&addr) {
-                                let data = storage_engine.get_chunk(&addr)?;
-                                let data = compression::unauthenticated_decompress(data)?;
-                                tr.push_level(height - 1, data)?;
-                            }
-                        }
+                    if height != 0 && address_wcache.add(&addr) {
+                        let data = storage_engine.get_chunk(&addr)?;
+                        let data = compression::unauthenticated_decompress(data)?;
+                        tr.push_level(height - 1, data)?;
                     }
-                    Ok(())
                 }
             }
+            Ok(())
         };
 
         // Walk all reachable data WITHOUT marking the repository as

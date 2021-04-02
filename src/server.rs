@@ -26,7 +26,7 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.protocol_version != "6" {
+                if req.protocol_version != "7" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.protocol_version
@@ -38,7 +38,7 @@ pub fn serve(
                 write_packet(
                     w,
                     &Packet::ROpenRepository(ROpenRepository {
-                        now: chrono::Utc::now(),
+                        unix_now_millis: chrono::Utc::now().timestamp_millis() as u64,
                     }),
                 )?;
 
@@ -207,6 +207,23 @@ fn recv(
                 if add_item.gc_generation != gc_generation {
                     anyhow::bail!("client sent an unexpected gc_generation");
                 }
+
+                match add_item.item {
+                    itemset::VersionedItemMetadata::V2(ref md) => {
+                        let item_skew = (md.plain_text_metadata.unix_timestamp_millis as i64)
+                            - chrono::Utc::now().timestamp_millis();
+                        const MAX_SKEW_MINS: i64 = 15;
+                        const MAX_SKEW_MILLIS: i64 = MAX_SKEW_MINS * 60 * 1000;
+                        if item_skew > MAX_SKEW_MILLIS || item_skew < -MAX_SKEW_MILLIS {
+                            // This check prevents the client from spoofing times without also controlling the server.
+                            // The client is protected from server spoofed times by the metadata hash.
+                            anyhow::bail!("added item has timestamp skew larger than {} minutes, refusing new item.", MAX_SKEW_MINS);
+                        }
+                    }
+
+                    _ => anyhow::bail!("server refusing item with incorrect metadata version"),
+                }
+
                 let item_id = repo.add_item(add_item.gc_generation, add_item.item)?;
                 write_packet(w, &Packet::RAddItem(item_id))?;
                 break;
@@ -254,20 +271,18 @@ fn send(
         None => anyhow::bail!("client requested missing item"),
     };
 
-    match metadata {
-        itemset::VersionedItemMetadata::V1(metadata) => {
-            let mut tr = htree::TreeReader::new(
-                metadata.plain_text_metadata.data_tree.height.0.try_into()?,
-                metadata.plain_text_metadata.data_tree.data_chunk_count.0,
-                &metadata.plain_text_metadata.data_tree.address,
-            );
+    let data_tree = metadata.data_tree();
 
-            if let Some(ranges) = ranges {
-                send_partial_htree(repo, &mut tr, ranges, w)?;
-            } else {
-                send_htree(repo, &mut tr, w)?;
-            }
-        }
+    let mut tr = htree::TreeReader::new(
+        data_tree.height.0.try_into()?,
+        data_tree.data_chunk_count.0,
+        &data_tree.address,
+    );
+
+    if let Some(ranges) = ranges {
+        send_partial_htree(repo, &mut tr, ranges, w)?;
+    } else {
+        send_htree(repo, &mut tr, w)?;
     }
 
     Ok(())
@@ -283,19 +298,15 @@ fn send_index(
         None => anyhow::bail!("client requested index for missing item"),
     };
 
-    match metadata {
-        itemset::VersionedItemMetadata::V1(metadata) => {
-            if let Some(index_tree) = metadata.plain_text_metadata.index_tree {
-                let mut tr = htree::TreeReader::new(
-                    index_tree.height.0.try_into()?,
-                    index_tree.data_chunk_count.0,
-                    &index_tree.address,
-                );
-                send_htree(repo, &mut tr, w)?;
-            } else {
-                anyhow::bail!("requested item does not have an index");
-            }
-        }
+    if let Some(index_tree) = metadata.index_tree() {
+        let mut tr = htree::TreeReader::new(
+            index_tree.height.0.try_into()?,
+            index_tree.data_chunk_count.0,
+            &index_tree.address,
+        );
+        send_htree(repo, &mut tr, w)?;
+    } else {
+        anyhow::bail!("requested item does not have an index");
     }
 
     Ok(())

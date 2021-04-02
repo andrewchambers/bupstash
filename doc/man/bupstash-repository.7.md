@@ -71,20 +71,24 @@ type RemoveItems {
   items: []Xid
 }
 
-type VersionedItemMetadata = (V1VersionedItemMetadata | ...)
+type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata)
 
 type V1VersionedItemMetadata {
+  // deprecated in bupstash version 0.9
+}
+
+type V2VersionedItemMetadata {
   primary_key_id: Xid,
+  unix_timestamp_millis: u64,
   tree_height: usize,
   address: Address,
   encryped_metadata: data
 }
 
-struct V1EncryptedItemMetadata {
+struct V2SecretItemMetadata {
   plain_text_hash: data<32>
   send_key_id: Xid,
   hash_key_part_2: data<32>,
-  timestamp: String,
   tags: Map[String]String,
 }
 

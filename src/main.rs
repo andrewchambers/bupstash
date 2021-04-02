@@ -1164,10 +1164,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     progress.set_message("fetching item metadata...");
-    let itemset::VersionedItemMetadata::V1(metadata) =
-        client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+    let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-    let mut content_index = if metadata.plain_text_metadata.index_tree.is_some() {
+    let mut content_index = if metadata.index_tree().is_some() {
         Some(client::request_index(
             client::IndexRequestContext {
                 primary_key_id,
@@ -1408,10 +1407,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     progress.set_message("fetching item metadata...");
-    let itemset::VersionedItemMetadata::V1(metadata) =
-        client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+    let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-    if metadata.plain_text_metadata.index_tree.is_none() {
+    if metadata.index_tree().is_none() {
         anyhow::bail!(
             "list-contents is only supported for directory snapshots created by bupstash"
         );
@@ -1627,10 +1625,9 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         };
 
         progress.set_message("fetching item metadata...");
-        let itemset::VersionedItemMetadata::V1(metadata) =
-            client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+        let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-        if metadata.plain_text_metadata.index_tree.is_none() {
+        if metadata.index_tree().is_none() {
             anyhow::bail!("diff is only supported for directory snapshots created by bupstash");
         }
 
