@@ -1122,12 +1122,12 @@ pub fn request_data_stream(
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
-    let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let decrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
     let data_tree = metadata.data_tree();
 
     let hash_key = crypto::derive_hash_key(
         &ctx.data_hash_key_part_1,
-        &encrypted_metadata.data_hash_key_part_2,
+        &decrypted_metadata.data_hash_key_part_2,
     );
 
     let mut tr = htree::TreeReader::new(
@@ -1186,11 +1186,11 @@ pub fn request_index(
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
-    let encrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let decrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
 
     let hash_key = crypto::derive_hash_key(
         &ctx.idx_hash_key_part_1,
-        &encrypted_metadata.idx_hash_key_part_2,
+        &decrypted_metadata.idx_hash_key_part_2,
     );
 
     let index_tree = match metadata.index_tree() {
@@ -1204,17 +1204,22 @@ pub fn request_index(
         &index_tree.address,
     );
 
+    // Estimate based off experiments, perhaps something other than vec would work better
+    // to avoid resizing and also guessing incorrectly.
+    let estimated_compressed_size = (decrypted_metadata.index_size.0 / 2).try_into().unwrap();
     let mut index_data = lz4::EncoderBuilder::new()
         .checksum(lz4::ContentChecksum::NoChecksum)
-        .build(std::io::Cursor::new(Vec::new()))?;
+        .build(std::io::Cursor::new(Vec::with_capacity(
+            estimated_compressed_size,
+        )))?;
 
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
     receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
 
     let (index_cursor, compress_result) = index_data.finish();
     compress_result?;
-
-    Ok(index::CompressedIndex::from_vec(index_cursor.into_inner()))
+    let compressed_index = index_cursor.into_inner();
+    Ok(index::CompressedIndex::from_vec(compressed_index))
 }
 
 fn receive_and_authenticate_htree_chunk(
