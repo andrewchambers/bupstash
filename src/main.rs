@@ -535,6 +535,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 enum ListFormat {
     Human,
     Jsonl,
+    Bare,
 }
 
 fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
@@ -665,6 +666,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     )?;
                 }
                 writeln!(out, "}}")?;
+            }
+            ListFormat::Bare => {
+                anyhow::bail!("unsupported list format")
             }
         }
 
@@ -1028,6 +1032,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     if matches.opt_present("print-stats") {
         let duration = stats.end_time.signed_duration_since(stats.start_time);
+        let total_uncompressed_size = stats.uncompressed_data_size + stats.uncompressed_index_size;
         writeln!(
             std::io::stderr(),
             "{}m{}.{}s put duration",
@@ -1039,7 +1044,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             std::io::stderr(),
             "{} chunk(s), {} processed",
             stats.total_chunks,
-            fmtutil::format_size(stats.uncompressed_bytes)
+            fmtutil::format_size(total_uncompressed_size)
         )?;
         writeln!(
             std::io::stderr(),
@@ -1056,7 +1061,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         if stats.added_bytes == 0 {
             writeln!(std::io::stderr(), "infinite effective compression ratio")?;
         } else {
-            let ecr = (stats.uncompressed_bytes as f64) / (stats.added_bytes as f64);
+            let ecr = (total_uncompressed_size as f64) / (stats.added_bytes as f64);
             writeln!(
                 std::io::stderr(),
                 "{:.1}:1 effective compression ratio",
@@ -1317,6 +1322,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         Some(f) => match &f[..] {
             "jsonl" => ListFormat::Jsonl,
             "human" => ListFormat::Human,
+            "BARE" => ListFormat::Bare,
             _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
         None => ListFormat::Human,
@@ -1460,6 +1466,12 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             for ent in content_index.iter() {
                 let ent = ent?;
                 writeln!(out, "{}", format_json_content_listing(&ent)?)?;
+            }
+        }
+        ListFormat::Bare => {
+            for ent in content_index.iter() {
+                let ent = ent?;
+                out.write_all(&serde_bare::to_vec(&ent)?)?;
             }
         }
     }
@@ -1700,6 +1712,9 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     Ok(())
                 },
             )?;
+        }
+        ListFormat::Bare => {
+            anyhow::bail!("unsupported diff format");
         }
     }
 

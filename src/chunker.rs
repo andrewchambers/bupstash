@@ -103,6 +103,12 @@ impl RollsumChunker {
         }
     }
 
+    pub fn take_buffered(&mut self) -> Vec<u8> {
+        let mut v = Vec::new();
+        std::mem::swap(&mut self.cur_vec, &mut v);
+        v
+    }
+
     pub fn finish(self) -> Vec<u8> {
         self.cur_vec
     }

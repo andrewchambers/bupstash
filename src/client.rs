@@ -14,6 +14,7 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
@@ -81,69 +82,7 @@ pub fn init_repository(
     }
 }
 
-struct ConnectionHtreeSink<'a, 'b> {
-    checkpoint_bytes: u64,
-    dirty_bytes: u64,
-    transferred_chunks: u64,
-    transferred_bytes: u64,
-    added_chunks: u64,
-    added_bytes: u64,
-    send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
-    acache: acache::ACache,
-    r: &'a mut dyn std::io::Read,
-    w: &'a mut dyn std::io::Write,
-}
-
-impl ConnectionHtreeSink<'_, '_> {
-    fn sync(&mut self) -> Result<(), anyhow::Error> {
-        write_packet(self.w, &Packet::TSendSync)?;
-        match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::RSendSync(stats) => {
-                self.added_bytes += stats.added_bytes;
-                self.added_chunks += stats.added_chunks;
-            }
-            _ => anyhow::bail!("protocol error, expected RSentSync packet"),
-        }
-        self.dirty_bytes = 0;
-        Ok(())
-    }
-}
-
-impl<'a, 'b> htree::Sink for ConnectionHtreeSink<'a, 'b> {
-    fn add_chunk(&mut self, addr: &Address, data: std::vec::Vec<u8>) -> Result<(), anyhow::Error> {
-        if !self.acache.add(addr) {
-            return Ok(());
-        }
-
-        match self.send_log_session {
-            Some(ref send_log_session) => {
-                let mut send_log_session = send_log_session.borrow_mut();
-
-                if send_log_session.add_address(addr)? {
-                    write_chunk(self.w, addr, &data)?;
-                    self.dirty_bytes += data.len() as u64;
-                    self.transferred_bytes += data.len() as u64;
-                    self.transferred_chunks += 1;
-                }
-
-                if self.dirty_bytes >= self.checkpoint_bytes {
-                    self.sync()?;
-                    send_log_session.checkpoint()?;
-                }
-
-                Ok(())
-            }
-            None => {
-                write_chunk(self.w, addr, &data)?;
-                self.dirty_bytes += data.len() as u64;
-                self.transferred_bytes += data.len() as u64;
-                self.transferred_chunks += 1;
-                Ok(())
-            }
-        }
-    }
-}
-
+#[derive(Clone)]
 pub struct SendContext {
     pub progress: indicatif::ProgressBar,
     pub compression: compression::Scheme,
@@ -161,6 +100,579 @@ pub struct SendContext {
     pub one_file_system: bool,
 }
 
+struct SendSession<'a, 'b, 'c> {
+    ctx: SendContext,
+    start_time: chrono::DateTime<chrono::Utc>,
+    dirty_bytes: u64,
+    transferred_chunks: u64,
+    transferred_bytes: u64,
+    added_chunks: u64,
+    added_bytes: u64,
+    // Ownership is slightly tricky because the stat cache and query cache share a transaction.
+    send_log_session: &'a mut Option<RefCell<sendlog::SendLogSession<'b>>>,
+    acache: acache::ACache,
+    data_chunker: chunker::RollsumChunker,
+    idx_chunker: chunker::RollsumChunker,
+    // Can we structure this code so this is not needed?
+    data_tw: Cell<Option<Box<htree::TreeWriter>>>,
+    idx_tw: Cell<Option<Box<htree::TreeWriter>>>,
+    idx_size: u64,
+    data_size: u64,
+    r: &'c mut dyn std::io::Read,
+    w: &'c mut dyn std::io::Write,
+}
+
+impl<'a, 'b, 'c> htree::Sink for SendSession<'a, 'b, 'c> {
+    fn add_htree_chunk(
+        &mut self,
+        addr: &Address,
+        data: std::vec::Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        if !self.acache.add(addr) {
+            return Ok(());
+        }
+
+        match self.send_log_session {
+            Some(ref send_log_session) => {
+                if send_log_session.borrow_mut().add_address(addr)? {
+                    self.write_chunk(addr, data)?;
+                }
+                Ok(())
+            }
+            None => {
+                self.write_chunk(addr, data)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
+    fn write_chunk(
+        &mut self,
+        addr: &Address,
+        data: std::vec::Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        write_chunk(self.w, addr, &data)?;
+        self.dirty_bytes += data.len() as u64;
+        self.transferred_bytes += data.len() as u64;
+        self.transferred_chunks += 1;
+        if self.dirty_bytes > self.ctx.checkpoint_bytes {
+            self.sync()?;
+        }
+        Ok(())
+    }
+
+    fn encrypt_and_write_data_chunk(
+        &mut self,
+        addr: &Address,
+        data: std::vec::Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        let data = self.ctx.data_ectx.encrypt_data(data, self.ctx.compression);
+        self.write_chunk(&addr, data)
+    }
+
+    fn encrypt_and_write_idx_chunk(
+        &mut self,
+        addr: &Address,
+        data: std::vec::Vec<u8>,
+    ) -> Result<(), anyhow::Error> {
+        // unconditionally compress index chunks, there is little reason not to.
+        let data = self
+            .ctx
+            .idx_ectx
+            .encrypt_data(data, compression::Scheme::Lz4);
+        self.write_chunk(&addr, data)
+    }
+
+    fn add_data_chunk(&mut self, data: std::vec::Vec<u8>) -> Result<Address, anyhow::Error> {
+        let addr = crypto::keyed_content_address(&data, &self.ctx.data_hash_key);
+
+        let mut tw = self.data_tw.take().unwrap();
+        tw.add_data_addr(self, &addr)?;
+        self.data_tw.set(Some(tw));
+        self.data_size += data.len() as u64;
+        self.ctx.progress.inc(data.len() as u64);
+
+        if !self.acache.add(&addr) {
+            return Ok(addr);
+        }
+
+        match self.send_log_session {
+            Some(ref send_log_session) => {
+                if send_log_session.borrow_mut().add_address(&addr)? {
+                    self.encrypt_and_write_data_chunk(&addr, data)?;
+                }
+                Ok(addr)
+            }
+            None => {
+                self.encrypt_and_write_data_chunk(&addr, data)?;
+                Ok(addr)
+            }
+        }
+    }
+
+    fn add_idx_chunk(&mut self, data: std::vec::Vec<u8>) -> Result<Address, anyhow::Error> {
+        let addr = crypto::keyed_content_address(&data, &self.ctx.idx_hash_key);
+        let mut tw = self.idx_tw.take().unwrap();
+        tw.add_data_addr(self, &addr)?;
+        self.idx_tw.set(Some(tw));
+        self.idx_size += data.len() as u64;
+        self.ctx.progress.inc(data.len() as u64);
+
+        if !self.acache.add(&addr) {
+            return Ok(addr);
+        }
+
+        match self.send_log_session {
+            Some(ref send_log_session) => {
+                if send_log_session.borrow_mut().add_address(&addr)? {
+                    self.encrypt_and_write_idx_chunk(&addr, data)?;
+                }
+                Ok(addr)
+            }
+            None => {
+                self.encrypt_and_write_idx_chunk(&addr, data)?;
+                Ok(addr)
+            }
+        }
+    }
+
+    fn write_data(
+        &mut self,
+        data: &mut dyn std::io::Read,
+        on_chunk: &mut dyn FnMut(&Address, usize),
+    ) -> Result<u64, anyhow::Error> {
+        let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut n_written: u64 = 0;
+        loop {
+            match data.read(&mut buf) {
+                Ok(0) => {
+                    return Ok(n_written);
+                }
+                Ok(n_read) => {
+                    let mut n_chunked = 0;
+                    while n_chunked != n_read {
+                        let (n, c) = self.data_chunker.add_bytes(&buf[n_chunked..n_read]);
+                        n_chunked += n;
+                        if let Some(chunk_data) = c {
+                            let data_len = chunk_data.len();
+                            let addr = self.add_data_chunk(chunk_data)?;
+                            on_chunk(&addr, data_len);
+                        }
+                    }
+                    n_written += n_read as u64;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    fn write_idx_ent(&mut self, ent: &index::VersionedIndexEntry) -> Result<(), anyhow::Error> {
+        let buf = serde_bare::to_vec(ent)?;
+        let mut n_chunked = 0;
+        while n_chunked != buf.len() {
+            let (n, c) = self.idx_chunker.add_bytes(&buf[n_chunked..]);
+            n_chunked += n;
+            if let Some(chunk_data) = c {
+                self.add_idx_chunk(chunk_data)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn send_dir(
+        &mut self,
+        base: &std::path::Path,
+        paths: &[std::path::PathBuf],
+        exclusions: &[glob::Pattern],
+    ) -> Result<(), anyhow::Error> {
+        let use_stat_cache = self.ctx.use_stat_cache;
+
+        let mut dev_normalizer = DevNormalizer::new();
+
+        let metadata = std::fs::metadata(&base).map_err(|err| {
+            anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
+        })?;
+
+        if !metadata.is_dir() {
+            anyhow::bail!("{} is not a directory", base.display());
+        }
+
+        let ent = index::VersionedIndexEntry::V2(
+            dir_ent_to_index_ent(
+                &mut dev_normalizer,
+                &base,
+                &std::path::PathBuf::from("."),
+                &metadata,
+                self.ctx.want_xattrs,
+            )
+            .map_err(|err| {
+                anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
+            })?,
+        );
+
+        self.write_idx_ent(&ent)?;
+
+        let mut work_list = std::collections::VecDeque::new();
+
+        let mut initial_paths = std::collections::HashSet::new();
+        for p in paths {
+            let initial_md = std::fs::metadata(&p).map_err(|err| {
+                anyhow::format_err!("unable to fetch metadata for {}: {}", p.display(), err)
+            })?;
+            if !initial_md.is_dir() {
+                // We should be able to lift this restriction in the future.
+                anyhow::bail!(
+                    "{} is not a directory, files cannot be part of multi-dir put",
+                    p.display()
+                );
+            }
+            work_list.push_back((p.clone(), initial_md));
+            if p != base {
+                initial_paths.insert(p.clone());
+            }
+        }
+
+        while let Some((cur_dir, cur_dir_md)) = work_list.pop_front() {
+            assert!(cur_dir_md.is_dir());
+            self.ctx.progress.set_message(&cur_dir.to_string_lossy());
+
+            // These inital paths do not have a parent who will add an index entry
+            // for them, so we add before we process the dir contents.
+            if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
+                initial_paths.remove(&cur_dir);
+                let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
+                let ent = index::VersionedIndexEntry::V2(
+                    dir_ent_to_index_ent(
+                        &mut dev_normalizer,
+                        &cur_dir,
+                        &index_path,
+                        &cur_dir_md,
+                        self.ctx.want_xattrs,
+                    )
+                    .map_err(|err| {
+                        anyhow::format_err!(
+                            "unable build index entry for {}: {}",
+                            cur_dir.display(),
+                            err
+                        )
+                    })?,
+                );
+                self.write_idx_ent(&ent)?;
+            }
+
+            let mut hash_state = crypto::HashState::new(Some(&self.ctx.idx_hash_key));
+
+            // Incorporate the absolute dir in our cache key.
+            hash_state.update(cur_dir.as_os_str().as_bytes());
+            // Null byte marks the end of path in the hash space.
+            hash_state.update(&[0]);
+
+            let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
+                Ok(dir_ents) => dir_ents,
+                // If the directory was deleted from under us, treat it as empty.
+                Err(err) if likely_smear_error(&err) => vec![],
+                Err(err) => anyhow::bail!("unable list {}: {}", cur_dir.display(), err),
+            };
+
+            // Note sorting by extension or reverse filename might give better compression,
+            // but we should not add this without checking how it affects the diff command.
+            dir_ents.sort_by(|l, r| {
+                index::path_cmp(
+                    &l.file_name().to_string_lossy(),
+                    &r.file_name().to_string_lossy(),
+                )
+            });
+
+            let mut index_ents = Vec::new();
+
+            'collect_dir_ents: for entry in dir_ents {
+                let ent_path = entry.path();
+
+                for excl in exclusions {
+                    if excl.matches_path(&ent_path) {
+                        continue 'collect_dir_ents;
+                    }
+                }
+
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    // If the entry was deleted from under us, treat it as if it was excluded.
+                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
+                    Err(err) => anyhow::bail!(
+                        "unable to fetch metadata for {}: {}",
+                        ent_path.display(),
+                        err
+                    ),
+                };
+
+                // There is no meaningful way to backup a unix socket.
+                if metadata.file_type().is_socket() {
+                    continue 'collect_dir_ents;
+                }
+
+                let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
+                let index_ent = match dir_ent_to_index_ent(
+                    &mut dev_normalizer,
+                    &ent_path,
+                    &index_path,
+                    &metadata,
+                    self.ctx.want_xattrs,
+                ) {
+                    Ok(ent) => ent,
+                    // The entry was removed while we were it's metadata
+                    // in a way that was unrecoverable. For example a symlink was removed so
+                    // we cannot do a valid readlink.
+                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
+                    Err(err) => anyhow::bail!(
+                        "unable build index entry for {}: {}",
+                        ent_path.display(),
+                        err
+                    ),
+                };
+
+                if metadata.is_dir()
+                    && ((cur_dir_md.dev() == metadata.dev()) || !self.ctx.one_file_system)
+                {
+                    work_list.push_back((ent_path.clone(), metadata));
+                }
+
+                if use_stat_cache {
+                    hash_state.update(&serde_bare::to_vec(&index_ent).unwrap());
+                }
+
+                index_ents.push((ent_path, index_ent));
+            }
+
+            let hash = hash_state.finish();
+
+            let cache_lookup = if self.send_log_session.is_some() && use_stat_cache {
+                self.send_log_session
+                    .as_ref()
+                    .unwrap()
+                    .borrow_mut()
+                    .stat_cache_lookup(&hash)?
+            } else {
+                None
+            };
+
+            match cache_lookup {
+                Some(cache_entry) => {
+                    let dir_data_chunk_idx =
+                        self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+
+                    let mut data_tw = self.data_tw.take().unwrap();
+                    for addr in &cache_entry.addresses {
+                        data_tw.add_data_addr(self, &addr)?;
+                    }
+                    self.data_tw.set(Some(data_tw));
+                    self.data_size += cache_entry.total_size;
+                    self.ctx.progress.inc(cache_entry.total_size);
+
+                    assert!(cache_entry.base_offsets.len() == index_ents.len());
+                    assert!(cache_entry.hashes.len() == index_ents.len());
+
+                    for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
+                        index_ent.data_hash = cache_entry.hashes[i];
+                        index_ent.offsets = cache_entry.base_offsets[i];
+                        index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
+                        index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
+                        self.write_idx_ent(&index::VersionedIndexEntry::V2(index_ent))?;
+                    }
+
+                    // Re-add the cache entry so it isn't invalidated.
+                    self.send_log_session
+                        .as_ref()
+                        .unwrap()
+                        .borrow_mut()
+                        .add_stat_cache_data(&hash[..], &cache_entry)?;
+                }
+                None => {
+                    let mut dir_data_size: u64 = 0;
+                    let mut addresses = Vec::new();
+
+                    let mut on_data_chunk = |addr: &Address, chunk_len: usize| {
+                        dir_data_size += chunk_len as u64;
+                        if use_stat_cache {
+                            addresses.push(*addr);
+                        }
+                    };
+
+                    let cache_vec_capacity = if use_stat_cache { index_ents.len() } else { 0 };
+
+                    let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
+                        Vec::with_capacity(cache_vec_capacity);
+
+                    let mut content_hashes: Vec<index::ContentCryptoHash> =
+                        Vec::with_capacity(cache_vec_capacity);
+
+                    let dir_data_chunk_idx =
+                        self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+
+                    'add_dir_ents: for (ent_path, mut index_ent) in index_ents.drain(..) {
+                        let ent_data_chunk_idx =
+                            self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+                        let ent_data_chunk_offset = self.data_chunker.buffered_count() as u64;
+
+                        let mut ent_data_chunk_end_idx = ent_data_chunk_idx;
+                        let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
+
+                        if index_ent.is_file() {
+                            let mut f = match open_file_for_sending(&ent_path) {
+                                Ok(f) => TeeHashFileReader::new(f),
+                                // The file was deleted, treat it like it did not exist.
+                                // It's unlikely this stat cache entry will hit again as
+                                // the ctime definitely would change in this case.
+                                Err(err) if likely_smear_error(&err) => continue 'add_dir_ents,
+                                Err(err) => {
+                                    anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
+                                }
+                            };
+
+                            let file_len = self.write_data(&mut f, &mut on_data_chunk)?;
+
+                            // The true size is just what we read from disk. In the case
+                            // of snapshotting an modified file we can't guarantee consistency anyway.
+                            index_ent.size.0 = file_len;
+                            index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
+                            ent_data_chunk_end_idx =
+                                self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+                            ent_data_chunk_end_offset = self.data_chunker.buffered_count() as u64;
+                        }
+
+                        let cur_offsets = index::IndexEntryOffsets {
+                            data_chunk_idx: serde_bare::Uint(
+                                ent_data_chunk_idx - dir_data_chunk_idx,
+                            ),
+                            data_chunk_end_idx: serde_bare::Uint(
+                                ent_data_chunk_end_idx - dir_data_chunk_idx,
+                            ),
+                            data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
+                            data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
+                        };
+
+                        if use_stat_cache {
+                            dir_index_offsets.push(cur_offsets);
+                            content_hashes.push(index_ent.data_hash)
+                        }
+
+                        index_ent.offsets = cur_offsets;
+                        index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
+                        index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
+
+                        self.write_idx_ent(&index::VersionedIndexEntry::V2(index_ent))?;
+                    }
+
+                    if let Some(boundary_chunk) = self.data_chunker.force_split() {
+                        let boundary_chunk_len = boundary_chunk.len();
+                        let addr = self.add_data_chunk(boundary_chunk)?;
+                        on_data_chunk(&addr, boundary_chunk_len);
+                    }
+
+                    if self.send_log_session.is_some() && use_stat_cache {
+                        self.send_log_session
+                            .as_ref()
+                            .unwrap()
+                            .borrow_mut()
+                            .add_stat_cache_data(
+                                &hash[..],
+                                &sendlog::StatCacheEntry {
+                                    addresses,
+                                    total_size: dir_data_size,
+                                    base_offsets: dir_index_offsets,
+                                    hashes: content_hashes,
+                                },
+                            )?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn sync(&mut self) -> Result<(), anyhow::Error> {
+        write_packet(self.w, &Packet::TSendSync)?;
+        match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::RSendSync(stats) => {
+                self.added_bytes += stats.added_bytes;
+                self.added_chunks += stats.added_chunks;
+            }
+            _ => anyhow::bail!("protocol error, expected RSentSync packet"),
+        }
+        match self.send_log_session {
+            Some(ref mut send_log_session) => send_log_session.borrow_mut().checkpoint()?,
+            None => (),
+        }
+        self.dirty_bytes = 0;
+        Ok(())
+    }
+
+    fn finish(
+        mut self,
+    ) -> Result<
+        (
+            itemset::HTreeMetadata,
+            Option<itemset::HTreeMetadata>,
+            SendStats,
+        ),
+        anyhow::Error,
+    > {
+        let buffered_data = self.data_chunker.take_buffered();
+        self.add_data_chunk(buffered_data)?;
+        let data_tw = self.data_tw.take().unwrap();
+        let data_tree_meta = data_tw.finish(&mut self)?;
+        let mut idx_tree_meta = None;
+        let buffered_idx = self.idx_chunker.take_buffered();
+        if !buffered_idx.is_empty() {
+            self.add_idx_chunk(buffered_idx)?;
+        }
+        if self.idx_size != 0 {
+            let idx_tw = self.idx_tw.take().unwrap();
+            idx_tree_meta = Some(idx_tw.finish(&mut self)?);
+        }
+
+        self.ctx.progress.set_message("syncing storage...");
+        self.sync()?;
+
+        let stats = SendStats {
+            start_time: self.start_time,
+            end_time: chrono::Utc::now(),
+            uncompressed_index_size: self.idx_size,
+            uncompressed_data_size: self.data_size,
+            total_chunks: data_tree_meta.total_chunk_count
+                + if let Some(ref idx_tree_meta) = idx_tree_meta {
+                    idx_tree_meta.total_chunk_count
+                } else {
+                    0
+                },
+            transferred_bytes: self.transferred_bytes,
+            transferred_chunks: self.transferred_chunks,
+            added_bytes: self.added_bytes,
+            added_chunks: self.added_chunks,
+        };
+
+        let data_tree_meta = itemset::HTreeMetadata {
+            height: serde_bare::Uint(data_tree_meta.height as u64),
+            data_chunk_count: serde_bare::Uint(data_tree_meta.data_chunk_count),
+            address: data_tree_meta.address,
+        };
+
+        let idx_tree_meta = if let Some(ref idx_tree_meta) = idx_tree_meta {
+            Some(itemset::HTreeMetadata {
+                height: serde_bare::Uint(idx_tree_meta.height as u64),
+                data_chunk_count: serde_bare::Uint(idx_tree_meta.data_chunk_count),
+                address: idx_tree_meta.address,
+            })
+        } else {
+            None
+        };
+
+        Ok((data_tree_meta, idx_tree_meta, stats))
+    }
+}
+
 pub enum DataSource {
     Subprocess(Vec<String>),
     Readable {
@@ -175,12 +687,16 @@ pub enum DataSource {
 }
 
 pub struct SendStats {
+    // send start time.
     pub start_time: chrono::DateTime<chrono::Utc>,
+    // send end time.
     pub end_time: chrono::DateTime<chrono::Utc>,
     // Total number of chunks processed.
     pub total_chunks: u64,
-    // Total size of all data streams sent.
-    pub uncompressed_bytes: u64,
+    // Size of uncompressed index stream.
+    pub uncompressed_index_size: u64,
+    // Size of uncompressed data stream.
+    pub uncompressed_data_size: u64,
     // Number of chunks actually sent to the remote after caching.
     pub transferred_chunks: u64,
     // Data actually sent after compression/caching.
@@ -206,8 +722,6 @@ pub fn send(
         None => None,
     };
 
-    let mut data_ectx = ctx.data_ectx.clone();
-
     write_packet(w, &Packet::TBeginSend(TBeginSend { delta_id: send_id }))?;
 
     let ack = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -215,14 +729,8 @@ pub fn send(
         _ => anyhow::bail!("protocol error, expected begin ack packet"),
     };
 
-    let mut index_tree = None;
-    let mut index_stream_size = 0;
-    let mut index_chunk_count = 0;
-
-    let send_log_session = match send_log {
-        Some(ref mut send_log) => Some(std::cell::RefCell::new(
-            send_log.session(ack.gc_generation)?,
-        )),
+    let mut send_log_session = match send_log {
+        Some(ref mut send_log) => Some(RefCell::new(send_log.session(ack.gc_generation)?)),
         None => None,
     };
 
@@ -232,31 +740,35 @@ pub fn send(
             .perform_cache_invalidations(ack.has_delta_id)?;
     }
 
-    let mut sink = ConnectionHtreeSink {
-        checkpoint_bytes: ctx.checkpoint_bytes,
+    let min_size = CHUNK_MIN_SIZE;
+    let max_size = CHUNK_MAX_SIZE;
+
+    let mut session = SendSession {
+        ctx: ctx.clone(),
+        start_time,
         dirty_bytes: 0,
         transferred_bytes: 0,
         transferred_chunks: 0,
         added_chunks: 0,
         added_bytes: 0,
-        send_log_session: &send_log_session,
-        acache: acache::ACache::new(65536),
+        send_log_session: &mut send_log_session,
+        acache: acache::ACache::new(32768),
+        data_chunker: chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size),
+        data_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
+        idx_chunker: chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size),
+        idx_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
+        idx_size: 0,
+        data_size: 0,
         w,
         r,
     };
-
-    let min_size = CHUNK_MIN_SIZE;
-    let max_size = CHUNK_MAX_SIZE;
-
-    let mut chunker = chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size);
-    let mut tw = htree::TreeWriter::new(min_size, max_size);
 
     match data {
         DataSource::Subprocess(args) => {
             let quoted_args: Vec<String> =
                 args.iter().map(|x| shlex::quote(x).to_string()).collect();
             ctx.progress
-                .set_message(&("exec: ".to_string() + &quoted_args.join(" ")));
+                .set_message(&format!("exec: {}", quoted_args.join(" ")));
 
             let mut child = std::process::Command::new(args[0].clone())
                 .args(&args[1..])
@@ -264,18 +776,7 @@ pub fn send(
                 .stdout(std::process::Stdio::piped())
                 .spawn()?;
             let mut data = child.stdout.as_mut().unwrap();
-            send_chunks(
-                ctx,
-                &mut sink,
-                &ctx.data_hash_key,
-                &mut data_ectx,
-                &mut chunker,
-                &mut tw,
-                &mut data,
-                &mut |_: &Address, chunk_len: usize| {
-                    ctx.progress.inc(chunk_len as u64);
-                },
-            )?;
+            session.write_data(&mut data, &mut |_: &Address, _: usize| {})?;
             let status = child.wait()?;
             if !status.success() {
                 anyhow::bail!("child failed with status {}", status.code().unwrap());
@@ -286,87 +787,23 @@ pub fn send(
             ref mut data,
         } => {
             ctx.progress.set_message(&description);
-            send_chunks(
-                ctx,
-                &mut sink,
-                &ctx.data_hash_key,
-                &mut data_ectx,
-                &mut chunker,
-                &mut tw,
-                data,
-                &mut |_: &Address, chunk_len: usize| {
-                    ctx.progress.inc(chunk_len as u64);
-                },
-            )?;
+            session.write_data(data, &mut |_: &Address, _: usize| {})?;
         }
         DataSource::Filesystem {
             base,
             paths,
             exclusions,
         } => {
-            let mut idx_chunker = chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size);
-            let mut idx_tw = htree::TreeWriter::new(min_size, max_size);
-
-            let mut st = SendDirState {
-                sink: &mut sink,
-                chunker: &mut chunker,
-                tw: &mut tw,
-                idx_chunker: &mut idx_chunker,
-                idx_tw: &mut idx_tw,
-                send_log_session: &send_log_session,
-            };
-
-            send_dir(ctx, &mut st, &base, paths, &exclusions)?;
-
-            let chunk_data = idx_chunker.finish();
-            let data_len = chunk_data.len() as u64;
-            let chunk_addr = crypto::keyed_content_address(&chunk_data, &ctx.idx_hash_key);
-            idx_tw.add(
-                &mut sink,
-                &chunk_addr,
-                data_len,
-                ctx.idx_ectx.encrypt_data(chunk_data, ctx.compression),
-            )?;
-
-            let i_tree_meta = idx_tw.finish(&mut sink)?;
-
-            index_tree = Some(itemset::HTreeMetadata {
-                height: serde_bare::Uint(i_tree_meta.height as u64),
-                data_chunk_count: serde_bare::Uint(i_tree_meta.data_chunk_count),
-                address: i_tree_meta.address,
-            });
-            index_stream_size = i_tree_meta.stream_size;
-            index_chunk_count = i_tree_meta.total_chunk_count;
+            session.send_dir(base, paths, exclusions)?;
         }
     }
 
-    let chunk_data = chunker.finish();
-    let data_len = chunk_data.len() as u64;
-    let addr = crypto::keyed_content_address(&chunk_data, &ctx.data_hash_key);
-    tw.add(
-        &mut sink,
-        &addr,
-        data_len,
-        ctx.data_ectx.encrypt_data(chunk_data, ctx.compression),
-    )?;
-
-    let data_tree_meta = tw.finish(&mut sink)?;
-
-    sink.sync()?;
-
-    let transferred_chunks = sink.transferred_chunks;
-    let transferred_bytes = sink.transferred_bytes;
-    let added_chunks = sink.added_chunks;
-    let added_bytes = sink.added_bytes;
+    let (data_tree, index_tree, stats) = session.finish()?;
 
     let plain_text_metadata = itemset::V2PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
         unix_timestamp_millis: chrono::Utc::now().timestamp_millis().try_into()?,
-        data_tree: itemset::HTreeMetadata {
-            height: serde_bare::Uint(data_tree_meta.height as u64),
-            data_chunk_count: serde_bare::Uint(data_tree_meta.data_chunk_count),
-            address: data_tree_meta.address,
-        },
+        data_tree,
         index_tree,
     };
 
@@ -375,8 +812,8 @@ pub fn send(
         send_key_id: ctx.send_key_id,
         idx_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
-        data_size: serde_bare::Uint(data_tree_meta.stream_size),
-        index_size: serde_bare::Uint(index_stream_size),
+        data_size: serde_bare::Uint(stats.uncompressed_data_size),
+        index_size: serde_bare::Uint(stats.uncompressed_index_size),
         tags,
     };
 
@@ -386,8 +823,6 @@ pub fn send(
             .metadata_ectx
             .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Lz4),
     });
-
-    ctx.progress.set_message("syncing storage...");
 
     write_packet(
         w,
@@ -399,63 +834,12 @@ pub fn send(
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RAddItem(id) => {
-            if send_log_session.is_some() {
-                send_log_session.unwrap().into_inner().commit(&id)?;
+            if let Some(send_log_session) = send_log_session {
+                send_log_session.into_inner().commit(&id)?;
             }
-            Ok((
-                id,
-                SendStats {
-                    start_time,
-                    end_time: chrono::Utc::now(),
-                    uncompressed_bytes: data_tree_meta.stream_size + index_stream_size,
-                    total_chunks: data_tree_meta.total_chunk_count + index_chunk_count,
-                    transferred_bytes,
-                    transferred_chunks,
-                    added_bytes,
-                    added_chunks,
-                },
-            ))
+            Ok((id, stats))
         }
         _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn send_chunks(
-    ctx: &SendContext,
-    sink: &mut dyn htree::Sink,
-    hash_key: &crypto::HashKey,
-    ectx: &mut crypto::EncryptionContext,
-    chunker: &mut chunker::RollsumChunker,
-    tw: &mut htree::TreeWriter,
-    data: &mut dyn std::io::Read,
-    on_chunk: &mut dyn FnMut(&Address, usize),
-) -> Result<u64, anyhow::Error> {
-    // We don't bother initializing such a large buffer, it is a waste of time.
-    let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-    let mut n_written: u64 = 0;
-    loop {
-        match data.read(&mut buf) {
-            Ok(0) => {
-                return Ok(n_written);
-            }
-            Ok(n_read) => {
-                let mut n_chunked = 0;
-                while n_chunked != n_read {
-                    let (n, c) = chunker.add_bytes(&buf[n_chunked..n_read]);
-                    n_chunked += n;
-                    if let Some(chunk_data) = c {
-                        let data_len = chunk_data.len();
-                        let addr = crypto::keyed_content_address(&chunk_data, &hash_key);
-                        let encrypted_chunk = ectx.encrypt_data(chunk_data, ctx.compression);
-                        on_chunk(&addr, data_len);
-                        tw.add(sink, &addr, data_len as u64, encrypted_chunk)?;
-                    }
-                }
-                n_written += n_read as u64;
-            }
-            Err(err) => return Err(err.into()),
-        }
     }
 }
 
@@ -616,15 +1000,6 @@ fn dir_ent_to_index_ent(
     })
 }
 
-struct SendDirState<'a, 'b> {
-    sink: &'a mut dyn htree::Sink,
-    chunker: &'a mut chunker::RollsumChunker,
-    tw: &'a mut htree::TreeWriter,
-    idx_chunker: &'a mut chunker::RollsumChunker,
-    idx_tw: &'a mut htree::TreeWriter,
-    send_log_session: &'a Option<std::cell::RefCell<sendlog::SendLogSession<'b>>>,
-}
-
 // Read a file while also blake3 hashing any data.
 struct TeeHashFileReader {
     f: std::fs::File,
@@ -704,377 +1079,6 @@ cfg_if::cfg_if! {
             Ok(f)
         }
     }
-}
-
-fn send_dir(
-    ctx: &SendContext,
-    st: &mut SendDirState,
-    base: &std::path::Path,
-    paths: &[std::path::PathBuf],
-    exclusions: &[glob::Pattern],
-) -> Result<(), anyhow::Error> {
-    let mut data_ectx = ctx.data_ectx.clone();
-    let mut idx_ectx = ctx.idx_ectx.clone();
-    let mut dev_normalizer = DevNormalizer::new();
-
-    let metadata = std::fs::metadata(&base).map_err(|err| {
-        anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
-    })?;
-
-    if !metadata.is_dir() {
-        anyhow::bail!("{} is not a directory", base.display());
-    }
-
-    let ent = index::VersionedIndexEntry::V2(
-        dir_ent_to_index_ent(
-            &mut dev_normalizer,
-            &base,
-            &std::path::PathBuf::from("."),
-            &metadata,
-            ctx.want_xattrs,
-        )
-        .map_err(|err| {
-            anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
-        })?,
-    );
-
-    let mut on_index_chunk = |_: &Address, chunk_len: usize| {
-        ctx.progress.inc(chunk_len as u64);
-    };
-
-    send_chunks(
-        ctx,
-        st.sink,
-        &ctx.idx_hash_key,
-        &mut idx_ectx,
-        st.idx_chunker,
-        st.idx_tw,
-        &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
-        &mut on_index_chunk,
-    )?;
-
-    let mut work_list = std::collections::VecDeque::new();
-
-    let mut initial_paths = std::collections::HashSet::new();
-    for p in paths {
-        let initial_md = std::fs::metadata(&p).map_err(|err| {
-            anyhow::format_err!("unable to fetch metadata for {}: {}", p.display(), err)
-        })?;
-        if !initial_md.is_dir() {
-            // We should be able to lift this restriction in the future.
-            anyhow::bail!(
-                "{} is not a directory, files cannot be part of multi-dir put",
-                p.display()
-            );
-        }
-        work_list.push_back((p.clone(), initial_md));
-        if p != base {
-            initial_paths.insert(p.clone());
-        }
-    }
-
-    while let Some((cur_dir, cur_dir_md)) = work_list.pop_front() {
-        assert!(cur_dir_md.is_dir());
-        ctx.progress.set_message(&cur_dir.to_string_lossy());
-
-        // These inital paths do not have a parent who will add an index entry
-        // for them, so we add before we process the dir contents.
-        if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
-            initial_paths.remove(&cur_dir);
-
-            let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-            let ent = index::VersionedIndexEntry::V2(
-                dir_ent_to_index_ent(
-                    &mut dev_normalizer,
-                    &cur_dir,
-                    &index_path,
-                    &cur_dir_md,
-                    ctx.want_xattrs,
-                )
-                .map_err(|err| {
-                    anyhow::format_err!(
-                        "unable build index entry for {}: {}",
-                        cur_dir.display(),
-                        err
-                    )
-                })?,
-            );
-
-            send_chunks(
-                ctx,
-                st.sink,
-                &ctx.idx_hash_key,
-                &mut idx_ectx,
-                st.idx_chunker,
-                st.idx_tw,
-                &mut std::io::Cursor::new(&serde_bare::to_vec(&ent).unwrap()),
-                &mut on_index_chunk,
-            )?;
-        }
-
-        let mut hash_state = crypto::HashState::new(Some(&ctx.idx_hash_key));
-
-        // Incorporate the absolute dir in our cache key.
-        hash_state.update(cur_dir.as_os_str().as_bytes());
-        // Null byte marks the end of path in the hash space.
-        hash_state.update(&[0]);
-
-        let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
-            Ok(dir_ents) => dir_ents,
-            // If the directory was deleted from under us, treat it as empty.
-            Err(err) if likely_smear_error(&err) => vec![],
-            Err(err) => anyhow::bail!("unable list {}: {}", cur_dir.display(), err),
-        };
-
-        // Note sorting by extension or reverse filename might give better compression,
-        // but we should not add this without checking how it affects the diff command.
-        dir_ents.sort_by(|l, r| {
-            index::path_cmp(
-                &l.file_name().to_string_lossy(),
-                &r.file_name().to_string_lossy(),
-            )
-        });
-
-        let mut index_ents = Vec::new();
-
-        'collect_dir_ents: for entry in dir_ents {
-            let ent_path = entry.path();
-
-            for excl in exclusions {
-                if excl.matches_path(&ent_path) {
-                    continue 'collect_dir_ents;
-                }
-            }
-
-            let metadata = match entry.metadata() {
-                Ok(metadata) => metadata,
-                // If the entry was deleted from under us, treat it as if it was excluded.
-                Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                Err(err) => anyhow::bail!(
-                    "unable to fetch metadata for {}: {}",
-                    ent_path.display(),
-                    err
-                ),
-            };
-
-            // There is no meaningful way to backup a unix socket.
-            if metadata.file_type().is_socket() {
-                continue 'collect_dir_ents;
-            }
-
-            let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
-            let index_ent = match dir_ent_to_index_ent(
-                &mut dev_normalizer,
-                &ent_path,
-                &index_path,
-                &metadata,
-                ctx.want_xattrs,
-            ) {
-                Ok(ent) => ent,
-                // The entry was removed while we were it's metadata
-                // in a way that was unrecoverable. For example a symlink was removed so
-                // we cannot do a valid readlink.
-                Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                Err(err) => anyhow::bail!(
-                    "unable build index entry for {}: {}",
-                    ent_path.display(),
-                    err
-                ),
-            };
-
-            if metadata.is_dir() && ((cur_dir_md.dev() == metadata.dev()) || !ctx.one_file_system) {
-                work_list.push_back((ent_path.clone(), metadata));
-            }
-
-            if ctx.use_stat_cache {
-                hash_state.update(&serde_bare::to_vec(&index_ent).unwrap());
-            }
-
-            index_ents.push((ent_path, index_ent));
-        }
-
-        let hash = hash_state.finish();
-
-        let cache_lookup = if st.send_log_session.is_some() && ctx.use_stat_cache {
-            st.send_log_session
-                .as_ref()
-                .unwrap()
-                .borrow_mut()
-                .stat_cache_lookup(&hash)?
-        } else {
-            None
-        };
-
-        match cache_lookup {
-            Some(cache_entry) => {
-                let dir_data_chunk_idx = st.tw.data_chunk_count();
-
-                for address in &cache_entry.addresses {
-                    st.tw.add_data_addr(st.sink, address)?;
-                }
-                st.tw.add_stream_size(cache_entry.total_size);
-
-                assert!(cache_entry.base_offsets.len() == index_ents.len());
-                assert!(cache_entry.hashes.len() == index_ents.len());
-
-                for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
-                    index_ent.data_hash = cache_entry.hashes[i];
-                    index_ent.offsets = cache_entry.base_offsets[i];
-                    index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
-                    index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
-                    send_chunks(
-                        ctx,
-                        st.sink,
-                        &ctx.idx_hash_key,
-                        &mut idx_ectx,
-                        st.idx_chunker,
-                        st.idx_tw,
-                        &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
-                                .unwrap(),
-                        ),
-                        &mut on_index_chunk,
-                    )?;
-                }
-
-                // Re-add the cache entry so it isn't invalidated.
-                st.send_log_session
-                    .as_ref()
-                    .unwrap()
-                    .borrow_mut()
-                    .add_stat_cache_data(&hash[..], &cache_entry)?;
-
-                ctx.progress.inc(cache_entry.total_size);
-            }
-            None => {
-                let mut dir_data_size: u64 = 0;
-                let mut addresses = Vec::new();
-
-                let mut on_data_chunk = |addr: &Address, chunk_len: usize| {
-                    dir_data_size += chunk_len as u64;
-                    ctx.progress.inc(chunk_len as u64);
-                    if ctx.use_stat_cache {
-                        addresses.push(*addr);
-                    }
-                };
-
-                let cache_vec_capacity = if ctx.use_stat_cache {
-                    index_ents.len()
-                } else {
-                    0
-                };
-
-                let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
-                    Vec::with_capacity(cache_vec_capacity);
-
-                let mut content_hashes: Vec<index::ContentCryptoHash> =
-                    Vec::with_capacity(cache_vec_capacity);
-
-                let dir_data_chunk_idx = st.tw.data_chunk_count();
-
-                'add_dir_ents: for (ent_path, mut index_ent) in index_ents.drain(..) {
-                    let ent_data_chunk_idx = st.tw.data_chunk_count();
-                    let ent_data_chunk_offset = st.chunker.buffered_count() as u64;
-
-                    let mut ent_data_chunk_end_idx = ent_data_chunk_idx;
-                    let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
-
-                    if index_ent.is_file() {
-                        let mut f = match open_file_for_sending(&ent_path) {
-                            Ok(f) => TeeHashFileReader::new(f),
-                            // The file was deleted, treat it like it did not exist.
-                            // It's unlikely this stat cache entry will hit again as
-                            // the ctime definitely would change in this case.
-                            Err(err) if likely_smear_error(&err) => continue 'add_dir_ents,
-                            Err(err) => {
-                                anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
-                            }
-                        };
-
-                        let file_len = send_chunks(
-                            ctx,
-                            st.sink,
-                            &ctx.data_hash_key,
-                            &mut data_ectx,
-                            st.chunker,
-                            st.tw,
-                            &mut f,
-                            &mut on_data_chunk,
-                        )?;
-
-                        // The true size is just what we read from disk. In the case
-                        // of snapshotting an modified file we can't guarantee consistency anyway.
-                        index_ent.size.0 = file_len;
-                        index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
-                        ent_data_chunk_end_idx = st.tw.data_chunk_count();
-                        ent_data_chunk_end_offset = st.chunker.buffered_count() as u64;
-                    }
-
-                    let cur_offsets = index::IndexEntryOffsets {
-                        data_chunk_idx: serde_bare::Uint(ent_data_chunk_idx - dir_data_chunk_idx),
-                        data_chunk_end_idx: serde_bare::Uint(
-                            ent_data_chunk_end_idx - dir_data_chunk_idx,
-                        ),
-                        data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
-                        data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
-                    };
-
-                    if ctx.use_stat_cache {
-                        dir_index_offsets.push(cur_offsets);
-                        content_hashes.push(index_ent.data_hash)
-                    }
-
-                    index_ent.offsets = cur_offsets;
-                    index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
-                    index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
-
-                    send_chunks(
-                        ctx,
-                        st.sink,
-                        &ctx.idx_hash_key,
-                        &mut idx_ectx,
-                        st.idx_chunker,
-                        st.idx_tw,
-                        &mut std::io::Cursor::new(
-                            &serde_bare::to_vec(&index::VersionedIndexEntry::V2(index_ent))
-                                .unwrap(),
-                        ),
-                        &mut on_index_chunk,
-                    )?;
-                }
-
-                if let Some(chunk_data) = st.chunker.force_split() {
-                    let data_len = chunk_data.len();
-                    let addr = crypto::keyed_content_address(&chunk_data, &ctx.data_hash_key);
-                    on_data_chunk(&addr, data_len);
-                    st.tw.add(
-                        st.sink,
-                        &addr,
-                        data_len as u64,
-                        data_ectx.encrypt_data(chunk_data, ctx.compression),
-                    )?
-                }
-
-                if st.send_log_session.is_some() && ctx.use_stat_cache {
-                    st.send_log_session
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .add_stat_cache_data(
-                            &hash[..],
-                            &sendlog::StatCacheEntry {
-                                addresses,
-                                total_size: dir_data_size,
-                                base_offsets: dir_index_offsets,
-                                hashes: content_hashes,
-                            },
-                        )?;
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 pub fn request_metadata(
