@@ -1,6 +1,7 @@
 use super::crypto;
 use super::hex;
 use lazy_static::lazy_static;
+use openbsd::unveil;
 use path_clean::PathClean;
 use std::fs;
 use std::io::Write;
@@ -207,6 +208,10 @@ pub fn anon_temp_file() -> Result<std::fs::File, std::io::Error> {
 
     let mut p = std::env::temp_dir();
     p.push(name);
+
+    if cfg!(target_os = "openbsd") {
+        unveil(&p, "rwc").unwrap();
+    }
 
     let f = fs::OpenOptions::new()
         .read(true)

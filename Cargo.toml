@@ -45,6 +45,7 @@ blake3 = "0.3"
 xattr = "0.2"
 openat = "0.1"
 lazy_static = "1.4"
+openbsd = "0.1.0"
 
 [dev-dependencies]
 

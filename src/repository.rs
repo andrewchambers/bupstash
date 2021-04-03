@@ -12,6 +12,7 @@ use super::migrate;
 use super::oplog;
 use super::protocol;
 use super::xid::*;
+use openbsd::unveil;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::fs;
@@ -115,6 +116,11 @@ impl Repo {
             .to_os_string();
         tmpname.push(".bupstash-repo-init-tmp");
         path_buf.push(&tmpname);
+
+        if cfg!(target_os = "openbsd") {
+            unveil(&path_buf, "rwc").unwrap();
+        }
+
         if path_buf.exists() {
             anyhow::bail!(
                 "temp dir already exists at {}",
@@ -123,6 +129,10 @@ impl Repo {
         }
 
         fs::DirBuilder::new().create(path_buf.as_path())?;
+
+        if cfg!(target_os = "openbsd") {
+            unveil(&path_buf, "rwc").unwrap();
+        }
 
         path_buf.push("repo.lock");
         fsutil::create_empty_file(path_buf.as_path())?;

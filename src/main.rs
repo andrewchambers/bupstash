@@ -30,6 +30,7 @@ pub mod sodium;
 pub mod xid;
 pub mod xtar;
 
+use openbsd::{pledge::pledge, unveil};
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
 
@@ -2207,6 +2208,11 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     if matches.free.len() != 1 {
         die("Expected a single repository path to serve.".to_string());
+    }
+
+    if cfg!(target_os = "openbsd") {
+        pledge("stdio rpath wpath cpath flock unveil", "").unwrap();
+        unveil(&matches.free[0], "rwc").unwrap();
     }
 
     let mut allow_init = true;
