@@ -1,6 +1,5 @@
 use super::abloom;
 use super::address::*;
-use super::htree;
 use super::protocol;
 use super::repository;
 use super::xid;
@@ -42,16 +41,4 @@ pub trait Engine {
     // make a rough guess to increase performance. One trick is sampling
     // a single address prefix.
     fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error>;
-}
-
-impl htree::Sink for Box<dyn Engine> {
-    fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
-        self.as_mut().add_chunk(addr, buf)
-    }
-}
-
-impl htree::Source for Box<dyn Engine> {
-    fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
-        self.as_mut().get_chunk(addr)
-    }
 }
