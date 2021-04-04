@@ -108,6 +108,15 @@ struct SendSession<'a, 'b, 'c> {
     transferred_bytes: u64,
     added_chunks: u64,
     added_bytes: u64,
+
+    // Parallel encryption + compression
+    encrypt_data_chunk_in_progress: Option<Address>,
+    encrypt_data_chunk_dispatch: crossbeam_channel::Sender<Vec<u8>>,
+    encrypt_data_chunk_result: crossbeam_channel::Receiver<Vec<u8>>,
+    compress_data_chunk_in_progress: Option<Address>,
+    compress_data_chunk_dispatch: crossbeam_channel::Sender<Vec<u8>>,
+    compress_data_chunk_result: crossbeam_channel::Receiver<Vec<u8>>,
+
     // Ownership is slightly tricky because the stat cache and query cache share a transaction.
     send_log_session: &'a mut Option<RefCell<sendlog::SendLogSession<'b>>>,
     acache: acache::ACache,
@@ -163,13 +172,54 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         Ok(())
     }
 
+    fn pipelined_compress_data_chunk(
+        &mut self,
+        addr: &Address,
+        data: Vec<u8>,
+    ) -> Option<(Address, Vec<u8>)> {
+        if let Some(prev_addr) = self.compress_data_chunk_in_progress {
+            let prev_data = self.compress_data_chunk_result.recv().unwrap();
+            self.compress_data_chunk_in_progress = Some(*addr);
+            self.compress_data_chunk_dispatch.send(data).unwrap();
+            Some((prev_addr, prev_data))
+        } else {
+            self.compress_data_chunk_in_progress = Some(*addr);
+            self.compress_data_chunk_dispatch.send(data).unwrap();
+            None
+        }
+    }
+
+    fn pipelined_encrypt_data_chunk(
+        &mut self,
+        addr: &Address,
+        data: Vec<u8>,
+    ) -> Option<(Address, Vec<u8>)> {
+        if let Some(prev_addr) = self.encrypt_data_chunk_in_progress {
+            let prev_data = self.encrypt_data_chunk_result.recv().unwrap();
+            self.encrypt_data_chunk_in_progress = Some(*addr);
+            self.encrypt_data_chunk_dispatch.send(data).unwrap();
+            Some((prev_addr, prev_data))
+        } else {
+            self.encrypt_data_chunk_in_progress = Some(*addr);
+            self.encrypt_data_chunk_dispatch.send(data).unwrap();
+            None
+        }
+    }
+
     fn encrypt_and_write_data_chunk(
         &mut self,
         addr: &Address,
         data: std::vec::Vec<u8>,
     ) -> Result<(), anyhow::Error> {
-        let data = self.ctx.data_ectx.encrypt_data(data, self.ctx.compression);
-        self.write_chunk(&addr, data)
+        if let Some((addr, data)) = self.pipelined_compress_data_chunk(addr, data) {
+            if let Some((addr, data)) = self.pipelined_encrypt_data_chunk(&addr, data) {
+                self.write_chunk(&addr, data)
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
     }
 
     fn encrypt_and_write_idx_chunk(
@@ -593,6 +643,20 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
     }
 
     fn sync(&mut self) -> Result<(), anyhow::Error> {
+        
+        if let Some(addr) = self.compress_data_chunk_in_progress {
+            let data = self.compress_data_chunk_result.recv().unwrap();
+            self.compress_data_chunk_in_progress = None;
+            if let Some((addr, data)) = self.pipelined_encrypt_data_chunk(&addr, data) {
+                write_chunk(self.w, &addr, &data)?;
+            }
+        }
+        if let Some(addr) = self.encrypt_data_chunk_in_progress {
+            let data = self.encrypt_data_chunk_result.recv().unwrap();
+            self.encrypt_data_chunk_in_progress = None;
+            write_chunk(self.w, &addr, &data)?;
+        }
+
         write_packet(self.w, &Packet::TSendSync)?;
         match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::RSendSync(stats) => {
@@ -740,6 +804,37 @@ pub fn send(
             .perform_cache_invalidations(ack.has_delta_id)?;
     }
 
+    let (encrypt_dispatch_send, encrypt_dispatch_recv) = crossbeam_channel::bounded(0);
+    let (encrypt_result_send, encrypt_result_recv) = crossbeam_channel::bounded(0);
+    let mut encrypt_worker_data_ectx = ctx.data_ectx.clone();
+    let encrypt_data_worker = std::thread::spawn(move || loop {
+        match encrypt_dispatch_recv.recv() {
+            Ok(data) => {
+                let data = encrypt_worker_data_ectx.encrypt_data2(data);
+                if encrypt_result_send.send(data).is_err() {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+    });
+
+ let (compress_dispatch_send, compress_dispatch_recv) = crossbeam_channel::bounded(0);
+    let (compress_result_send, compress_result_recv) = crossbeam_channel::bounded(0);
+    let data_compression_scheme = ctx.compression;
+    let compress_data_worker = std::thread::spawn(move || loop {
+        match compress_dispatch_recv.recv() {
+            Ok(data) => {
+                let data = compression::compress(data_compression_scheme, data);
+                if compress_result_send.send(data).is_err() {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+    });
+
+
     let min_size = CHUNK_MIN_SIZE;
     let max_size = CHUNK_MAX_SIZE;
 
@@ -759,6 +854,12 @@ pub fn send(
         idx_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
         idx_size: 0,
         data_size: 0,
+        encrypt_data_chunk_in_progress: None,
+        encrypt_data_chunk_dispatch: encrypt_dispatch_send,
+        encrypt_data_chunk_result: encrypt_result_recv,
+        compress_data_chunk_in_progress: None,
+        compress_data_chunk_dispatch: compress_dispatch_send,
+        compress_data_chunk_result: compress_result_recv,
         w,
         r,
     };
@@ -799,6 +900,9 @@ pub fn send(
     }
 
     let (data_tree, index_tree, stats) = session.finish()?;
+
+    encrypt_data_worker.join().unwrap();
+    compress_data_worker.join().unwrap();
 
     let plain_text_metadata = itemset::V2PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,

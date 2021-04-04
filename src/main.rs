@@ -30,6 +30,7 @@ pub mod xtar;
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
+use std::os::unix::io::AsRawFd;
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
@@ -524,6 +525,8 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
+
+    nix::fcntl::fcntl(serve_in.as_raw_fd(), nix::fcntl::FcntlArg::F_SETPIPE_SZ(1048576))?;
 
     client::init_repository(&mut serve_out, &mut serve_in, storage_spec)?;
     client::hangup(&mut serve_in)?;
