@@ -7,7 +7,7 @@ Bupstash is a tool for encrypted backups - if you need secure backups, Bupstash 
 
 Bupstash was designed to have:
 
-- Efficient deduplication - Bupstash can store hundreds of encrypted directory snapshots using a fraction of the space encrypted tarballs would require.
+- Efficient deduplication - Bupstash can store thousands of encrypted directory snapshots using a fraction of the space encrypted tarballs would require.
 
 - Strong privacy - Data is encrypted client side and the repository never needs has access to the decryption keys.
 
