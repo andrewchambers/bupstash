@@ -700,7 +700,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Primary or put key to encrypt data with.",
         "PATH",
     );
-    opts.optflag("", "no-compression", "Disable compression.");
+    opts.optflag("", "no-compression", "Disable data compression.");
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
     opts.optflag(
         "",
@@ -737,7 +737,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.",
         "PATTERN",
     );
-
     opts.optflag(
         "",
         "one-file-system",
