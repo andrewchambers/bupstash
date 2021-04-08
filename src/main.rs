@@ -534,7 +534,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 enum ListFormat {
     Human,
-    Jsonl,
+    Jsonl1,
     Bare,
 }
 
@@ -559,7 +559,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let list_format = match matches.opt_str("format") {
         Some(f) => match &f[..] {
-            "jsonl" => ListFormat::Jsonl,
+            "jsonl" => ListFormat::Jsonl1,
             "human" => ListFormat::Human,
             _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
@@ -652,7 +652,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 }
                 writeln!(out)?;
             }
-            ListFormat::Jsonl => {
+            ListFormat::Jsonl1 => {
                 write!(out, "{{")?;
                 for (i, (k, v)) in tags.iter().enumerate() {
                     if i != 0 {
@@ -1255,7 +1255,7 @@ fn format_human_content_listing(
     result
 }
 
-fn format_json_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
+fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
     let mut result = String::new();
     std::fmt::write(&mut result, format_args!("{{"))?;
     std::fmt::write(
@@ -1289,6 +1289,50 @@ fn format_json_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow
             serde_json::to_string(&ent.ctime_nsec.0)?
         ),
     )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"uid\":{}", serde_json::to_string(&ent.uid.0)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"gid\":{}", serde_json::to_string(&ent.gid.0)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"norm_dev\":{}", serde_json::to_string(&ent.norm_dev.0)?),
+    )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"nlink\":{}", serde_json::to_string(&ent.nlink.0)?),
+    )?;
+    if ent.is_dev_node() {
+        std::fmt::write(
+            &mut result,
+            format_args!(
+                ",\"dev_major\":{}",
+                serde_json::to_string(&ent.dev_major.0)?
+            ),
+        )?;
+        std::fmt::write(
+            &mut result,
+            format_args!(
+                ",\"dev_minor\":{}",
+                serde_json::to_string(&ent.dev_minor.0)?
+            ),
+        )?;
+    }
+    if let Some(ref xattrs) = ent.xattrs {
+        std::fmt::write(
+            &mut result,
+            format_args!(",\"xattrs\":{}", serde_json::to_string(xattrs)?),
+        )?;
+    }
+    if let Some(ref link_target) = ent.link_target {
+        std::fmt::write(
+            &mut result,
+            format_args!(",\"link_target\":{}", serde_json::to_string(link_target)?),
+        )?;
+    }
     match ent.data_hash {
         index::ContentCryptoHash::None => (),
         index::ContentCryptoHash::Blake3(h) => std::fmt::write(
@@ -1311,7 +1355,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "format",
-        "Output format, valid values are 'human' or 'jsonl'.",
+        "Output format, valid values are 'human' or 'jsonl1'.",
         "FORMAT",
     );
 
@@ -1319,10 +1363,10 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let list_format = match matches.opt_str("format") {
         Some(f) => match &f[..] {
-            "jsonl" => ListFormat::Jsonl,
+            "jsonl1" => ListFormat::Jsonl1,
             "human" => ListFormat::Human,
             "BARE" => ListFormat::Bare,
-            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl1'"),
         },
         None => ListFormat::Human,
     };
@@ -1461,10 +1505,10 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 )?;
             }
         }
-        ListFormat::Jsonl => {
+        ListFormat::Jsonl1 => {
             for ent in content_index.iter() {
                 let ent = ent?;
-                writeln!(out, "{}", format_json_content_listing(&ent)?)?;
+                writeln!(out, "{}", format_jsonl1_content_listing(&ent)?)?;
             }
         }
         ListFormat::Bare => {
@@ -1502,7 +1546,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let utc_timestamps = matches.opt_present("utc-timestamps");
     let list_format = match matches.opt_str("format") {
         Some(f) => match &f[..] {
-            "jsonl" => ListFormat::Jsonl,
+            "jsonl1" => ListFormat::Jsonl1,
             "human" => ListFormat::Human,
             _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
         },
@@ -1696,7 +1740,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 },
             )?;
         }
-        ListFormat::Jsonl => {
+        ListFormat::Jsonl1 => {
             index::diff(
                 &to_diff[0],
                 &to_diff[1],
@@ -1706,7 +1750,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         std::io::stdout(),
                         "{} {}",
                         op,
-                        format_json_content_listing(e)?
+                        format_jsonl1_content_listing(e)?
                     )?;
                     Ok(())
                 },
