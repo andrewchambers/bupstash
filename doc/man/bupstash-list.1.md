@@ -76,10 +76,39 @@ KEY=VALUE KEY=VALUE KEY=VALUE ....
 
 Where each key and value corresponds to a tag that may be searched against.
 
-### Jsonl
+### JSONl1
 
-When `--format` is set to `jsonl`, `bupstash list` outputs one json object per line.
-The output json object format is pending stabilization so is not documented.
+When `--format` is set to `jsonl1`, `bupstash list` outputs one json object per line.
+
+Each line has the following json schema:
+
+```
+{
+  "id": hexstring,
+  "decryption_key_id": hexstring,
+  "data_tree": {
+    "address": hexstring,
+    "height": number,
+    "data_chunk_count": number
+  },
+  "index_tree": {
+    "address": hexstring,
+    "height": number,
+    "data_chunk_count": number
+  },
+  "data_size": number, // If decryption key present.
+  "index_size": number,  // If decryption key present.
+  "put_key_id": hexstring,  // If decryption key present.
+  "data_hash_key_part": hexstring,  // If decryption key present.
+  "index_hash_key_part": hexstring,  // If decryption key present.
+  "unix_timestamp_millis": number,
+  "tags": {
+    string : string,
+    ...
+}
+```
+
+If --query-encrypted is specified, encrypted tags and metadata are omitted.
 
 ## OPTIONS
 

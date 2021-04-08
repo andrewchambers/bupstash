@@ -3,7 +3,7 @@ use super::hex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Serialize, Debug, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Xid {
     pub bytes: [u8; 16],
 }
@@ -40,15 +40,15 @@ impl Default for Xid {
     }
 }
 
-impl fmt::Debug for Xid {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl fmt::Display for Xid {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let h = self.as_hex();
-        write!(f, "ID({})", std::str::from_utf8(&h[..]).unwrap())
+        write!(f, "{}", std::str::from_utf8(&h[..]).unwrap())
     }
 }
 
-impl fmt::Display for Xid {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl fmt::LowerHex for Xid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let h = self.as_hex();
         write!(f, "{}", std::str::from_utf8(&h[..]).unwrap())
     }

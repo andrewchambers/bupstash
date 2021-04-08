@@ -50,6 +50,14 @@ impl Address {
     }
 }
 
+impl fmt::LowerHex for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0; 64];
+        hex::encode(&self.bytes[..], &mut buf[..]);
+        write!(f, "{}", std::str::from_utf8(&buf[..]).unwrap())
+    }
+}
+
 impl Default for Address {
     fn default() -> Address {
         Address::from_bytes(&[0; ADDRESS_SZ])

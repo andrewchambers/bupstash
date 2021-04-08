@@ -119,7 +119,7 @@ $ bupstash rm name=backup.tar and older-than 30d
 ### remove items with a custom script
 
 ```
- $ bupstash list --format=jsonl \
+ $ bupstash list --format=jsonl1 \
     | custom-json-filter \
     | bupstash rm --ids-from-stdin
 ```

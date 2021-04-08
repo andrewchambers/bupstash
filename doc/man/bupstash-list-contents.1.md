@@ -33,7 +33,7 @@ Prefer using one of the versioned machine readable formats when writing scripts.
 
 When `--format` is set to `jsonl1`, `bupstash list-contents` outputs one json object per line.
 
-Each line has the following json shape:
+Each line has the following json schema:
 
 ```
 {
@@ -56,7 +56,6 @@ Each line has the following json shape:
   "data_hash": "$KIND[:$HEXBYTE]" // optional
 }
 ```
-
 
 ## QUERY LANGUAGE
 

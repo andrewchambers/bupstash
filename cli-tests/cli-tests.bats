@@ -470,7 +470,7 @@ _concurrent_modify_worker () {
 
   wait
 
-  for id in $(bupstash list --format=jsonl | jq -r .id)
+  for id in $(bupstash list --format=jsonl1 | jq -r .id)
   do
     bupstash get id=$id | tar -t > /dev/null
   done

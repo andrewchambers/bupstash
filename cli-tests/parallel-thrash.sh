@@ -106,7 +106,7 @@ do
 
   wait ${background_workers[@]}
 
-  for id in $(bupstash list -q --format=jsonl | jq -r .id)
+  for id in $(bupstash list -q --format=jsonl1 | jq -r .id)
   do
     bupstash get -q id=$id > /dev/null
     if test "$?" != 0
