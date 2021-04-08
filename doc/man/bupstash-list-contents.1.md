@@ -27,10 +27,36 @@ PERMS SIZE YYYY/MM/DD HH:MM:SS PATH...
 The included date is the time of the last change to a given file as reported by the
 operating system at the time of the snapshot.
 
-### Jsonl
+Prefer using one of the versioned machine readable formats when writing scripts.
 
-When `--format` is set to `jsonl`, `bupstash list-contents` outputs one json object per line.
-The output json object format is pending stabilization so is not documented.
+### JSONl1
+
+When `--format` is set to `jsonl1`, `bupstash list-contents` outputs one json object per line.
+
+Each line has the following json shape:
+
+```
+{
+  "path": string,
+  "mode": number,
+  "size": number,
+  "uid": number,
+  "gid": number,
+  "mtime": number,
+  "mtime_nsec": number,
+  "ctime": number,
+  "ctime_nsec": number,
+  "norm_dev": number,
+  "ino": number,
+  "nlink": number,
+  "link_target": string, // optional
+  "dev_major": number, // optional
+  "dev_minor": number, // optional
+  "xattrs": {string : [bytes...] ...}, // optional
+  "data_hash": "$KIND[:$HEXBYTE]" // optional
+}
+```
+
 
 ## QUERY LANGUAGE
 

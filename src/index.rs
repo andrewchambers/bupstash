@@ -163,11 +163,16 @@ impl IndexEntry {
     }
 
     pub fn is_file(&self) -> bool {
-        matches!(self.mode.0 as libc::mode_t & libc::S_IFMT, libc::S_IFREG)
+        (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFREG
     }
 
     pub fn is_dir(&self) -> bool {
-        matches!(self.mode.0 as libc::mode_t & libc::S_IFMT, libc::S_IFDIR)
+        (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFDIR
+    }
+
+    pub fn is_dev_node(&self) -> bool {
+        (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFBLK
+            || (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFCHR
     }
 
     pub fn display_mode(&self) -> String {
@@ -582,4 +587,36 @@ pub fn diff(
         rent = riter.next();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_index_mode_bits() {
+        // If there are platforms where these do not
+        // line up we will need to translate to a canonical mode.
+        assert!(libc::S_IFIFO == 4096);
+        assert!(libc::S_IFCHR == 8192);
+        assert!(libc::S_IFBLK == 24576);
+        assert!(libc::S_IFDIR == 16384);
+        assert!(libc::S_IFREG == 32768);
+        assert!(libc::S_IFLNK == 40960);
+        assert!(libc::S_IFSOCK == 49152);
+        assert!(libc::S_IFMT == 61440);
+        assert!(libc::S_IEXEC == 64);
+        assert!(libc::S_IWRITE == 128);
+        assert!(libc::S_IREAD == 256);
+        assert!(libc::S_IRWXU == 448);
+        assert!(libc::S_IXUSR == 64);
+        assert!(libc::S_IWUSR == 128);
+        assert!(libc::S_IRUSR == 256);
+        assert!(libc::S_IRWXG == 56);
+        assert!(libc::S_IXGRP == 8);
+        assert!(libc::S_IWGRP == 16);
+        assert!(libc::S_IRGRP == 32);
+        assert!(libc::S_IRWXO == 7);
+        assert!(libc::S_IXOTH == 1);
+        assert!(libc::S_IWOTH == 2);
+        assert!(libc::S_IROTH == 4);
+    }
 }
