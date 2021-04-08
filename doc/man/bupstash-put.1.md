@@ -84,6 +84,14 @@ Currently they are:
 
 Default tags can be overidden manually by simply specifying them.
 
+### Reserved tags
+
+The following tags are reserved and cannot be set manually:
+
+- id
+- decryption-key-id
+- size
+- timestamp
 
 ## OPTIONS
 
