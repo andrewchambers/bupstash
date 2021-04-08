@@ -1,9 +1,11 @@
 use super::address::*;
 use super::compression;
+use super::hex;
 use super::rollsum;
 use super::sodium;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
+use std::fmt;
 
 pub const HASH_BYTES: usize = 32;
 
@@ -323,6 +325,14 @@ impl PartialHashKey {
         let mut bytes = [0; 32];
         randombytes(&mut bytes[..]);
         PartialHashKey { bytes }
+    }
+}
+
+impl fmt::LowerHex for PartialHashKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut buf = [0; 64];
+        hex::encode(&self.bytes[..], &mut buf[..]);
+        write!(f, "{}", std::str::from_utf8(&buf[..]).unwrap())
     }
 }
 

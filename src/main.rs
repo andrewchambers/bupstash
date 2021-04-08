@@ -550,7 +550,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "format",
-        "Output format, valid values are 'human' or 'jsonl'.",
+        "Output format, valid values are 'human' or 'jsonl1'.",
         "FORMAT",
     );
     query_cli_opts(&mut opts);
@@ -559,9 +559,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let list_format = match matches.opt_str("format") {
         Some(f) => match &f[..] {
-            "jsonl" => ListFormat::Jsonl1,
+            "jsonl1" => ListFormat::Jsonl1,
             "human" => ListFormat::Human,
-            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl'"),
+            _ => anyhow::bail!("invalid --format, expected one of 'human' or 'jsonl1'"),
         },
         None => ListFormat::Human,
     };
@@ -625,55 +625,130 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let out = std::io::stdout();
     let mut out = out.lock();
 
-    let mut on_match = |_item_id: xid::Xid, tags: std::collections::BTreeMap<String, String>| {
-        let mut tags: Vec<(String, String)> = tags.into_iter().collect();
+    let mut on_match =
+        |item_id: xid::Xid,
+         tags: &std::collections::BTreeMap<String, String>,
+         metadata: &itemset::VersionedItemMetadata,
+         secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+            let mut tags: Vec<(&String, &String)> = tags.iter().collect();
 
-        // Custom sort to be more human friendly.
-        tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
-            ("id", _) => std::cmp::Ordering::Less,
-            (_, "id") => std::cmp::Ordering::Greater,
-            ("name", _) => std::cmp::Ordering::Less,
-            (_, "name") => std::cmp::Ordering::Greater,
-            _ => k1.partial_cmp(k2).unwrap(),
-        });
+            // Custom sort to be more human friendly.
+            tags.sort_by(|(k1, _), (k2, _)| match (k1.as_str(), k2.as_str()) {
+                ("id", _) => std::cmp::Ordering::Less,
+                (_, "id") => std::cmp::Ordering::Greater,
+                ("name", _) => std::cmp::Ordering::Less,
+                (_, "name") => std::cmp::Ordering::Greater,
+                _ => k1.partial_cmp(k2).unwrap(),
+            });
 
-        match list_format {
-            ListFormat::Human => {
-                for (i, (k, v)) in tags.iter().enumerate() {
-                    if i != 0 {
-                        write!(out, " ")?;
+            match list_format {
+                ListFormat::Human => {
+                    for (i, (k, v)) in tags.iter().enumerate() {
+                        if i != 0 {
+                            write!(out, " ")?;
+                        }
+                        write!(
+                            out,
+                            "{}=\"{}\"",
+                            k,
+                            v.replace("\\", "\\\\").replace("\"", "\\\"")
+                        )?;
                     }
+                    writeln!(out)?;
+                }
+                ListFormat::Jsonl1 => {
+                    write!(out, "{{")?;
                     write!(
                         out,
-                        "{}=\"{}\"",
-                        k,
-                        v.replace("\\", "\\\\").replace("\"", "\\\"")
+                        "\"id\":{}",
+                        serde_json::to_string(&item_id.to_string())?
                     )?;
-                }
-                writeln!(out)?;
-            }
-            ListFormat::Jsonl1 => {
-                write!(out, "{{")?;
-                for (i, (k, v)) in tags.iter().enumerate() {
-                    if i != 0 {
-                        write!(out, ", ")?;
-                    }
                     write!(
                         out,
-                        "{}:{}",
-                        serde_json::to_string(&k)?,
-                        serde_json::to_string(&v)?
+                        ",\"decryption_key_id\":{}",
+                        serde_json::to_string(&metadata.primary_key_id().to_string())?
                     )?;
+                    let data_tree = metadata.data_tree();
+                    write!(out, ",\"data_tree\":{{")?;
+                    write!(
+                        out,
+                        "\"address\":{}",
+                        serde_json::to_string(&data_tree.address.to_string())?
+                    )?;
+                    write!(out, ",\"height\":{}", data_tree.height.0)?;
+                    write!(
+                        out,
+                        ",\"data_chunk_count\":{}",
+                        data_tree.data_chunk_count.0
+                    )?;
+                    write!(out, "}}")?;
+                    if let Some(index_tree) = metadata.index_tree() {
+                        write!(out, ",\"index_tree\":{{")?;
+                        write!(
+                            out,
+                            "\"address\":{}",
+                            serde_json::to_string(&index_tree.address.to_string())?
+                        )?;
+                        write!(out, ",\"height\":{}", index_tree.height.0)?;
+                        write!(
+                            out,
+                            ",\"data_chunk_count\":{}",
+                            index_tree.data_chunk_count.0
+                        )?;
+                        write!(out, "}}")?;
+                    }
+                    if let Some(secret_metadata) = secret_metadata {
+                        write!(out, ",\"data_size\":{}", secret_metadata.data_size.0)?;
+                        write!(out, ",\"index_size\":{}", secret_metadata.index_size.0)?;
+                        write!(out, ",\"put_key_id\":\"{:x}\"", secret_metadata.send_key_id)?;
+                        write!(
+                            out,
+                            ",\"data_hash_key_part\":\"{:x}\"",
+                            secret_metadata.data_hash_key_part_2
+                        )?;
+                        write!(
+                            out,
+                            ",\"index_hash_key_part\":\"{:x}\"",
+                            secret_metadata.index_hash_key_part_2
+                        )?;
+                    }
+                    let unix_timestamp_millis = match metadata {
+                        itemset::VersionedItemMetadata::V1(_) => {
+                            if let Some(secret_metadata) = secret_metadata {
+                                Some(secret_metadata.timestamp.timestamp_millis() as u64)
+                            } else {
+                                None
+                            }
+                        }
+                        itemset::VersionedItemMetadata::V2(ref metadata) => {
+                            Some(metadata.plain_text_metadata.unix_timestamp_millis)
+                        }
+                    };
+                    if let Some(unix_timestamp_millis) = unix_timestamp_millis {
+                        write!(out, ",\"unix_timestamp_millis\":{}", unix_timestamp_millis)?;
+                    }
+                    write!(out, ",\"tags\":{{")?;
+                    for (i, (k, v)) in tags.iter().enumerate() {
+                        if i != 0 {
+                            write!(out, ", ")?;
+                        }
+                        write!(
+                            out,
+                            "{}:{}",
+                            serde_json::to_string(&k)?,
+                            serde_json::to_string(&v)?
+                        )?;
+                    }
+                    writeln!(out, "}}")?;
+                    writeln!(out, "}}")?;
                 }
-                writeln!(out, "}}")?;
+                ListFormat::Bare => {
+                    anyhow::bail!("unsupported list format")
+                }
             }
-            ListFormat::Bare => {
-                anyhow::bail!("unsupported list format")
-            }
-        }
 
-        Ok(())
-    };
+            Ok(())
+        };
 
     let mut tx = query_cache.transaction()?;
     tx.list(
@@ -1069,7 +1144,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     }
 
-    writeln!(std::io::stdout(), "{}", id)?;
+    writeln!(std::io::stdout(), "{:x}", id)?;
     Ok(())
 }
 
@@ -1136,7 +1211,10 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut id = xid::Xid::default();
 
             let mut on_match =
-                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                |item_id: xid::Xid,
+                 _tags: &std::collections::BTreeMap<String, String>,
+                 _metadata: &itemset::VersionedItemMetadata,
+                 _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
                     n_matches += 1;
                     id = item_id;
 
@@ -1424,7 +1502,10 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut id = xid::Xid::default();
 
             let mut on_match =
-                |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                |item_id: xid::Xid,
+                 _tags: &std::collections::BTreeMap<String, String>,
+                 _metadata: &itemset::VersionedItemMetadata,
+                 _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
                     n_matches += 1;
                     id = item_id;
 
@@ -1648,7 +1729,10 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 let mut id = xid::Xid::default();
 
                 let mut on_match =
-                    |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                    |item_id: xid::Xid,
+                     _tags: &std::collections::BTreeMap<String, String>,
+                     _metadata: &itemset::VersionedItemMetadata,
+                     _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
                         n_matches += 1;
                         id = item_id;
 
@@ -1863,7 +1947,10 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 let mut ids = Vec::new();
 
                 let mut on_match =
-                    |item_id: xid::Xid, _tags: std::collections::BTreeMap<String, String>| {
+                    |item_id: xid::Xid,
+                     _tags: &std::collections::BTreeMap<String, String>,
+                     _metadata: &itemset::VersionedItemMetadata,
+                     _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
                         ids.push(item_id);
                         Ok(())
                     };

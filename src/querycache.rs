@@ -13,6 +13,16 @@ pub struct QueryCacheTx<'a> {
     tx: rusqlite::Transaction<'a>,
 }
 
+// This type exists as a lowest common denominator for our different
+// metadata versions and what we have access to.
+pub struct MetadataListing {
+    pub primary_key_id: Xid,
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub data_htree: itemset::HTreeMetadata,
+    pub index_htree: Option<itemset::HTreeMetadata>,
+    pub query_tags: std::collections::BTreeMap<String, String>,
+}
+
 pub struct ListOptions {
     pub now: chrono::DateTime<chrono::Utc>,
     pub list_encrypted: bool,
@@ -184,12 +194,16 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
+    // XXX How to create a type definition of a closure type?
+    #[allow(clippy::type_complexity)]
     pub fn list(
         &mut self,
         mut opts: ListOptions,
         on_match: &mut dyn FnMut(
             Xid,
-            std::collections::BTreeMap<String, String>,
+            &std::collections::BTreeMap<String, String>,
+            &itemset::VersionedItemMetadata,
+            Option<&itemset::DecryptedItemMetadata>,
         ) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
         let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
@@ -226,7 +240,7 @@ impl<'a> QueryCacheTx<'a> {
                 };
 
                 if query_matches {
-                    on_match(item_id, dmetadata.tags)?;
+                    on_match(item_id, &dmetadata.tags, &metadata, Some(&dmetadata))?;
                 }
 
                 Ok(())
@@ -252,7 +266,7 @@ impl<'a> QueryCacheTx<'a> {
                 };
 
                 if query_matches {
-                    on_match(item_id, tags)?;
+                    on_match(item_id, &tags, &metadata, None)?;
                 }
 
                 Ok(())

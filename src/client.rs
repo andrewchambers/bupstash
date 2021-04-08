@@ -810,7 +810,7 @@ pub fn send(
     let e_metadata = itemset::V2SecretItemMetadata {
         plain_text_hash: plain_text_metadata.hash(),
         send_key_id: ctx.send_key_id,
-        idx_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
+        index_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
         data_size: serde_bare::Uint(stats.uncompressed_data_size),
         index_size: serde_bare::Uint(stats.uncompressed_index_size),
@@ -1194,7 +1194,7 @@ pub fn request_index(
 
     let hash_key = crypto::derive_hash_key(
         &ctx.idx_hash_key_part_1,
-        &decrypted_metadata.idx_hash_key_part_2,
+        &decrypted_metadata.index_hash_key_part_2,
     );
 
     let index_tree = match metadata.index_tree() {
