@@ -30,7 +30,10 @@ with the addition of `-` and `_`. Tag processing ends at the first argument that
 
 The special marker argument `::` may be used to force the end of tag parsing, but is usually not necessary.
 
-Note that multiple concurrent uploads to the same repository are safe and supported.
+Note that multiple concurrent uploads to the same repository are safe and supported provided that all clients
+are accessing the repository from the same server and thus respect the repository file locks.
+Some network filesystems (like NFS and sshfs) do not always respect remote file locks and are therefore not supported.
+Always prefer connecting to a remote repository via an `ssh://` style url or an instance of `bupstash serve`.
 
 ## USAGE NOTES
 

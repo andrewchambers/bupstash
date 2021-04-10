@@ -9,8 +9,9 @@ Initialize a bupstash repository.
 
 ## DESCRIPTION
 
-`bupstash init` initializes a repository.
-If `REPOSITORY` already exists, the command fails.
+`bupstash init` initializes a repository. If `REPOSITORY` already exists, the command fails.
+
+Currently it is not recommend using bupstash on a network filesystem.
 
 For details about the contents of the package store after initialization, see bupstash-repository(7).
 
