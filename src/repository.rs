@@ -63,6 +63,10 @@ impl Repo {
     ) -> Result<rusqlite::Connection, anyhow::Error> {
         let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
 
+        conn.query_row("PRAGMA locking_mode=EXCLUSIVE;", rusqlite::NO_PARAMS, |_r| {
+            Ok(())
+        })?;
+
         conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
             Ok(())
         })?;
