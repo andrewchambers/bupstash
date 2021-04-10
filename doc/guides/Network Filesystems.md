@@ -5,8 +5,7 @@ because that we cannot guarantee the file locking semantics of the network files
 bupstash and the bupstash sqlite3 metadata database.
 
 When using a remote repository it is always recommended to use bupstash over ssh by setting BUPSTASH_REPOSITORY to an `ssh://`
-style URL. This mode is optimized such that it avoids network round trips as much as possible, performs better 
-and also enables the use of repository access controls.
+style URL. This mode is safe for concurrent use, faster and better in the majority of use cases.
 
 For information on specific unsupported network filesystem configurations see the sections below.
 
