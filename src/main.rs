@@ -742,9 +742,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     writeln!(out, "}}")?;
                     writeln!(out, "}}")?;
                 }
-                ListFormat::Bare => {
-                    anyhow::bail!("unsupported list format")
-                }
+                ListFormat::Bare => anyhow::bail!("unsupported list format"),
             }
 
             Ok(())
