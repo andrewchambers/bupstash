@@ -23,7 +23,6 @@ crossbeam-channel = "0.5"
 libc = "0.2"
 rusqlite = { version = "0.23", features = ["bundled", "backup"] }
 getopts = "0.2"
-fs2 = "0.4.3"
 codemap = "0.1"
 codemap-diagnostic = "0.1"
 serde = { version = "1.0", features = ["derive"] }

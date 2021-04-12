@@ -14,8 +14,7 @@ unreferenced data and freeing disk space.
 unreachable data chunks and removing them, potentially reclaiming disk space.
 
 For periods of time during garbage collection operations that modify
-the repository (such as bupstash-put(1)) may temporarily fail and report that
-the repository is busy.
+the repository (such as bupstash-put(1)) may temporarily be blocked.
 
 The garbage collector only relies on unencrypted metadata, so does not need
 access to decryption keys to operate.

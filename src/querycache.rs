@@ -1,6 +1,6 @@
 use super::crypto;
 use super::fmtutil;
-use super::itemset;
+use super::oplog;
 use super::query;
 use super::xid::*;
 use std::path::Path;
@@ -10,6 +10,7 @@ pub struct QueryCache {
 }
 
 pub struct QueryCacheTx<'a> {
+    sync_offset: u64,
     tx: rusqlite::Transaction<'a>,
 }
 
@@ -18,8 +19,8 @@ pub struct QueryCacheTx<'a> {
 pub struct MetadataListing {
     pub primary_key_id: Xid,
     pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
-    pub data_htree: itemset::HTreeMetadata,
-    pub index_htree: Option<itemset::HTreeMetadata>,
+    pub data_htree: oplog::HTreeMetadata,
+    pub index_htree: Option<oplog::HTreeMetadata>,
     pub query_tags: std::collections::BTreeMap<String, String>,
 }
 
@@ -62,8 +63,15 @@ impl QueryCache {
                     "insert into QueryCacheMeta(Key, Value) values('schema-version', 2);",
                     rusqlite::NO_PARAMS,
                 )?;
-
-                itemset::init_tables(&tx)?;
+                tx.execute(
+                    "create table if not exists ItemOpLog(LogOffset INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
+                    rusqlite::NO_PARAMS,
+                )?;
+                tx.execute(
+                    // No rowid so means we don't need a secondary index for itemid lookups.
+                    "create table if not exists Items(ItemId PRIMARY KEY, LogOffset INTEGER NOT NULL, Metadata NOT NULL, UNIQUE(LogOffset)) WITHOUT ROWID;",
+                    rusqlite::NO_PARAMS,
+                )?;
             }
             Err(err) => return Err(err.into()),
         }
@@ -101,7 +109,7 @@ impl QueryCache {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        Ok(QueryCacheTx { tx })
+        Ok(QueryCacheTx { tx, sync_offset: 0 })
     }
 }
 
@@ -117,17 +125,17 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn last_log_op(&mut self) -> Result<i64, anyhow::Error> {
+    pub fn last_log_op_offset(&mut self) -> Result<Option<u64>, anyhow::Error> {
         let last_id = match self.tx.query_row(
-            "select OpId from ItemOpLog order by OpId desc limit 1;",
+            "select LogOffset from ItemOpLog order by LogOffset desc limit 1;",
             rusqlite::NO_PARAMS,
             |r| {
                 let last: i64 = r.get(0)?;
-                Ok(last)
+                Ok(last as u64)
             },
         ) {
-            Ok(last) => last,
-            Err(rusqlite::Error::QueryReturnedNoRows) => -1,
+            Ok(last) => Some(last),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(err) => return Err(err.into()),
         };
 
@@ -177,11 +185,71 @@ impl<'a> QueryCacheTx<'a> {
             Err(err) => return Err(err.into()),
         }
 
+        match self.tx.query_row(
+            "select LogOffset, OpData from ItemOpLog order by LogOffset desc limit 1;",
+            rusqlite::NO_PARAMS,
+            |r| {
+                let last: i64 = r.get(0)?;
+                let data: Vec<u8> = r.get(1)?;
+                Ok(last as u64 + data.len() as u64)
+            },
+        ) {
+            Ok(sync_offset) => self.sync_offset = sync_offset,
+            Err(rusqlite::Error::QueryReturnedNoRows) => self.sync_offset = 0,
+            Err(err) => return Err(err.into()),
+        };
+
         Ok(())
     }
 
-    pub fn sync_op(&mut self, op_id: u64, op: itemset::LogOp) -> Result<(), anyhow::Error> {
-        itemset::sync_op(&self.tx, op_id, &op)
+    pub fn sync_op(&mut self, op: oplog::LogOp) -> Result<(), anyhow::Error> {
+        let serialized_op = serde_bare::to_vec(&op)?;
+        let op_offset = self.sync_offset;
+        self.sync_offset = op_offset + serialized_op.len() as u64;
+        match op {
+            oplog::LogOp::AddItem((item_id, md)) => {
+                self.tx.execute(
+                    "insert into ItemOpLog(LogOffset, ItemId, OpData) values(?, ?, ?);",
+                    rusqlite::params![op_offset as i64, &item_id, serialized_op],
+                )?;
+                self.tx.execute(
+                    "insert into Items(ItemId, LogOffset, Metadata) values(?, ?, ?);",
+                    rusqlite::params![&item_id, op_offset as i64, serde_bare::to_vec(&md)?],
+                )?;
+            }
+            oplog::LogOp::RemoveItems(items) => {
+                self.tx.execute(
+                    "insert into ItemOpLog(LogOffset, OpData) values(?, ?);",
+                    rusqlite::params![op_offset as i64, serialized_op],
+                )?;
+                for item_id in items {
+                    self.tx
+                        .execute("delete from Items where ItemId = ?;", &[item_id])?;
+                }
+            }
+            oplog::LogOp::RestoreRemoved => {
+                self.tx.execute(
+                    "insert into ItemOpLog(LogOffset, OpData) values(?, ?);",
+                    rusqlite::params![op_offset as i64, serialized_op],
+                )?;
+                let mut stmt = self.tx.prepare(
+                    "select LogOffset, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
+                )?;
+                let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+                while let Some(row) = rows.next()? {
+                    let offset: i64 = row.get(0)?;
+                    let op: Vec<u8> = row.get(1)?;
+                    let op: oplog::LogOp = serde_bare::from_slice(&op)?;
+                    if let oplog::LogOp::AddItem((item_id, md)) = op {
+                        self.tx.execute(
+                            "insert into Items(ItemId, LogOffset, Metadata) values(?, ?, ?);",
+                            rusqlite::params![&item_id, offset, serde_bare::to_vec(&md)?],
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn commit(self) -> Result<(), anyhow::Error> {
@@ -197,11 +265,20 @@ impl<'a> QueryCacheTx<'a> {
         on_match: &mut dyn FnMut(
             Xid,
             &std::collections::BTreeMap<String, String>,
-            &itemset::VersionedItemMetadata,
-            Option<&itemset::DecryptedItemMetadata>,
+            &oplog::VersionedItemMetadata,
+            Option<&oplog::DecryptedItemMetadata>,
         ) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let mut f = |_op_id: i64, item_id: Xid, metadata: itemset::VersionedItemMetadata| {
+        let mut stmt = self
+            .tx
+            .prepare("select ItemId, Metadata from Items order by LogOffset asc;")?;
+        let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+
+        while let Some(row) = rows.next()? {
+            let item_id: Xid = row.get(0)?;
+            let metadata: Vec<u8> = row.get(1)?;
+            let metadata: oplog::VersionedItemMetadata = serde_bare::from_slice(&metadata)?;
+
             if !opts.list_encrypted
                 && opts.primary_key_id.is_some()
                 && opts.primary_key_id.unwrap() == *metadata.primary_key_id()
@@ -237,11 +314,9 @@ impl<'a> QueryCacheTx<'a> {
                 if query_matches {
                     on_match(item_id, &dmetadata.tags, &metadata, Some(&dmetadata))?;
                 }
-
-                Ok(())
             } else {
                 if !opts.list_encrypted {
-                    return Ok(());
+                    continue;
                 }
 
                 let mut tags = std::collections::BTreeMap::new();
@@ -263,10 +338,9 @@ impl<'a> QueryCacheTx<'a> {
                 if query_matches {
                     on_match(item_id, &tags, &metadata, None)?;
                 }
-
-                Ok(())
             }
-        };
-        itemset::walk_items(&self.tx, &mut f)
+        }
+
+        Ok(())
     }
 }

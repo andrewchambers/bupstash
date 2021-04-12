@@ -174,8 +174,7 @@ _concurrent_send_test_worker () {
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
@@ -183,8 +182,7 @@ _concurrent_send_test_worker () {
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 3 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash gc
@@ -192,8 +190,7 @@ _concurrent_send_test_worker () {
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id2
@@ -202,8 +199,7 @@ _concurrent_send_test_worker () {
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
     test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
 }
@@ -217,8 +213,7 @@ _concurrent_send_test_worker () {
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
@@ -227,8 +222,7 @@ _concurrent_send_test_worker () {
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 4 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 2 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
@@ -238,8 +232,7 @@ _concurrent_send_test_worker () {
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 1 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id2
@@ -249,8 +242,7 @@ _concurrent_send_test_worker () {
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from ItemOpLog;')"
-    test 0 = "$(sqlite3 "$BUPSTASH_REPOSITORY/bupstash.sqlite3" 'select count(*) from Items;')"
+    test 0 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
     test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
 }
