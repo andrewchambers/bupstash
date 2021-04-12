@@ -5,15 +5,21 @@ use super::chunk_storage;
 use super::compression;
 use super::dir_chunk_storage;
 use super::external_chunk_storage;
+use super::fstx;
 use super::fsutil;
 use super::htree;
-use super::itemset;
+use super::migrate;
+use super::oplog;
 use super::protocol;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::fs;
+use std::io::BufRead;
 use std::io::Read;
+use std::io::Seek;
+use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 #[non_exhaustive]
@@ -31,48 +37,50 @@ pub struct GcStats {
     pub bytes_remaining: Option<u64>,
 }
 
+#[derive(Clone, PartialEq)]
+pub enum RepoLockMode {
+    None,
+    Shared,
+    Exclusive,
+}
+
+enum RepoLock {
+    None,
+    Shared(fsutil::FileLock),
+    Exclusive(fsutil::FileLock),
+}
+
+impl RepoLock {
+    fn mode(&self) -> RepoLockMode {
+        match self {
+            RepoLock::None => RepoLockMode::None,
+            RepoLock::Shared(_) => RepoLockMode::Shared,
+            RepoLock::Exclusive(_) => RepoLockMode::Exclusive,
+        }
+    }
+}
+
 pub struct Repo {
-    conn: rusqlite::Connection,
+    repo_path: PathBuf,
     storage_engine: Box<dyn chunk_storage::Engine>,
+    repo_lock: RepoLock,
 }
 
 pub enum ItemSyncEvent {
     Start(Xid),
-    LogOps(Vec<(serde_bare::Uint, itemset::LogOp)>),
+    LogOps(Vec<oplog::LogOp>),
     End,
 }
 
-pub enum GcStatus {
-    Running(Xid),
-    Complete(Xid),
-}
-
+const CURRENT_SCHEMA_VERSION: &str = "5";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 1024 * 1024 * 1024;
 
 impl Repo {
-    fn repo_db_path(repo_path: &Path) -> PathBuf {
-        let mut db_path = repo_path.to_path_buf();
-        db_path.push("bupstash.sqlite3");
-        db_path
-    }
-
-    fn open_db_with_flags(
-        db_path: &Path,
-        flags: rusqlite::OpenFlags,
-    ) -> Result<rusqlite::Connection, anyhow::Error> {
-        let conn = rusqlite::Connection::open_with_flags(db_path, flags)?;
-
-        conn.query_row("pragma busy_timeout=3600000;", rusqlite::NO_PARAMS, |_r| {
-            Ok(())
-        })?;
-
-        Ok(conn)
-    }
-
-    fn open_db(db_path: &Path) -> Result<rusqlite::Connection, anyhow::Error> {
-        let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
-        Repo::open_db_with_flags(db_path, default_flags)
+    fn repo_lock_path(repo_path: &Path) -> PathBuf {
+        let mut lock_path = repo_path.to_path_buf();
+        lock_path.push("repo.lock");
+        lock_path
     }
 
     pub fn init(
@@ -119,186 +127,103 @@ impl Repo {
         fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        path_buf.push("storage-engine.json");
-        let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
-        fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
+        path_buf.push("tx.lock");
+        fsutil::create_empty_file(path_buf.as_path())?;
         path_buf.pop();
 
-        let mut conn = Repo::open_db_with_flags(
-            &Repo::repo_db_path(&path_buf),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_CREATE,
-        )?;
+        path_buf.push("repo.oplog");
+        fsutil::create_empty_file(path_buf.as_path())?;
+        path_buf.pop();
 
-        conn.query_row(
-            "PRAGMA journal_mode = WAL;",
-            rusqlite::NO_PARAMS,
-            |_| Ok(()),
-        )?;
+        path_buf.push("items");
+        std::fs::create_dir(path_buf.as_path())?;
+        path_buf.pop();
 
-        let tx = conn.transaction()?;
+        path_buf.push("meta");
+        {
+            std::fs::create_dir(path_buf.as_path())?;
+            path_buf.push("gc_generation");
+            fsutil::atomic_add_file(path_buf.as_path(), format!("{:x}", Xid::new()).as_bytes())?;
+            path_buf.pop();
 
-        tx.execute(
-            "create table RepositoryMeta(Key primary key, Value) without rowid;",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.execute(
-            /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '5');",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('id', ?);",
-            rusqlite::params![Xid::new()],
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('gc-generation', ?);",
-            rusqlite::params![Xid::new()],
-        )?;
-        tx.execute(
-            "insert into RepositoryMeta(Key, Value) values('gc-dirty', Null);",
-            rusqlite::NO_PARAMS,
-        )?;
+            path_buf.push("schema_version");
+            fsutil::atomic_add_file(
+                path_buf.as_path(),
+                CURRENT_SCHEMA_VERSION.to_string().as_bytes(),
+            )?;
+            path_buf.pop();
 
-        itemset::init_tables(&tx)?;
-
-        tx.commit()?;
-        drop(conn);
+            path_buf.push("storage_engine");
+            let storage_engine_buf = serde_json::to_vec_pretty(&storage_engine)?;
+            fsutil::atomic_add_file(path_buf.as_path(), &storage_engine_buf)?;
+            path_buf.pop();
+        }
+        path_buf.pop();
 
         fsutil::sync_dir(&path_buf)?;
         std::fs::rename(&path_buf, repo_path)?;
         Ok(())
     }
 
-    fn upgrade_2_to_3(
-        conn: &mut rusqlite::Connection,
-        repo_path: &Path,
-    ) -> Result<(), anyhow::Error> {
-        eprintln!("upgrading repository schema from version 2 to version 3...");
-
-        let repo_lock = {
-            let mut lock_path = repo_path.to_owned();
-            lock_path.push("repo.lock");
-            fsutil::FileLock::try_get_exclusive(&lock_path)?
-        };
-
-        // We no longer need the temporary directory.
-        {
-            let mut tmp_dir = repo_path.to_owned();
-            tmp_dir.push("tmp");
-            if tmp_dir.exists() {
-                std::fs::remove_dir_all(&tmp_dir)?;
-            }
-        }
-
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        tx.execute(
-            "update RepositoryMeta set value = '3' where key = 'schema-version';",
-            rusqlite::NO_PARAMS,
-        )?;
-
-        tx.commit()?;
-        drop(repo_lock);
-
-        eprintln!("repository upgrade successful...");
-        Ok(())
-    }
-
-    fn upgrade_3_to_4(
-        conn: &mut rusqlite::Connection,
-        _repo_path: &Path,
-    ) -> Result<(), anyhow::Error> {
-        eprintln!("upgrading repository schema from version 3 to version 4...");
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // Invalidate client side caches that would not understand the new metadata format.
-        tx.execute(
-            "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
-            rusqlite::params![&Xid::new()],
-        )?;
-        tx.execute(
-            "update RepositoryMeta set value = '4' where key = 'schema-version';",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.commit()?;
-        eprintln!("repository upgrade successful...");
-        Ok(())
-    }
-
-    fn upgrade_4_to_5(
-        conn: &mut rusqlite::Connection,
-        _repo_path: &Path,
-    ) -> Result<(), anyhow::Error> {
-        eprintln!("upgrading repository schema from version 4 to version 5...");
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // Convert all AddItem(md) to AddItem((ItemId, md)).
-        tx.execute(
-            "update ItemOpLog set OpData =
-             cast((substr(OpData, 1, 1) || ItemId || substr(OpData, 2)) as blob) where ItemId is not null;",
-             rusqlite::NO_PARAMS)?;
-        tx.execute(
-            "update RepositoryMeta set value = '5' where key = 'schema-version';",
-            rusqlite::NO_PARAMS,
-        )?;
-        tx.commit()?;
-        eprintln!("repository upgrade successful...");
-        Ok(())
-    }
-
-    pub fn open(repo_path: &Path) -> Result<Repo, anyhow::Error> {
+    pub fn open(repo_path: &Path, initial_lock_mode: RepoLockMode) -> Result<Repo, anyhow::Error> {
         if !repo_path.exists() {
             anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
         }
 
-        let repo_path = fs::canonicalize(&repo_path)?;
+        let mut repo_path = fs::canonicalize(&repo_path)?;
+        repo_path.push("tx.lock");
+        let tx_file_exists = repo_path.exists();
+        repo_path.pop();
 
-        let mut conn = Repo::open_db(&Repo::repo_db_path(&repo_path))?;
+        if !tx_file_exists {
+            // Handle upgrade from sqlite3 repository format.
+            repo_path.push("bupstash.sqlite3");
+            let sqlite3_db_path = repo_path.clone();
+            repo_path.pop();
 
-        let v: String = conn.query_row(
-            "select Value from RepositoryMeta where Key='schema-version';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
-        let mut schema_version = v.parse::<u64>().unwrap();
-
-        // We should be able to phase these checks out as versions age.
-        if schema_version == 2 {
-            Repo::upgrade_2_to_3(&mut conn, &repo_path)?;
-            schema_version = 3;
+            if sqlite3_db_path.exists() {
+                let default_flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE;
+                let mut db = rusqlite::Connection::open_with_flags(sqlite3_db_path, default_flags)?;
+                migrate::repo_upgrade_to_5(&mut db, &repo_path)?;
+            } else {
+                anyhow::bail!(
+                    "{} is not an intialized repository",
+                    repo_path.to_string_lossy()
+                );
+            }
         }
 
-        if schema_version == 3 {
-            Repo::upgrade_3_to_4(&mut conn, &repo_path)?;
-            schema_version = 4;
-        }
+        let repo_lock = match initial_lock_mode {
+            RepoLockMode::None => RepoLock::None,
+            RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+                &Repo::repo_lock_path(&repo_path),
+            )?),
+            RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
+                &Repo::repo_lock_path(&repo_path),
+            )?),
+        };
 
-        if schema_version == 3 {
-            Repo::upgrade_3_to_4(&mut conn, &repo_path)?;
-            schema_version = 4;
-        }
+        let txn = fstx::ReadTxn::begin(&repo_path)?;
 
-        if schema_version == 4 {
-            Repo::upgrade_4_to_5(&mut conn, &repo_path)?;
-            schema_version = 5;
-        }
-
-        if schema_version != 5 {
+        let schema_version = txn.read_string("meta/schema_version")?;
+        if schema_version != CURRENT_SCHEMA_VERSION {
             anyhow::bail!(
-                "repository has an unsupported schema version, want 5, got {}",
+                "expected repository schema version {}, got {}",
+                CURRENT_SCHEMA_VERSION,
                 schema_version
             );
         }
 
         let storage_engine: Box<dyn chunk_storage::Engine> = {
-            let mut p = repo_path.clone();
-            p.push("storage-engine.json");
-            let mut f = std::fs::OpenOptions::new().read(true).open(p)?;
-            let mut buf = Vec::new();
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .open(txn.full_path("meta/storage_engine"))?;
+            let mut buf = Vec::with_capacity(128);
             f.read_to_end(&mut buf)?;
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let mut data_dir = repo_path;
+                    let mut data_dir = repo_path.clone();
                     data_dir.push("data");
                     Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
                 }
@@ -314,9 +239,12 @@ impl Repo {
             }
         };
 
+        txn.end();
+
         Ok(Repo {
-            conn,
+            repo_path,
             storage_engine,
+            repo_lock,
         })
     }
 
@@ -341,25 +269,76 @@ impl Repo {
         self.storage_engine.sync()
     }
 
-    fn gc_dirty_check(
-        tx: &rusqlite::Transaction,
-        storage_engine: &mut Box<dyn chunk_storage::Engine>,
-        busy_msg: &'static str,
-    ) -> Result<(), anyhow::Error> {
-        let gc_dirty: Option<Xid> = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
+    pub fn alter_lock_mode(&mut self, lock_mode: RepoLockMode) -> Result<(), anyhow::Error> {
+        if self.repo_lock.mode() != lock_mode {
+            // Explicit drop of old lock.
+            self.repo_lock = RepoLock::None;
+            self.repo_lock = match lock_mode {
+                RepoLockMode::None => RepoLock::None,
+                RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+                    &Repo::repo_lock_path(&self.repo_path),
+                )?),
+                RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
+                    &Repo::repo_lock_path(&self.repo_path),
+                )?),
+            };
 
-        if let Some(dirty_generation) = gc_dirty {
-            if !storage_engine.gc_completed(dirty_generation)? {
-                anyhow::bail!(busy_msg);
+            if matches!(
+                self.repo_lock.mode(),
+                RepoLockMode::Shared | RepoLockMode::Exclusive
+            ) {
+                // The gc_dirty id is set when a garbage collection exits without
+                // proper cleanup. For external storage engines this poses a problem:
+                //
+                // Consider the following case:
+                //
+                // 1. We are deleting a set of objects in an external storage engine.
+                // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+                // 3. The repository process crashes.
+                // 4. A new put starts.
+                // 5. The new process resends the same object that is in the process of deletion.
+                // 6. The delete object message gets processed by the backend.
+                //
+                // To solve this we:
+                // - explicitly start a gc hold with an id in the storage engine.
+                // - We then mark the repository as gc-dirty=id.
+                // - we then save the gc hold id as gc-hold in the metadata table.
+                // - We finally signal to the storage engine it is safe to begin gc deletions.
+                // - when deletions finish successfully, we set can delete the gc-dirty metadata.
+                //
+                // If during this process, bupstash crashes or is terminated gc-dirty will be set,
+                // We cannot safely perform and write or gc operations until we are sure that the interrupted
+                // gc has safely terminated in the storage engine.
+                //
+                // To continue safely gc or writes we must check the gc has finished, we must:
+                //
+                //  - ensure we have a write or exclusive repository lock.
+                //  - check gc-dirty is not set, we can then continue with no problems.
+                //  - if gc-dirty is set, we must explicitly wait for the storage engine
+                //    backend to tell us our gc operation is complete.
+                //  - We can finally remove the gc-dirty marker.
+
+                let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+                {
+                    let gc_dirty: Option<Xid> = match txn.read_opt_string("meta/gc_dirty")? {
+                        Some(s) => Some(Xid::parse(&s)?),
+                        None => None,
+                    };
+                    if let Some(dirty_generation) = gc_dirty {
+                        const MAX_DELAY: u64 = 10_000;
+                        let mut delay = 500;
+                        loop {
+                            if self.storage_engine.gc_completed(dirty_generation)? {
+                                txn.add_rm("meta/gc_dirty");
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                            delay = (delay * 2).min(MAX_DELAY);
+                        }
+                    }
+                }
+                txn.commit()?;
             }
-            tx.execute(
-                "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                rusqlite::params![&dirty_generation],
-            )?;
         }
 
         Ok(())
@@ -368,8 +347,10 @@ impl Repo {
     pub fn add_item(
         &mut self,
         gc_generation: Xid,
-        item: itemset::VersionedItemMetadata,
+        item: oplog::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
+        self.alter_lock_mode(RepoLockMode::Shared)?;
+
         const MAX_HTREE_HEIGHT: u64 = 10;
 
         if item.data_tree().height.0 > MAX_HTREE_HEIGHT {
@@ -381,187 +362,204 @@ impl Repo {
             }
         }
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        Repo::gc_dirty_check(
-            &tx,
-            &mut self.storage_engine,
-            "cannot add item while garbage collection is in progress",
-        )?;
-
-        let current_gc_generation = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
-        if gc_generation != current_gc_generation {
-            anyhow::bail!("garbage collection invalidated upload, try again");
+        let id = Xid::new();
+        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+        {
+            let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
+            if gc_generation != current_gc_generation {
+                anyhow::bail!("garbage collection invalidated upload, try again");
+            }
+            let serialized_md = oplog::checked_serialize_metadata(&item)?;
+            txn.add_write(&format!("items/{:x}", id), serialized_md);
+            let op = oplog::LogOp::AddItem((id, item));
+            let serialized_op = serde_bare::to_vec(&op)?;
+            txn.add_append("repo.oplog", serialized_op)?;
         }
-
-        let id = itemset::add_item(&tx, item)?;
-        tx.commit()?;
+        txn.commit()?;
         Ok(id)
     }
 
-    pub fn remove_items(&mut self, items: Vec<Xid>) -> Result<(), anyhow::Error> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    pub fn remove_items(&mut self, mut items: Vec<Xid>) -> Result<(), anyhow::Error> {
+        self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        Repo::gc_dirty_check(
-            &tx,
-            &mut self.storage_engine,
-            "cannot remove items while garbage collection is in progress",
-        )?;
+        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
 
-        itemset::remove_items(&tx, items)?;
-        tx.commit()?;
+        let mut deleted_items = Vec::with_capacity(items.len());
+
+        for item in items.drain(..) {
+            let path = format!("items/{:x}", item);
+            match txn.metadata(&path) {
+                Ok(_) => {
+                    txn.add_rm(&path);
+                    deleted_items.push(item)
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                Err(err) => return Err(err.into()),
+            };
+        }
+
+        if !deleted_items.is_empty() {
+            let op = oplog::LogOp::RemoveItems(deleted_items);
+            let serialized_op = serde_bare::to_vec(&op)?;
+            txn.add_append("repo.oplog", serialized_op)?;
+        }
+        txn.commit()?;
+
         Ok(())
     }
 
     pub fn lookup_item_by_id(
         &mut self,
         id: &Xid,
-    ) -> Result<Option<itemset::VersionedItemMetadata>, anyhow::Error> {
-        let tx = self.conn.transaction()?;
-        itemset::lookup_item_by_id(&tx, id)
+    ) -> Result<Option<oplog::VersionedItemMetadata>, anyhow::Error> {
+        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let r = match txn.open(&format!("items/{:x}", id)) {
+            Ok(mut f) => {
+                let mut buf = Vec::with_capacity(1024);
+                f.read_to_end(&mut buf)?;
+                Ok(Some(serde_bare::from_slice(&buf)?))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        };
+        txn.end();
+        r
     }
 
     pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
-        let tx = self.conn.transaction()?;
-        itemset::has_item_with_id(&tx, id)
+        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let r = match txn.metadata(&format!("items/{:x}", id)) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err.into()),
+        };
+        txn.end();
+        r
     }
 
     pub fn item_sync(
         &mut self,
-        after: i64,
+        after: Option<u64>,
         start_gc_generation: Option<Xid>,
         on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let tx = self.conn.transaction()?;
+        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
 
-        let current_gc_generation = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-generation';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
+        let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
         let after = match start_gc_generation {
             Some(start_gc_generation) if start_gc_generation == current_gc_generation => after,
-            _ => -1,
+            _ => None,
+        };
+
+        // Open the files and collect metadata during the transaction.
+        // We are able to close the transaction once we have these files open
+        // as we never modify an open op.log or op.tx except via appending.
+        let mut log_file = txn.open("repo.oplog")?;
+        let log_meta = log_file.metadata()?;
+
+        txn.end();
+
+        if let Some(after) = after {
+            log_file.seek(std::io::SeekFrom::Start(after))?;
         };
 
         on_sync_event(ItemSyncEvent::Start(current_gc_generation))?;
 
-        let mut logops = Vec::new();
+        const BATCH_SIZE: usize = 64;
+        let mut op_batch = Vec::with_capacity(BATCH_SIZE);
+        // We limit the size of the log file to what it was when the read txn happend.
+        // this lets slow clients keep syncing while other transactions continue.
+        let log_file = log_file.take(log_meta.size() - after.unwrap_or(0));
+        let mut log_file = std::io::BufReader::new(log_file);
+        let mut done = false;
 
-        itemset::walk_log(&tx, after, &mut |op_id, op| {
-            logops.push((serde_bare::Uint(op_id as u64), op));
-            if logops.len() >= 64 {
-                let mut v = Vec::new();
-                std::mem::swap(&mut v, &mut logops);
-                on_sync_event(ItemSyncEvent::LogOps(v))?;
+        if after.is_some() {
+            // We discard the first item after bsearch, client has seen this before.
+            serde_bare::from_reader::<_, oplog::LogOp>(&mut log_file)?;
+        }
+
+        while !done {
+            while op_batch.len() < BATCH_SIZE {
+                if log_file.fill_buf()?.is_empty() {
+                    done = true;
+                    break;
+                }
+                let op: oplog::LogOp = serde_bare::from_reader(&mut log_file)?;
+                op_batch.push(op);
             }
-            Ok(())
-        })?;
 
-        if !logops.is_empty() {
-            on_sync_event(ItemSyncEvent::LogOps(logops))?;
+            if !op_batch.is_empty() {
+                let mut send_batch = Vec::with_capacity(if !done { BATCH_SIZE } else { 0 });
+                std::mem::swap(&mut send_batch, &mut op_batch);
+                on_sync_event(ItemSyncEvent::LogOps(send_batch))?;
+            }
         }
 
         on_sync_event(ItemSyncEvent::End)?;
-
-        tx.commit()?;
 
         Ok(())
     }
 
     pub fn restore_removed(&mut self) -> Result<u64, anyhow::Error> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        Repo::gc_dirty_check(
-            &tx,
-            &mut self.storage_engine,
-            "cannot restore items while garbage collection is in progress",
-        )?;
+        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
 
-        let n_restored = itemset::restore_removed(&tx)?;
-        if n_restored > 0 {
-            tx.commit()?;
+        let mut n_restored = 0;
+        let log_file = txn.open("repo.oplog")?;
+        let mut log_file = std::io::BufReader::new(log_file);
+
+        while !log_file.fill_buf()?.is_empty() {
+            let op = serde_bare::from_reader(&mut log_file)?;
+            if let oplog::LogOp::AddItem((id, md)) = op {
+                let p = format!("items/{:x}", id);
+                match txn.metadata(&p) {
+                    Ok(_) => (),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        let serialized_md = serde_bare::to_vec(&md)?;
+                        txn.add_write(&p, serialized_md);
+                        n_restored += 1;
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
         }
+
+        if n_restored != 0 {
+            let op = oplog::LogOp::RestoreRemoved;
+            let serialized_op = serde_bare::to_vec(&op)?;
+            txn.add_append("repo.oplog", serialized_op)?;
+        }
+
+        txn.commit()?;
+
         Ok(n_restored)
     }
 
-    pub fn gc_status(&mut self) -> Result<GcStatus, anyhow::Error> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        let gc_dirty: Option<Xid> = tx.query_row(
-            "select Value from RepositoryMeta where Key='gc-dirty';",
-            rusqlite::NO_PARAMS,
-            |row| row.get(0),
-        )?;
-
-        let status = if let Some(gc_generation) = gc_dirty {
-            if self.storage_engine.gc_completed(gc_generation)? {
-                tx.execute(
-                    "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-                    rusqlite::params![&gc_generation],
-                )?;
-                GcStatus::Complete(gc_generation)
-            } else {
-                GcStatus::Running(gc_generation)
-            }
-        } else {
-            let gc_generation = tx.query_row(
-                "select Value from RepositoryMeta where Key='gc-generation';",
-                rusqlite::NO_PARAMS,
-                |row| row.get(0),
-            )?;
-            GcStatus::Complete(gc_generation)
-        };
-
-        tx.commit()?;
-        Ok(status)
+    pub fn gc_generation(&mut self) -> Result<Xid, anyhow::Error> {
+        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let gc_generation = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
+        txn.end();
+        Ok(gc_generation)
     }
 
     pub fn gc(
         &mut self,
         update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
     ) -> Result<GcStats, anyhow::Error> {
+        // Start with a shared lock, by the end we will have an exclusive lock.
+        self.alter_lock_mode(RepoLockMode::Shared)?;
+
         let gc_generation = Xid::new();
-        let storage_engine = &mut self.storage_engine;
-        let conn = &mut self.conn;
-
-        // Initial check that can clear any stale garbage collections that
-        // have already finished. We might be able to do this in the compaction
-        // transaction with some refactoring.
-        {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-            Repo::gc_dirty_check(
-                &tx,
-                storage_engine,
-                "garbage collection already in progress",
-            )?;
-
-            tx.commit()?;
-        }
 
         // Signal to the storage engine a gc is about to begin, this involves marking a gc
         // in progress for this gc_generation such that it can't be removed until the
         // storage engine confirms it has terminated.
-        storage_engine.prepare_for_gc(gc_generation)?;
+        self.storage_engine.prepare_for_gc(gc_generation)?;
 
         update_progress_msg("walking reachable data...".to_string())?;
 
-        let estimated_chunk_count = storage_engine.estimate_chunk_count()?;
+        let estimated_chunk_count = self.storage_engine.estimate_chunk_count()?;
         let reachable_bloom_mem_size =
             abloom::approximate_mem_size_upper_bound(0.02, estimated_chunk_count)
                 .min(MAX_GC_BLOOM_SIZE)
@@ -574,7 +572,10 @@ impl Repo {
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
-        let mut walk_item = |_op_id, item_id, metadata: itemset::VersionedItemMetadata| {
+        let mut walk_item = |storage_engine: &mut dyn chunk_storage::Engine,
+                             item_id: Xid,
+                             metadata: oplog::VersionedItemMetadata|
+         -> Result<(), anyhow::Error> {
             if !xid_wset.insert(item_id) {
                 return Ok(());
             }
@@ -613,45 +614,49 @@ impl Repo {
             Ok(())
         };
 
-        // Walk all reachable data WITHOUT marking the repository as
-        // gc_dirty, we should be able to walk most of the data except data
-        // that arrives between the end of this walk and us marking
-        // gc_dirty in the repository.
+        let mut walk_items = |storage_engine: &mut dyn chunk_storage::Engine,
+                              txn: &mut fstx::ReadTxn|
+         -> Result<(), anyhow::Error> {
+            for item in txn.read_dir("items")? {
+                let item = item?;
+                let item_path = item.path();
+                let item_id = item_path.file_name().unwrap().to_string_lossy();
+                let item_id = Xid::parse(&item_id)?;
+                let metadata = serde_bare::from_slice(&std::fs::read(item.path())?)?;
+                walk_item(storage_engine, item_id, metadata)?;
+            }
+            Ok(())
+        };
+
+        // Walk all reachable data WITHOUT locking the repository.
+        // We should be able to walk most of the data except data
+        // that arrives between the end of this walk and us locking
+        // the repository.
         {
-            let tx = conn.transaction()?;
-            itemset::walk_items(&tx, &mut walk_item)?;
-            tx.commit()?;
+            let mut txn = fstx::ReadTxn::begin(&self.repo_path)?;
+            walk_items(&mut *self.storage_engine, &mut txn)?;
+            txn.end();
         }
 
-        update_progress_msg("compacting item log...".to_string())?;
+        // From this point on, nobody else is modifying the repository.
+        update_progress_msg("getting exclusive repository lock...".to_string())?;
+        self.alter_lock_mode(RepoLockMode::Exclusive)?;
+
+        update_progress_msg("compacting repository log...".to_string())?;
         {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-            let gc_dirty: Option<Xid> = tx.query_row(
-                "select Value from RepositoryMeta where Key='gc-dirty';",
-                rusqlite::NO_PARAMS,
-                |row| row.get(0),
-            )?;
-
-            // We must check this again in case it changed since the initial check.
-            if gc_dirty.is_some() {
-                anyhow::bail!("garbage collection already in progress");
-            }
+            let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
 
             // We cycle the gc generation here to invalidate client caches.
-            tx.execute(
-                "update RepositoryMeta set Value = ? where Key = 'gc-generation';",
-                rusqlite::params![&gc_generation],
-            )?;
+            txn.add_write(
+                "meta/gc_generation",
+                format!("{:x}", gc_generation).into_bytes(),
+            );
 
             // If a repository is dirty when we lock it, then we must ensure
             // the storage backend has terminated before continuing.
-            tx.execute(
-                "update RepositoryMeta set Value = ? where Key = 'gc-dirty';",
-                rusqlite::params![&gc_generation],
-            )?;
+            txn.add_write("meta/gc_dirty", format!("{:x}", gc_generation).into_bytes());
 
-            // We compact the item set in the same transaction the the gc-generation
+            // We compact the op log in the same transaction the the gc-generation
             // is cycled to keep client query caches consistent. They rely on the
             // gc-generation being in sync with any oplog changes.
             //
@@ -659,12 +664,31 @@ impl Repo {
             // transaction and the external storage engine crashes and then marks
             // the gc as complete, we must ensure that gc-dirty is still valid
             // for any compaction operations we perform.
-            itemset::compact(&tx)?;
 
-            tx.commit()?;
+            let log_file = txn.open("repo.oplog")?;
+            let mut log_file = std::io::BufReader::new(log_file);
+            let mut compacted_log = std::io::BufWriter::new(fsutil::anon_temp_file()?);
 
-            // It doesn't really matter when we run this, sqlite handles locking for us here.
-            conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+            while !log_file.fill_buf()?.is_empty() {
+                let op = serde_bare::from_reader(&mut log_file)?;
+                if let oplog::LogOp::AddItem((id, md)) = op {
+                    let p = format!("items/{:x}", id);
+                    match txn.metadata(&p) {
+                        Ok(_) => {
+                            compacted_log.write_all(&serde_bare::to_vec(
+                                &oplog::LogOp::AddItem((id, md)),
+                            )?)?;
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+            }
+
+            compacted_log.flush()?;
+            txn.add_write_from_file("repo.oplog", compacted_log.into_inner()?);
+
+            txn.commit()?;
         }
 
         update_progress_msg("finalizing reachable data...".to_string())?;
@@ -672,9 +696,9 @@ impl Repo {
         // engine, we walk all the items again, this will be fast for items we already walked, and
         // lets us pick up any new items that arrived between the old walk and before we marked gc_dirty.
         {
-            let tx = conn.transaction()?;
-            itemset::walk_items(&tx, &mut walk_item)?;
-            tx.commit()?;
+            let mut txn = fstx::ReadTxn::begin(&self.repo_path)?;
+            walk_items(&mut *self.storage_engine, &mut txn)?;
+            txn.end();
         }
 
         if std::env::var("BUPSTASH_DEBUG_GC").is_ok() {
@@ -711,10 +735,21 @@ impl Repo {
         let stats = self.storage_engine.gc(reachable)?;
 
         // We are now done and can stop, mark the gc as complete.
-        conn.execute(
-            "update RepositoryMeta set Value = null where Key = 'gc-dirty' and Value = ?;",
-            rusqlite::params![&gc_generation],
-        )?;
+        {
+            let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+
+            let gc_dirty: Option<Xid> = match txn.read_opt_string(&"meta/gc_dirty")? {
+                Some(s) => Some(Xid::parse(&s)?),
+                None => None,
+            };
+
+            // Only clear this collection dirty flag.
+            if gc_dirty == Some(gc_generation) {
+                txn.add_rm(&"meta/gc_dirty");
+            }
+
+            txn.commit()?;
+        }
 
         Ok(stats)
     }
@@ -730,7 +765,7 @@ mod tests {
         let mut path_buf = PathBuf::from(tmp_dir.path());
         path_buf.push("repo");
         Repo::init(path_buf.as_path(), Some(StorageEngineSpec::DirStore)).unwrap();
-        let mut repo = Repo::open(path_buf.as_path()).unwrap();
+        let mut repo = Repo::open(path_buf.as_path(), RepoLockMode::Exclusive).unwrap();
         let addr = Address::default();
         repo.add_chunk(&addr, vec![1]).unwrap();
         repo.sync().unwrap();

@@ -1,38 +1,81 @@
 use super::crypto;
 use super::hex;
-use fs2::FileExt;
 use path_clean::PathClean;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 pub struct FileLock {
-    f: fs::File,
+    _f: fs::File,
 }
 
 impl FileLock {
     pub fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_exclusive()?;
-        Ok(FileLock { f })
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        let lock_opts = libc::flock {
+            l_type: libc::F_WRLCK as libc::c_short,
+            l_whence: libc::SEEK_SET as libc::c_short,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+        match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLKW(&lock_opts)) {
+            Ok(_) => (),
+            Err(err) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("unable to get exclusive lock {:?}: {}", p, err),
+                ))
+            }
+        };
+        Ok(FileLock { _f: f })
     }
 
-    pub fn try_get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.try_lock_exclusive()?;
-        Ok(FileLock { f })
+    pub fn try_get_exclusive(p: &Path) -> Result<Option<FileLock>, std::io::Error> {
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        let lock_opts = libc::flock {
+            l_type: libc::F_WRLCK as libc::c_short,
+            l_whence: libc::SEEK_SET as libc::c_short,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+
+        match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLK(&lock_opts)) {
+            Ok(_) => (),
+            Err(nix::Error::Sys(nix::errno::Errno::EAGAIN))
+            | Err(nix::Error::Sys(nix::errno::Errno::EACCES)) => return Ok(None),
+            Err(err) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("unable to get exclusive lock {:?}: {}", p, err),
+                ))
+            }
+        };
+        Ok(Some(FileLock { _f: f }))
     }
 
     pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::File::open(p)?;
-        f.lock_shared()?;
-        Ok(FileLock { f })
-    }
-}
-
-impl Drop for FileLock {
-    fn drop(&mut self) {
-        self.f.unlock().unwrap();
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        let lock_opts = libc::flock {
+            l_type: libc::F_RDLCK as libc::c_short,
+            l_whence: libc::SEEK_SET as libc::c_short,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+        match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLKW(&lock_opts)) {
+            Ok(_) => (),
+            Err(err) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("unable to get shared lock {:?}: {}", p, err),
+                ))
+            }
+        };
+        Ok(FileLock { _f: f })
     }
 }
 
@@ -75,6 +118,30 @@ pub fn atomic_add_file(p: &Path, contents: &[u8]) -> Result<(), std::io::Error> 
     tmp_file.sync_all()?;
     std::fs::rename(temp_path, p)?;
     Ok(())
+}
+
+pub fn anon_temp_file() -> Result<std::fs::File, std::io::Error> {
+    let name = {
+        let mut buf = [0; 16];
+        let mut hexbuf = [0; 32];
+        crypto::randombytes(&mut buf[..]);
+        hex::encode(&buf[..], &mut hexbuf[..]);
+        PathBuf::from(std::str::from_utf8(&hexbuf[..]).unwrap())
+    };
+
+    let mut p = std::env::temp_dir();
+    p.push(name);
+
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&p)?;
+
+    std::fs::remove_file(p)?;
+
+    Ok(f)
 }
 
 // Get an absolute path without resolving symlinks or touching the fs.

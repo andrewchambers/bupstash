@@ -2,7 +2,7 @@ use super::address;
 use super::compression;
 use super::htree;
 use super::index;
-use super::itemset;
+use super::oplog;
 use super::protocol::*;
 use super::repository;
 use super::xid::*;
@@ -33,7 +33,13 @@ pub fn serve(
                     )
                 }
 
-                let mut repo = repository::Repo::open(&cfg.repo_path)?;
+                let open_lock_mode = match req.open_mode {
+                    OpenMode::Read => repository::RepoLockMode::None,
+                    OpenMode::ReadWrite => repository::RepoLockMode::Shared,
+                    OpenMode::Gc => repository::RepoLockMode::Shared,
+                };
+
+                let mut repo = repository::Repo::open(&cfg.repo_path, open_lock_mode)?;
 
                 write_packet(
                     w,
@@ -42,7 +48,7 @@ pub fn serve(
                     }),
                 )?;
 
-                return serve_repository(cfg, req.open_mode, &mut repo, r, w);
+                return serve_repository(cfg, &mut repo, r, w);
             }
 
             Packet::TInitRepository(engine) => {
@@ -61,7 +67,6 @@ pub fn serve(
 
 fn serve_repository(
     cfg: ServerConfig,
-    open_mode: OpenMode,
     repo: &mut repository::Repo,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
@@ -74,67 +79,42 @@ fn serve_repository(
                 );
             }
             Packet::TBeginSend(begin) => {
-                if !matches!(open_mode, OpenMode::ReadWrite) {
-                    anyhow::bail!(
-                        "client opened repository in wrong mode for TBeginSend, expected ReadWrite"
-                    )
-                }
                 if !cfg.allow_put {
                     anyhow::bail!("server has disabled put for this client")
                 }
                 recv(repo, begin, r, w)?;
             }
             Packet::TRequestMetadata(req) => {
-                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
-                    anyhow::bail!("client opened repository in wrong mode for TRequestMetadata, expected Read|ReadWrite")
-                }
                 if !cfg.allow_list {
                     anyhow::bail!("server has disabled listing for this client")
                 }
                 send_metadata(repo, req.id, w)?;
             }
             Packet::RequestData(req) => {
-                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
-                    anyhow::bail!("client opened repository in wrong mode for RequestData, expected Read|ReadWrite")
-                }
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
                 send(repo, req.id, req.ranges, w)?;
             }
             Packet::RequestIndex(req) => {
-                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
-                    anyhow::bail!("client opened repository in wrong mode for RequestIndex, expected Read|ReadWrite")
-                }
                 if !cfg.allow_list {
                     anyhow::bail!("server has disabled listing for this client")
                 }
                 send_index(repo, req.id, w)?;
             }
             Packet::TGc(_) => {
-                if !matches!(open_mode, OpenMode::Gc) {
-                    anyhow::bail!("client opened repository in wrong mode for TGc, expected Gc")
-                }
                 if !cfg.allow_gc {
                     anyhow::bail!("server has disabled garbage collection for this client")
                 }
                 gc(repo, w)?;
             }
             Packet::TRequestItemSync(req) => {
-                if !matches!(open_mode, OpenMode::Read | OpenMode::ReadWrite) {
-                    anyhow::bail!("client opened repository in wrong mode for TRequestItemSync, expected Read|ReadWrite")
-                }
                 if !cfg.allow_list {
                     anyhow::bail!("server has disabled query and search for this client")
                 }
-                item_sync(repo, req.after, req.gc_generation, w)?;
+                item_sync(repo, req.after.map(|x| x.0), req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
-                if !matches!(open_mode, OpenMode::ReadWrite) {
-                    anyhow::bail!(
-                        "client opened repository in wrong mode for TRmItems, expected ReadWrite"
-                    )
-                }
                 if !cfg.allow_remove {
                     anyhow::bail!("server has disabled remove for this client")
                 }
@@ -144,9 +124,6 @@ fn serve_repository(
                 write_packet(w, &Packet::RRmItems)?;
             }
             Packet::TRestoreRemoved => {
-                if !matches!(open_mode, OpenMode::ReadWrite) {
-                    anyhow::bail!("client opened repository in wrong mode for TRestoreRemoved, expected ReadWrite")
-                }
                 if !cfg.allow_get || !cfg.allow_put || !cfg.allow_list {
                     anyhow::bail!("server has disabled restore for this client (restore requires get, put and list permissions).")
                 }
@@ -170,17 +147,10 @@ fn recv(
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    let gc_generation = match repo.gc_status()? {
-        repository::GcStatus::Complete(gc_generation) => gc_generation,
-        repository::GcStatus::Running(_) => {
-            // We can only start a recv if we aren't currently
-            // performing a garbage collection, otherwise we might
-            // accept an upload that occured during the sweep
-            // phase of the garbage collector which would lead to
-            // corruption.
-            anyhow::bail!("garbage collection in progress");
-        }
-    };
+    // Prevent any garbage collection from taking place during send.
+    repo.alter_lock_mode(repository::RepoLockMode::Shared)?;
+
+    let gc_generation = repo.gc_generation()?;
 
     write_packet(
         w,
@@ -204,12 +174,14 @@ fn recv(
                 write_packet(w, &Packet::RSendSync(stats))?;
             }
             Packet::TAddItem(add_item) => {
+                // This is an extra check that is not currently used, but may be
+                // used for optimistic concurrency such that we do not need to hold repository locks.
                 if add_item.gc_generation != gc_generation {
                     anyhow::bail!("client sent an unexpected gc_generation");
                 }
 
                 match add_item.item {
-                    itemset::VersionedItemMetadata::V2(ref md) => {
+                    oplog::VersionedItemMetadata::V2(ref md) => {
                         let item_skew = (md.plain_text_metadata.unix_timestamp_millis as i64)
                             - chrono::Utc::now().timestamp_millis();
                         const MAX_SKEW_MINS: i64 = 15;
@@ -485,7 +457,7 @@ fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), any
 
 fn item_sync(
     repo: &mut repository::Repo,
-    after: i64,
+    after: Option<u64>,
     request_gc_generation: Option<Xid>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {

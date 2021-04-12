@@ -1,7 +1,7 @@
 use super::abloom;
 use super::address::*;
 use super::index;
-use super::itemset;
+use super::oplog;
 use super::repository;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub struct TRequestMetadata {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RRequestMetadata {
-    pub metadata: Option<itemset::VersionedItemMetadata>,
+    pub metadata: Option<oplog::VersionedItemMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -80,7 +80,7 @@ pub struct RGc {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct TRequestItemSync {
-    pub after: i64,
+    pub after: Option<serde_bare::Uint>,
     pub gc_generation: Option<Xid>,
 }
 
@@ -98,7 +98,7 @@ pub struct StorageConnect {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
     pub gc_generation: Xid,
-    pub item: itemset::VersionedItemMetadata,
+    pub item: oplog::VersionedItemMetadata,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -154,7 +154,7 @@ pub enum Packet {
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
     RRequestItemSync(RRequestItemSync),
-    SyncLogOps(Vec<(serde_bare::Uint, itemset::LogOp)>),
+    SyncLogOps(Vec<oplog::LogOp>),
     TRequestChunkData(Address),
     RRequestChunkData(Vec<u8>),
     Progress(Progress),

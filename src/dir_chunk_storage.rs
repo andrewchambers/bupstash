@@ -2,7 +2,6 @@ use super::abloom;
 use super::address::Address;
 use super::chunk_storage::Engine;
 use super::crypto;
-use super::fsutil;
 use super::hex;
 use super::protocol;
 use super::repository;
@@ -52,9 +51,6 @@ pub struct DirStorage {
     write_worker_handles: Vec<std::thread::JoinHandle<()>>,
     write_worker_tx: Vec<crossbeam_channel::Sender<WriteWorkerMsg>>,
     write_round_robin_index: usize,
-
-    // Garbage collection
-    gc_exclusive_lock: Option<fsutil::FileLock>,
 }
 
 impl DirStorage {
@@ -273,13 +269,6 @@ impl DirStorage {
         }
     }
 
-    fn lock_file_path(&self) -> PathBuf {
-        let mut p = self.dir_path.clone();
-        p.pop();
-        p.push("repo.lock");
-        p
-    }
-
     pub fn new(dir_path: &std::path::Path) -> Result<Self, anyhow::Error> {
         match std::fs::DirBuilder::new().create(dir_path) {
             Ok(_) => (),
@@ -302,7 +291,6 @@ impl DirStorage {
             write_worker_handles,
             write_worker_tx,
             write_round_robin_index: 0,
-            gc_exclusive_lock: None,
         })
     }
 }
@@ -373,18 +361,7 @@ impl Engine for DirStorage {
     }
 
     fn prepare_for_gc(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
-        self.gc_exclusive_lock = None; // Explicitly free and drop lock.
-
-        match fsutil::FileLock::try_get_exclusive(&self.lock_file_path()) {
-            Ok(l) => {
-                self.gc_exclusive_lock = Some(l);
-                Ok(())
-            }
-            Err(err) if err.raw_os_error() == Some(libc::EWOULDBLOCK) => Err(anyhow::format_err!(
-                "garbage collection already in progress"
-            )),
-            Err(err) => Err(err.into()),
-        }
+        Ok(())
     }
 
     fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error> {
@@ -393,8 +370,6 @@ impl Engine for DirStorage {
 
     fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
         self.stop_workers();
-
-        assert!(self.gc_exclusive_lock.is_some());
 
         // Collect removals into memory first so we don't have to
         // worry about fs semantics when removing while iterating.
@@ -433,8 +408,6 @@ impl Engine for DirStorage {
             std::fs::remove_file(p)?;
         }
 
-        self.gc_exclusive_lock = None;
-
         Ok(repository::GcStats {
             chunks_remaining: Some(chunks_remaining),
             chunks_deleted: Some(chunks_deleted),
@@ -444,11 +417,10 @@ impl Engine for DirStorage {
     }
 
     fn gc_completed(&mut self, _gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
-        match fsutil::FileLock::try_get_exclusive(&self.lock_file_path()) {
-            Ok(_) => Ok(true),
-            Err(err) if err.raw_os_error() == Some(libc::EWOULDBLOCK) => Ok(false),
-            Err(err) => Err(err.into()),
-        }
+        // The fact this has been called means the gc must have finished.
+        // For the dir storage engine we can only call this if we have an exclusive
+        // repository lock.
+        Ok(true)
     }
 }
 

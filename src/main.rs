@@ -10,12 +10,14 @@ pub mod crypto;
 pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
 pub mod fmtutil;
+pub mod fstx;
 pub mod fsutil;
 pub mod hex;
 pub mod htree;
 pub mod index;
-pub mod itemset;
 pub mod keys;
+pub mod migrate;
+pub mod oplog;
 pub mod pem;
 pub mod protocol;
 pub mod query;
@@ -424,6 +426,14 @@ fn cli_to_opened_serve_process(
         // server retry back pressure if the server implements this.
         let mut proc_stdin = remote.proc.stdin.take().unwrap();
         let mut proc_stdout = remote.proc.stdout.take().unwrap();
+
+        match open_mode {
+            protocol::OpenMode::ReadWrite | protocol::OpenMode::Gc => {
+                progress.set_message(&"acquiring repository lock...");
+            }
+            _ => (),
+        }
+
         match client::open_repository(&mut proc_stdin, &mut proc_stdout, open_mode) {
             Ok(()) => {
                 remote.proc.stdin = Some(proc_stdin);
@@ -628,8 +638,8 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut on_match =
         |item_id: xid::Xid,
          tags: &std::collections::BTreeMap<String, String>,
-         metadata: &itemset::VersionedItemMetadata,
-         secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+         metadata: &oplog::VersionedItemMetadata,
+         secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
             let mut tags: Vec<(&String, &String)> = tags.iter().collect();
 
             // Custom sort to be more human friendly.
@@ -713,14 +723,14 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         )?;
                     }
                     let unix_timestamp_millis = match metadata {
-                        itemset::VersionedItemMetadata::V1(_) => {
+                        oplog::VersionedItemMetadata::V1(_) => {
                             if let Some(secret_metadata) = secret_metadata {
                                 Some(secret_metadata.timestamp.timestamp_millis() as u64)
                             } else {
                                 None
                             }
                         }
-                        itemset::VersionedItemMetadata::V2(ref metadata) => {
+                        oplog::VersionedItemMetadata::V2(ref metadata) => {
                             Some(metadata.plain_text_metadata.unix_timestamp_millis)
                         }
                     };
@@ -1064,8 +1074,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     // No easy way to compute the tag set length without actually encoding it due
     // to var ints in the bare encoding.
-    if serde_bare::to_vec(&tags)?.len() > itemset::MAX_TAG_SET_SIZE {
-        anyhow::bail!("tags must not exceed {} bytes", itemset::MAX_TAG_SET_SIZE);
+    if serde_bare::to_vec(&tags)?.len() > oplog::MAX_TAG_SET_SIZE {
+        anyhow::bail!("tags must not exceed {} bytes", oplog::MAX_TAG_SET_SIZE);
     }
 
     let mut serve_proc =
@@ -1211,8 +1221,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut on_match =
                 |item_id: xid::Xid,
                  _tags: &std::collections::BTreeMap<String, String>,
-                 _metadata: &itemset::VersionedItemMetadata,
-                 _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+                 _metadata: &oplog::VersionedItemMetadata,
+                 _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
                     n_matches += 1;
                     id = item_id;
 
@@ -1502,8 +1512,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut on_match =
                 |item_id: xid::Xid,
                  _tags: &std::collections::BTreeMap<String, String>,
-                 _metadata: &itemset::VersionedItemMetadata,
-                 _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+                 _metadata: &oplog::VersionedItemMetadata,
+                 _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
                     n_matches += 1;
                     id = item_id;
 
@@ -1729,8 +1739,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 let mut on_match =
                     |item_id: xid::Xid,
                      _tags: &std::collections::BTreeMap<String, String>,
-                     _metadata: &itemset::VersionedItemMetadata,
-                     _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+                     _metadata: &oplog::VersionedItemMetadata,
+                     _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
                         n_matches += 1;
                         id = item_id;
 
@@ -1947,8 +1957,8 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 let mut on_match =
                     |item_id: xid::Xid,
                      _tags: &std::collections::BTreeMap<String, String>,
-                     _metadata: &itemset::VersionedItemMetadata,
-                     _secret_metadata: Option<&itemset::DecryptedItemMetadata>| {
+                     _metadata: &oplog::VersionedItemMetadata,
+                     _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
                         ids.push(item_id);
                         Ok(())
                     };

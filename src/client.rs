@@ -6,7 +6,7 @@ use super::crypto;
 use super::fsutil;
 use super::htree;
 use super::index;
-use super::itemset;
+use super::oplog;
 use super::protocol::*;
 use super::querycache;
 use super::repository;
@@ -613,8 +613,8 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         mut self,
     ) -> Result<
         (
-            itemset::HTreeMetadata,
-            Option<itemset::HTreeMetadata>,
+            oplog::HTreeMetadata,
+            Option<oplog::HTreeMetadata>,
             SendStats,
         ),
         anyhow::Error,
@@ -653,14 +653,14 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             added_chunks: self.added_chunks,
         };
 
-        let data_tree_meta = itemset::HTreeMetadata {
+        let data_tree_meta = oplog::HTreeMetadata {
             height: serde_bare::Uint(data_tree_meta.height as u64),
             data_chunk_count: serde_bare::Uint(data_tree_meta.data_chunk_count),
             address: data_tree_meta.address,
         };
 
         let idx_tree_meta = if let Some(ref idx_tree_meta) = idx_tree_meta {
-            Some(itemset::HTreeMetadata {
+            Some(oplog::HTreeMetadata {
                 height: serde_bare::Uint(idx_tree_meta.height as u64),
                 data_chunk_count: serde_bare::Uint(idx_tree_meta.data_chunk_count),
                 address: idx_tree_meta.address,
@@ -800,14 +800,14 @@ pub fn send(
 
     let (data_tree, index_tree, stats) = session.finish()?;
 
-    let plain_text_metadata = itemset::V2PlainTextItemMetadata {
+    let plain_text_metadata = oplog::V2PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
         unix_timestamp_millis: chrono::Utc::now().timestamp_millis().try_into()?,
         data_tree,
         index_tree,
     };
 
-    let e_metadata = itemset::V2SecretItemMetadata {
+    let e_metadata = oplog::V2SecretItemMetadata {
         plain_text_hash: plain_text_metadata.hash(),
         send_key_id: ctx.send_key_id,
         index_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
@@ -817,7 +817,7 @@ pub fn send(
         tags,
     };
 
-    let versioned_metadata = itemset::VersionedItemMetadata::V2(itemset::V2ItemMetadata {
+    let versioned_metadata = oplog::VersionedItemMetadata::V2(oplog::V2ItemMetadata {
         plain_text_metadata,
         encrypted_metadata: ctx
             .metadata_ectx
@@ -1085,7 +1085,7 @@ pub fn request_metadata(
     id: Xid,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<itemset::VersionedItemMetadata, anyhow::Error> {
+) -> Result<oplog::VersionedItemMetadata, anyhow::Error> {
     write_packet(w, &Packet::TRequestMetadata(TRequestMetadata { id }))?;
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -1108,7 +1108,7 @@ pub struct DataRequestContext {
 pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,
-    metadata: &itemset::VersionedItemMetadata,
+    metadata: &oplog::VersionedItemMetadata,
     pick: Option<index::PickMap>,
     index: Option<index::CompressedIndex>,
     r: &mut dyn std::io::Read,
@@ -1182,7 +1182,7 @@ pub struct IndexRequestContext {
 pub fn request_index(
     mut ctx: IndexRequestContext,
     id: Xid,
-    metadata: &itemset::VersionedItemMetadata,
+    metadata: &oplog::VersionedItemMetadata,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<index::CompressedIndex, anyhow::Error> {
@@ -1591,13 +1591,13 @@ pub fn sync(
 
     let mut tx = query_cache.transaction()?;
 
-    let after = tx.last_log_op()?;
+    let after = tx.last_log_op_offset()?;
     let gc_generation = tx.current_gc_generation()?;
 
     write_packet(
         w,
         &Packet::TRequestItemSync(TRequestItemSync {
-            after,
+            after: after.map(serde_bare::Uint),
             gc_generation,
         }),
     )?;
@@ -1615,8 +1615,8 @@ pub fn sync(
                 if ops.is_empty() {
                     break;
                 }
-                for (opid, op) in ops {
-                    tx.sync_op(opid.0, op)?;
+                for op in ops {
+                    tx.sync_op(op)?;
                 }
             }
             _ => anyhow::bail!("protocol error, expected items packet"),

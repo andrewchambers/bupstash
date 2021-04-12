@@ -16,44 +16,28 @@ Because most data is encrypted, the repository structure is quite simple.
 Files:
 
 ```
-repo/
-├── bupstash.sqlite3
+repo
 ├── data
-│   ├── 079ef643e50a060b9302258a6af745d90637b3ef34d79fa889f3fd8d90f207ce
-│   └── ...
+│   ├── ...
+│   └── 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03
+├── items
+│   ├── 031d91b342fc76b8a4b32e2a8d12e4d0
+│   └── ffaa0127fd9938aa0a3eaf6070aa947d
+├── meta
+│   ├── gc_generation
+│   ├── gc_dirty
+│   ├── schema_version
+│   └── storage_engine
+├── repo.oplog
 ├── repo.lock
-└── storage-engine.json
-```
-
-### bupstash.sqlite3
-
-An sqlite repository, with the following schema:
-
-```
-RepositoryMeta(Key primary key, Value) without rowid;
-ItemOpLog(OpId INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData)
-Items(ItemId PRIMARY KEY, OpId INTEGER NOT NULL, Metadata NOT NULL, Unique(OpId)) WITHOUT ROWID
-```
-
-The metadata table has the follows key/value pairs:
-
-```
-# Unique identifier for this repository.
-id=$UNIQUE_ID 
-
-# Version marker for future upgrades.
-schema-version=$NUMBER 
-
-# Marker for client side cache invalidation after gc.
-gc-generation=$RANDOM_UNIQUE_ID 
-
-# Marker that a garbage collection was interrupted.
-gc-dirty=$RANDOM_UNIQUE_ID|NULL
+├── tx.lock
+└── rollback.journal
 
 ```
 
-The `ItemOpLog` is an append only ledger where each OpData entry is a [bare](https://baremessages.org/) LogOp
-of the following format:
+### repo.oplog
+
+This file is an append only ledger where each entry is a [bare](https://baremessages.org/) encoded log op of the following format:
 
 
 ```
@@ -98,25 +82,73 @@ struct V2SecretItemMetadata {
 It is important to note, all metadata like search tags are stored encrypted and are not 
 readable without a master key or metadata key.
 
-The `Items` table is an aggregated view of current items which have not be marked for removal.
+### repo.lock
 
-### data directory
+This lock is held exclusively during garbage collection and in a shared fashion
+during operations that modify the repository.
+
+### tx.lock
+
+Bupstash uses `tx.lock` and `rollback.journal` to coordinate crash safe edits across multiple files.
+
+### rollback.journal
+
+This file is a [bare](https://baremessages.org/) encoded rollback log with the following schema:
+
+```
+
+type RollbackOp = RollbackComplete | RemoveFile | WriteFile | TruncateFile;
+
+type RollbackComplete {};
+
+type RemoveFile {
+  path: String,
+};
+
+// This entry is trailed by size bytes of data to write.
+type WriteFile {
+  path: String,
+  size: Uint,
+};
+
+type TruncateFile {
+  path: String,
+  size: Uint,
+};
+```
+
+The final 32 bytes of the rollback log are the blake3 hash of the previous file contents.
+
+Do not delete a rollback journal if find one, it is critical for data integrity.
+
+### meta/storage_engine
+
+Contains the JSON storage engine specification, which allows storage of data chunks
+in external or alternative storage formats. This file is human editable to assist
+manual data migrations between supported formats.
+
+### meta/schema_version
+
+This file contains schema version of a repository.
+
+### meta/gc_generation
+
+Each time a garbage collection happens, this file is changed and is used to invalidate
+client side caches.
+
+### meta/gc_dirty
+
+This file marks if a garbage collection was interrupted prematurely and is used for crash
+recovery. This file not always present.
+
+
+### data/
 
 This directory contains a set of encrypted and deduplicated data chunks.
 The name of the file corresponds to the an HMAC hash of the unencrypted contents, as such
 if two chunks are added to the repository with the same hmac, they only need to be stored once.
 
 This directory is not used when the repository is configured for storage engines other than "Dir" storage.
-
-### repo.lock
-
-This lock is held exclusively during garbage collection.
-
-### storage-engine.json
-
-Contains the the storage engine specification, which allows storage of data chunks
-in external or alternative storage formats. This file is human editable to assist
-manual data migrations between supported formats.
 
 ## The hash tree structure
 
@@ -146,32 +178,8 @@ with prefetch on the repository side.
 ## Chunking and deduplication
 
 Data is deduplicated by splitting a data stream into small chunks, and never storing the same chunk twice.
-The performance of this deduplication is thus determined by how chunks split points are defined.
-
-One way to chunk data would be to split the data stream every N bytes, this works in some cases, but
-you will find your data is not deduplicated when similar, but offset data streams are chunked. The
-chunks will often not match up as data insertion/removal quickly desynchronizes the chunk streams.
-A good example of this problem is inserting a file into the middle of a tarball. No deduplication
-will occur after that file, as the data streams have been shifted by an offset.
-
-To avoid this problem we need to find a way to resync the chunk streams when they diverge from eachother
-but then reconverge. One way to do this is via content defined chunking.
-The most intuitive way to think about content defined chunking is splitting a tarball into a chunk
-representing every file or directory, this means storing the same file in multiple tarballs will only ever be stored in the
-repository once.
-
-Another way to do content defined chunking might be to split every time you see the sequence 0xffff in your data stream.
-Your chunks streams will always resync on the 0xffff byte after diverging, but relies on your data containing 0xffff in
- evenly spaced places. What we really want is a way to pseudorandomly
-detect good split points, so the chunking does not really depend on byte values within the chunk. Luckily we have such 
-functions, they are called hash functions. If we split a chunk whenever the hash of the last N bytes is 0xff, we might
-get a good enough pseudorandom set of chunks, which also resynchronize with mostly similar data.
-
-So what does bupstash use? Bupstash uses a combination of tar splitting on directory boundaries and content defined chunking when uploading a
-directory directly, and purely content defined chunking with a hash function when chunking arbitrary data.
-
-It should be noted the chunking algorithms can be changed and mixed at any time and will 
-not affect the bupstash repository or reading data streams back.
+The performance of this deduplication is thus determined by how chunks split points are defined. For curious
+readers - bupstash uses something known as 'content defined chunking' to find efficient chunk splits.
 
 ## Chunk formats
 
