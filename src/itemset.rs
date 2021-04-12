@@ -185,7 +185,7 @@ impl VersionedItemMetadata {
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum LogOp {
-    AddItem(VersionedItemMetadata),
+    AddItem((Xid, VersionedItemMetadata)),
     // Note: There is an asymmetry here in that we can delete many items with one log op.
     // This is because batch deleting is possible, but batch add makes less sense.
     RemoveItems(Vec<Xid>),
@@ -220,7 +220,7 @@ pub fn add_item(
 ) -> Result<Xid, anyhow::Error> {
     let item_id = Xid::new();
     let serialized_md = checked_serialize_metadata(&md)?;
-    let op = LogOp::AddItem(md);
+    let op = LogOp::AddItem((item_id, md));
     let serialized_op = serde_bare::to_vec(&op)?;
 
     tx.execute(
@@ -254,7 +254,7 @@ pub fn remove_items(tx: &rusqlite::Transaction, items: Vec<Xid>) -> Result<(), a
 
 fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, anyhow::Error> {
     let mut stmt = tx.prepare(
-        "select OpId, ItemId, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
+        "select OpId, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
     )?;
     let mut n_restored = 0;
     let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
@@ -262,10 +262,9 @@ fn restore_removed_no_log_op(tx: &rusqlite::Transaction) -> Result<u64, anyhow::
         match rows.next()? {
             Some(row) => {
                 let op_id: i64 = row.get(0)?;
-                let item_id: Xid = row.get(1)?;
-                let op: Vec<u8> = row.get(2)?;
+                let op: Vec<u8> = row.get(1)?;
                 let op: LogOp = serde_bare::from_slice(&op)?;
-                if let LogOp::AddItem(md) = op {
+                if let LogOp::AddItem((item_id, md)) = op {
                     n_restored += 1;
                     tx.execute(
                         "insert into Items(ItemId, OpId, Metadata) values(?, ?, ?);",
@@ -290,19 +289,11 @@ pub fn restore_removed(tx: &rusqlite::Transaction) -> Result<u64, anyhow::Error>
     restore_removed_no_log_op(tx)
 }
 
-pub fn sync_ops(
-    tx: &rusqlite::Transaction,
-    op_id: i64,
-    item_id: Option<Xid>,
-    op: &LogOp,
-) -> Result<(), anyhow::Error> {
+pub fn sync_op(tx: &rusqlite::Transaction, op_id: u64, op: &LogOp) -> Result<(), anyhow::Error> {
+    let op_id = op_id as i64; // cast for rusqlite, not a practical problem.
     let serialized_op = serde_bare::to_vec(&op)?;
     match op {
-        LogOp::AddItem(md) => {
-            if item_id.is_none() {
-                anyhow::bail!("corrupt op log");
-            }
-            let item_id = item_id.unwrap();
+        LogOp::AddItem((item_id, md)) => {
             tx.execute(
                 "insert into ItemOpLog(OpId, ItemId, OpData) values(?, ?, ?);",
                 rusqlite::params![op_id, &item_id, serialized_op],
@@ -314,9 +305,6 @@ pub fn sync_ops(
             Ok(())
         }
         LogOp::RemoveItems(items) => {
-            if item_id.is_some() {
-                anyhow::bail!("corrupt op log");
-            }
             tx.execute(
                 "insert into ItemOpLog(OpId, OpData) values(?, ?);",
                 rusqlite::params![op_id, serialized_op],
@@ -327,9 +315,6 @@ pub fn sync_ops(
             Ok(())
         }
         LogOp::RestoreRemoved => {
-            if item_id.is_some() {
-                anyhow::bail!("corrupt op log");
-            }
             tx.execute(
                 "insert into ItemOpLog(OpId, OpData) values(?, ?);",
                 rusqlite::params![op_id, serialized_op],
@@ -402,19 +387,18 @@ pub fn walk_items(
 pub fn walk_log(
     tx: &rusqlite::Transaction,
     after_op: i64,
-    f: &mut dyn FnMut(i64, Option<Xid>, LogOp) -> Result<(), anyhow::Error>,
+    f: &mut dyn FnMut(i64, LogOp) -> Result<(), anyhow::Error>,
 ) -> Result<(), anyhow::Error> {
     let mut stmt =
-        tx.prepare("select OpId, ItemId, OpData from ItemOpLog where OpId > ? order by OpId asc;")?;
+        tx.prepare("select OpId, OpData from ItemOpLog where OpId > ? order by OpId asc;")?;
     let mut rows = stmt.query(&[after_op])?;
     loop {
         match rows.next()? {
             Some(row) => {
                 let op_id: i64 = row.get(0)?;
-                let item_id: Option<Xid> = row.get(1)?;
-                let op: Vec<u8> = row.get(2)?;
+                let op: Vec<u8> = row.get(1)?;
                 let op: LogOp = serde_bare::from_slice(&op)?;
-                f(op_id, item_id, op)?;
+                f(op_id, op)?;
             }
             None => {
                 return Ok(());

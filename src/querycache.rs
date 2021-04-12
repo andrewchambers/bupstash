@@ -53,13 +53,13 @@ impl QueryCache {
             },
         ) {
             Ok(v) => {
-                if v != 1 {
-                    anyhow::bail!("query cache at {:?} is from a different version of the software and must be removed manually", &p);
+                if v != 2 {
+                    anyhow::bail!("query cache at {:?} is from an incompatible version of the software and must be removed manually", &p);
                 }
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute(
-                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 1);",
+                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 2);",
                     rusqlite::NO_PARAMS,
                 )?;
 
@@ -180,13 +180,8 @@ impl<'a> QueryCacheTx<'a> {
         Ok(())
     }
 
-    pub fn sync_op(
-        &mut self,
-        op_id: i64,
-        item_id: Option<Xid>,
-        op: itemset::LogOp,
-    ) -> Result<(), anyhow::Error> {
-        itemset::sync_ops(&self.tx, op_id, item_id, &op)
+    pub fn sync_op(&mut self, op_id: u64, op: itemset::LogOp) -> Result<(), anyhow::Error> {
+        itemset::sync_op(&self.tx, op_id, &op)
     }
 
     pub fn commit(self) -> Result<(), anyhow::Error> {

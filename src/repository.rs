@@ -38,7 +38,7 @@ pub struct Repo {
 
 pub enum ItemSyncEvent {
     Start(Xid),
-    LogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
+    LogOps(Vec<(serde_bare::Uint, itemset::LogOp)>),
     End,
 }
 
@@ -143,7 +143,7 @@ impl Repo {
         )?;
         tx.execute(
             /* Schema version is a string to keep all meta rows the same type. */
-            "insert into RepositoryMeta(Key, Value) values('schema-version', '4');",
+            "insert into RepositoryMeta(Key, Value) values('schema-version', '5');",
             rusqlite::NO_PARAMS,
         )?;
         tx.execute(
@@ -224,6 +224,26 @@ impl Repo {
         Ok(())
     }
 
+    fn upgrade_4_to_5(
+        conn: &mut rusqlite::Connection,
+        _repo_path: &Path,
+    ) -> Result<(), anyhow::Error> {
+        eprintln!("upgrading repository schema from version 4 to version 5...");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Convert all AddItem(md) to AddItem((ItemId, md)).
+        tx.execute(
+            "update ItemOpLog set OpData =
+             cast((substr(OpData, 1, 1) || ItemId || substr(OpData, 2)) as blob) where ItemId is not null;",
+             rusqlite::NO_PARAMS)?;
+        tx.execute(
+            "update RepositoryMeta set value = '5' where key = 'schema-version';",
+            rusqlite::NO_PARAMS,
+        )?;
+        tx.commit()?;
+        eprintln!("repository upgrade successful...");
+        Ok(())
+    }
+
     pub fn open(repo_path: &Path) -> Result<Repo, anyhow::Error> {
         if !repo_path.exists() {
             anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
@@ -252,9 +272,19 @@ impl Repo {
             schema_version = 4;
         }
 
-        if schema_version != 4 {
+        if schema_version == 3 {
+            Repo::upgrade_3_to_4(&mut conn, &repo_path)?;
+            schema_version = 4;
+        }
+
+        if schema_version == 4 {
+            Repo::upgrade_4_to_5(&mut conn, &repo_path)?;
+            schema_version = 5;
+        }
+
+        if schema_version != 5 {
             anyhow::bail!(
-                "repository has an unsupported schema version, want 4, got {}",
+                "repository has an unsupported schema version, want 5, got {}",
                 schema_version
             );
         }
@@ -428,8 +458,8 @@ impl Repo {
 
         let mut logops = Vec::new();
 
-        itemset::walk_log(&tx, after, &mut |op_id, item_id, op| {
-            logops.push((op_id, item_id, op));
+        itemset::walk_log(&tx, after, &mut |op_id, op| {
+            logops.push((serde_bare::Uint(op_id as u64), op));
             if logops.len() >= 64 {
                 let mut v = Vec::new();
                 std::mem::swap(&mut v, &mut logops);

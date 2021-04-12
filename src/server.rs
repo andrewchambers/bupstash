@@ -26,7 +26,7 @@ pub fn serve(
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
             Packet::TOpenRepository(req) => {
-                if req.protocol_version != "7" {
+                if req.protocol_version != "8" {
                     anyhow::bail!(
                         "server does not support bupstash protocol version {}",
                         req.protocol_version

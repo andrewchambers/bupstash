@@ -154,7 +154,7 @@ pub enum Packet {
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
     RRequestItemSync(RRequestItemSync),
-    SyncLogOps(Vec<(i64, Option<Xid>, itemset::LogOp)>),
+    SyncLogOps(Vec<(serde_bare::Uint, itemset::LogOp)>),
     TRequestChunkData(Address),
     RRequestChunkData(Vec<u8>),
     Progress(Progress),

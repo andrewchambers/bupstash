@@ -64,6 +64,7 @@ type Address data<32>;
 type LogOp  (AddItem | RemoveItems);
   
 type AddItem {
+  id: Xid
   metadata: VersionedItemMetadata 
 }
 

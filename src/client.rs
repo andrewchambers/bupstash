@@ -48,7 +48,7 @@ pub fn open_repository(
         w,
         &Packet::TOpenRepository(TOpenRepository {
             open_mode,
-            protocol_version: "7".to_string(),
+            protocol_version: "8".to_string(),
         }),
     )?;
 
@@ -1615,8 +1615,8 @@ pub fn sync(
                 if ops.is_empty() {
                     break;
                 }
-                for (opid, item_id, op) in ops {
-                    tx.sync_op(opid, item_id, op)?;
+                for (opid, op) in ops {
+                    tx.sync_op(opid.0, op)?;
                 }
             }
             _ => anyhow::bail!("protocol error, expected items packet"),
