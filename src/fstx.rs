@@ -446,8 +446,11 @@ mod tests {
 
         let mut rj = RollbackJournalWriter::create(&d).unwrap();
 
-        let rb_ent = RollbackOp::WriteFile(("foobar.txt".into(), serde_bare::Uint(1)));
-        rj.write(&serde_bare::to_vec(&rb_ent).unwrap()).unwrap();
+        rj.write_op(RollbackOp::WriteFile((
+            "foobar.txt".into(),
+            serde_bare::Uint(1),
+        )))
+        .unwrap();
         rj.write(&[255]).unwrap();
         rj.finish().unwrap();
 
@@ -456,51 +459,59 @@ mod tests {
         assert!(p.exists());
     }
 
-    /*
-
     #[test]
     fn test_remove_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
-        let d = openat::Dir::open(p).unwrap();
+        let d = openat::Dir::open(&p).unwrap();
 
         p.push(LOCK_NAME);
         std::fs::File::create(&p).unwrap();
         p.pop();
 
-        let mut rj = RollbackJournalWriter::create(&d).unwrap();
-
         p.push("foobar.txt");
         std::fs::write(&p, &vec![]).unwrap();
+        p.pop();
 
-        let rb_ent = RollbackOp::RemoveFile(PathBuf::from("foobar.txt"));
-        rj.write(&serde_bare::to_vec(&rb_ent).unwrap()).unwrap();
+        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        rj.write_op(RollbackOp::RemoveFile("foobar.txt".into()))
+            .unwrap();
         rj.finish().unwrap();
-        ReadTxn::begin(d.path()).unwrap().end();
+
+        ReadTxn::begin(&p).unwrap().end();
+
+        p.push("foobar.txt");
         assert!(!p.exists());
+        p.pop();
     }
 
     #[test]
     fn test_truncate_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
+        let d = openat::Dir::open(&p).unwrap();
 
         p.push(LOCK_NAME);
         std::fs::File::create(&p).unwrap();
         p.pop();
 
-        p.push("rollback.journal");
-        let mut rj = RollbackJournalWriter::create(&p).unwrap();
+        p.push("foobar.txt");
+        std::fs::write(&p, &vec![]).unwrap();
         p.pop();
 
-        p.push("foobar.txt");
-        std::fs::write(&p, &vec![0]).unwrap();
-
-        let rb_ent = RollbackOp::TruncateFile((PathBuf::from("foobar.txt"), serde_bare::Uint(0)));
-        rj.write(&serde_bare::to_vec(&rb_ent).unwrap()).unwrap();
+        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        rj.write_op(RollbackOp::TruncateFile((
+            "foobar.txt".to_string(),
+            serde_bare::Uint(0),
+        )))
+        .unwrap();
         rj.finish().unwrap();
-        ReadTxn::begin(d.path()).unwrap().end();
+
+        ReadTxn::begin(&p).unwrap().end();
+
+        p.push("foobar.txt");
         assert!(p.metadata().unwrap().size() == 0);
+        p.pop();
     }
 
     #[test]
@@ -530,5 +541,4 @@ mod tests {
         assert_eq!(txn.read("write_file.txt").unwrap(), vec![7, 8, 9]);
         txn.end();
     }
-    */
 }
