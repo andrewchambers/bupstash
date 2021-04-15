@@ -12,8 +12,7 @@ pub struct FileLock {
 }
 
 impl FileLock {
-    pub fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+    pub fn exclusive_on_file(f: std::fs::File) -> Result<FileLock, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_WRLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -26,15 +25,14 @@ impl FileLock {
             Err(err) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    format!("unable to get exclusive lock {:?}: {}", p, err),
+                    format!("unable to get exclusive lock: {}", err),
                 ))
             }
         };
         Ok(FileLock { _f: f })
     }
 
-    pub fn try_get_exclusive(p: &Path) -> Result<Option<FileLock>, std::io::Error> {
-        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+    pub fn try_exclusive_on_file(f: std::fs::File) -> Result<Option<FileLock>, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_WRLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -42,7 +40,6 @@ impl FileLock {
             l_len: 0,
             l_pid: 0,
         };
-
         match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLK(&lock_opts)) {
             Ok(_) => (),
             Err(nix::Error::Sys(nix::errno::Errno::EAGAIN))
@@ -50,15 +47,14 @@ impl FileLock {
             Err(err) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    format!("unable to get exclusive lock {:?}: {}", p, err),
+                    format!("unable to get exclusive lock: {}", err),
                 ))
             }
         };
         Ok(Some(FileLock { _f: f }))
     }
 
-    pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
-        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+    pub fn shared_on_file(f: std::fs::File) -> Result<FileLock, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_RDLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -71,11 +67,26 @@ impl FileLock {
             Err(err) => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    format!("unable to get shared lock {:?}: {}", p, err),
+                    format!("unable to get shared lock: {}", err),
                 ))
             }
         };
         Ok(FileLock { _f: f })
+    }
+
+    pub fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        FileLock::exclusive_on_file(f)
+    }
+
+    pub fn try_get_exclusive(p: &Path) -> Result<Option<FileLock>, std::io::Error> {
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        FileLock::try_exclusive_on_file(f)
+    }
+
+    pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
+        let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
+        FileLock::shared_on_file(f)
     }
 }
 

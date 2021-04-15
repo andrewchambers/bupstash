@@ -215,9 +215,7 @@ impl Repo {
         }
 
         let storage_engine: Box<dyn chunk_storage::Engine> = {
-            let mut f = std::fs::OpenOptions::new()
-                .read(true)
-                .open(txn.full_path("meta/storage_engine"))?;
+            let mut f = txn.open("meta/storage_engine")?;
             let mut buf = Vec::with_capacity(128);
             f.read_to_end(&mut buf)?;
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
@@ -619,10 +617,10 @@ impl Repo {
          -> Result<(), anyhow::Error> {
             for item in txn.read_dir("items")? {
                 let item = item?;
-                let item_path = item.path();
-                let item_id = item_path.file_name().unwrap().to_string_lossy();
-                let item_id = Xid::parse(&item_id)?;
-                let metadata = serde_bare::from_slice(&std::fs::read(item.path())?)?;
+                let item_id_string = item.file_name().to_string_lossy();
+                let item_id = Xid::parse(&item_id_string)?;
+                let metadata =
+                    serde_bare::from_slice(&txn.read(&format!("items/{}", item_id_string))?)?;
                 walk_item(storage_engine, item_id, metadata)?;
             }
             Ok(())
