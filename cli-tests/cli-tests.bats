@@ -696,6 +696,39 @@ _concurrent_modify_worker () {
   done
 }
 
+@test "repo rollback torture" {
+  if ! test -d "$BUPSTASH_REPOSITORY" || \
+       test -n "$BUPSTASH_REPOSITORY_COMMAND"
+  then
+    skip "test requires a local repository"
+  fi
+
+  REPO="$BUPSTASH_REPOSITORY"
+  unset BUPSTASH_REPOSITORY
+
+  now=$(date "+%s")
+  test_end=$(($now + 30))
+
+  while test $(date "+%s") -lt "$test_end"
+  do
+    # XXX This timeout scheme is very brittle.
+    export BUPSTASH_REPOSITORY_COMMAND="timeout -s KILL 0.0$(($RANDOM % 10)) bupstash serve $REPO"
+    bupstash put -e echo $(uuidgen) || true
+    bupstash gc > /dev/null || true
+    bupstash rm --allow-many "id=f*" || true
+    if test "$(($RANDOM % 2))" = 0
+    then
+      bupstash restore-removed || true
+    fi
+  done
+
+  unset BUPSTASH_REPOSITORY_COMMAND
+  export BUPSTASH_REPOSITORY="$REPO"
+
+  bupstash gc > /dev/null
+  bupstash list --query-cache="$SCRATCH/sanity.qcache" > /dev/null
+}
+
 @test "parallel thrash" {
   
   if ! ps --version | grep -q procps-ng
