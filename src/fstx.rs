@@ -27,7 +27,7 @@ struct RollbackJournalWriter {
 impl RollbackJournalWriter {
     fn create(dirf: &openat::Dir) -> Result<Self, std::io::Error> {
         Ok(Self {
-            f: dirf.write_file(RJ_NAME, 0o777)?,
+            f: dirf.write_file(RJ_NAME, 0o666)?,
             h: blake3::Hasher::new(),
         })
     }
@@ -105,7 +105,7 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                 break;
             }
             Ok(RollbackOp::WriteFile((path, sz))) => {
-                let mut f = dirf.write_file(&path, 0o777)?;
+                let mut f = dirf.write_file(&path, 0o666)?;
                 let rj = &mut rj;
                 std::io::copy(&mut rj.take(sz.0), &mut f)?;
                 f.sync_all()?;
@@ -113,7 +113,7 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                 sync_parent_dir(dirf, &path)?;
             }
             Ok(RollbackOp::TruncateFile((path, sz))) => {
-                let f = dirf.append_file(&path, 0o777)?;
+                let f = dirf.append_file(&path, 0o666)?;
                 f.set_len(sz.0)?;
                 f.sync_all()?;
                 std::mem::drop(f);
@@ -152,7 +152,7 @@ impl ReadTxn {
                     std::mem::drop(lock);
                     {
                         let lock = fsutil::FileLock::exclusive_on_file(
-                            dirf.update_file(LOCK_NAME, 0o777)?,
+                            dirf.update_file(LOCK_NAME, 0o666)?,
                         )?;
                         // Now we have the exclusive lock, check if we still need to rollback.
                         if dirf.metadata(RJ_NAME).is_ok() {
@@ -217,7 +217,7 @@ pub struct WriteTxn {
 impl WriteTxn {
     pub fn begin(dir: &Path) -> Result<WriteTxn, std::io::Error> {
         let dirf = openat::Dir::open(dir)?;
-        let lock = fsutil::FileLock::exclusive_on_file(dirf.update_file(LOCK_NAME, 0o777)?)?;
+        let lock = fsutil::FileLock::exclusive_on_file(dirf.update_file(LOCK_NAME, 0o666)?)?;
         match dirf.metadata(RJ_NAME) {
             Ok(_) => {
                 rollback(&dirf, &lock)?;
@@ -302,7 +302,7 @@ impl WriteTxn {
                             Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                             Err(err) => return Err(err),
                         };
-                        let mut f = self.dirf.write_file(p, 0o777)?;
+                        let mut f = self.dirf.write_file(p, 0o666)?;
                         f.write_all(data)?;
                         f.sync_all()?;
                         sync_parent_dir(&self.dirf, p)?;
@@ -314,13 +314,13 @@ impl WriteTxn {
                             Err(err) => return Err(err),
                         };
                         dataf.seek(std::io::SeekFrom::Start(0))?;
-                        let mut outf = self.dirf.write_file(p, 0o777)?;
+                        let mut outf = self.dirf.write_file(p, 0o666)?;
                         std::io::copy(dataf, &mut outf)?;
                         outf.sync_all()?;
                         sync_parent_dir(&self.dirf, p)?;
                     }
                     WriteTxnOp::Append(data) => {
-                        let mut f = self.dirf.append_file(p, 0o777)?;
+                        let mut f = self.dirf.append_file(p, 0o666)?;
                         f.write_all(&data)?;
                         f.sync_all()?;
                         sync_parent_dir(&self.dirf, p)?;
