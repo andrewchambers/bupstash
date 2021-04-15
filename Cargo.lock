@@ -85,6 +85,7 @@ dependencies = [
  "lz4",
  "nix",
  "once_cell",
+ "openat",
  "path-clean",
  "pkg-config",
  "rangemap",
@@ -416,6 +417,15 @@ name = "once_cell"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13bd41f508810a131401606d54ac32a467c97172d74ba7662562ebba5ad07fa0"
+
+[[package]]
+name = "openat"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97cdc0668b258e022a16a9c71a77f69b73e8d32b6f20bb3082b623f6396438b8"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "path-clean"
