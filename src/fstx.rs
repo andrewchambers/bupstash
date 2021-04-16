@@ -1,3 +1,14 @@
+// This file implements the bupstash transaction layer for updating
+// repository metadata. The general idea is we write a rollback journal
+// for batches of changes to the repository, fsync them, then proceed
+// to make the changes. On any crash, the changes are rolled back by
+// the next bupstash process.
+//
+// Recommended reading:
+//
+// https://www.sqlite.org/atomiccommit.html
+// https://www.sqlite.org/psow.html
+
 use super::fsutil;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
