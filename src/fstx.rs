@@ -20,6 +20,8 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const RJ_NAME: &str = "rollback.journal";
+// See fsutil for explanation of this tag.
+const FSTX_LOCK_CTX_TAG: fsutil::FileLockTag = 0x870bc1047fbdb6ac;
 const LOCK_NAME: &str = "tx.lock";
 
 #[derive(Deserialize, Serialize)]
@@ -189,12 +191,14 @@ impl ReadTxn {
     pub fn begin(dir: &Path) -> Result<Self, std::io::Error> {
         let dirf = openat::Dir::open(dir)?;
         'try_again: loop {
-            let lock = fsutil::FileLock::shared_on_file(dirf.open_file(LOCK_NAME)?)?;
+            let lock =
+                fsutil::FileLock::shared_on_file(FSTX_LOCK_CTX_TAG, dirf.open_file(LOCK_NAME)?)?;
             match dirf.metadata(RJ_NAME) {
                 Ok(_) => {
                     std::mem::drop(lock);
                     {
                         let lock = fsutil::FileLock::exclusive_on_file(
+                            FSTX_LOCK_CTX_TAG,
                             dirf.update_file(LOCK_NAME, 0o666)?,
                         )?;
                         // Now we have the exclusive lock, check if we still need to rollback.
@@ -260,7 +264,10 @@ pub struct WriteTxn {
 impl WriteTxn {
     pub fn begin(dir: &Path) -> Result<WriteTxn, std::io::Error> {
         let dirf = openat::Dir::open(dir)?;
-        let lock = fsutil::FileLock::exclusive_on_file(dirf.update_file(LOCK_NAME, 0o666)?)?;
+        let lock = fsutil::FileLock::exclusive_on_file(
+            FSTX_LOCK_CTX_TAG,
+            dirf.update_file(LOCK_NAME, 0o666)?,
+        )?;
         match dirf.metadata(RJ_NAME) {
             Ok(_) => {
                 rollback(&dirf, &lock)?;
@@ -486,9 +493,12 @@ impl WriteTxn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests are serial due to our file lock context system.
+    use serial_test::serial;
     use std::io::Write;
 
     #[test]
+    #[serial]
     fn test_write_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
@@ -514,6 +524,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_remove_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
@@ -540,6 +551,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_truncate_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
@@ -569,6 +581,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_write_txn() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
