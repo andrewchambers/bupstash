@@ -304,7 +304,7 @@ impl WriteTxn {
                                     return Err(std::io::Error::new(
                                         std::io::ErrorKind::Other,
                                         "file modified outside of write transaction",
-                                    ))
+                                    ));
                                 }
                             }
                             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
