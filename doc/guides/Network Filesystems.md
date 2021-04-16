@@ -1,38 +1,36 @@
 # Network Filesystems
 
-Currently we do not recommend using bupstash where the repository is mounted on a network filesystem. This is
-because that we cannot guarantee the file locking semantics of the network filesystem is suitable for use with
-bupstash and the bupstash sqlite3 metadata database.
+Bupstash relies on fcntl style POSIX file locking across multiple files to work in a concurrent context. Do not use bupstash with any network filesystem that does not support fcntl style locking unless you understand the potential consequences of such a decision.
 
-When using a remote repository it is always recommended to use bupstash over ssh by setting BUPSTASH_REPOSITORY to an `ssh://`
+When using bupstash with a remote repository it is always recommended to use bupstash over ssh by setting BUPSTASH_REPOSITORY to an `ssh://`
 style URL. This mode is safe for concurrent use, faster and better in the majority of use cases.
 
-For information on specific unsupported network filesystem configurations see the sections below.
+For information on specific network filesystem configurations see the sections below.
 
-## NFSv3
+## NFSv3/NFSv4
 
-Currently we do no recommend using bupstash over NFSv3 in any configuration. This may change
-with future releases.
+We do no recommend using bupstash over NFSv3 in any configuration.
 
-## NFSv4
+If you are stubborn, ensure locking is enabled or only access the repository from one bupstash process as a time.
 
-Currently we do no recommend using bupstash over NFSv4 in any configuration. This may change
-with future releases.
+NFSv4 has a more sound network locking protocol, so given the choice between NFSv3 and NFSv4 always
+choose NFSv4 with locking enabled.
 
 ## CephFS
 
-Currently we do no recommend using bupstash over CephFS in any configuration. This may change
-with future releases.
+Using bupstash over Cephfs is untested so is currently not recommended.
 
 ## SSHFS
 
-Currently we do no recommend using bupstash over sshfs in any configuration.
+Currently we do no recommend using bupstash over sshfs in any configuration due to the lack
+of file lock support across multiple machines.
 
-This is especially true because if you have sshfs access, you almost certainly have the ability to set BUPSTASH_REPOSITORY
+If you have sshfs access, you almost certainly have the ability to set BUPSTASH_REPOSITORY
 to an `ssh://` style url which enables safe concurrent repository access in all situations.
 
 ## 9P2000.L
 
-9P2000.L mounts are not supported but may work with caching disabled and after disabling sqlite3 WAL mode. 
+Uncached 9P2000.L mounts of repositories exported via the diod 9P2000.L server will likely
+work without issue, though use at your own risk.
 
-To disable the repository sqlite3 WAL mode run the command `sqlite3 /path/to/repository/bupstash.sqlite3 'PRAGMA journal_mode = DELETE;'`.
+
