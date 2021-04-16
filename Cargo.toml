@@ -44,10 +44,12 @@ rangemap = "0.1.7"
 blake3 = "0.3"
 xattr = "0.2"
 openat = "0.1"
+lazy_static = "1.4"
 
 [dev-dependencies]
 
 tempfile = "3"
+serial_test = "*"
 
 [build-dependencies]
 

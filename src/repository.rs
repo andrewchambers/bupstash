@@ -72,6 +72,7 @@ pub enum ItemSyncEvent {
     End,
 }
 
+const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
 const CURRENT_SCHEMA_VERSION: &str = "5";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 1024 * 1024 * 1024;
@@ -196,9 +197,11 @@ impl Repo {
         let repo_lock = match initial_lock_mode {
             RepoLockMode::None => RepoLock::None,
             RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+                REPO_LOCK_CTX_TAG,
                 &Repo::repo_lock_path(&repo_path),
             )?),
             RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
+                REPO_LOCK_CTX_TAG,
                 &Repo::repo_lock_path(&repo_path),
             )?),
         };
@@ -274,9 +277,11 @@ impl Repo {
             self.repo_lock = match lock_mode {
                 RepoLockMode::None => RepoLock::None,
                 RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+                    REPO_LOCK_CTX_TAG,
                     &Repo::repo_lock_path(&self.repo_path),
                 )?),
                 RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
+                    REPO_LOCK_CTX_TAG,
                     &Repo::repo_lock_path(&self.repo_path),
                 )?),
             };
@@ -756,8 +761,11 @@ impl Repo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests are serial due to our file lock context system.
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn dir_store_sanity_test() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let mut path_buf = PathBuf::from(tmp_dir.path());

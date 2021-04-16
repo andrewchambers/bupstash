@@ -1,18 +1,74 @@
 use super::crypto;
 use super::hex;
+use lazy_static::lazy_static;
 use path_clean::PathClean;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+// N.B.
+// fsutil file locks uses fcntl style locks, which have error prone semantics,
+// but are widely supported. The semantics mean a lock is process global and
+// you can't open a file with lock multiple times from the same process and expect
+// them to block eachother. To mitigate this problem, bupstash creates a global
+// context table that prevents accidents as much as possible. fsutil will panic
+// if a context tag is reused concurrently, preventing accidental concurrent locking
+// that is likely to clobber it's own state.
+//
+// This global table of active contexts is not really needed in the current code
+// but is here to prevents accidents in the case of future refactors. We could also
+// consider disabling these runtime checks in release builds.
+//
+// Ideally bupstash could migrate to BSD style locks, but
+// the current code supports more (and ancient) platforms in a safer way.
+//
+// Heres an interesting reference http://0pointer.de/blog/projects/locking.html
+pub type FileLockTag = u64;
+
+lazy_static! {
+    static ref FILE_LOCK_CTX_TAB: Mutex<std::collections::HashSet<FileLockTag>> =
+        Mutex::new(std::collections::HashSet::with_capacity(2));
+}
+
+struct FileLockCtx {
+    tag: FileLockTag,
+}
+
+impl FileLockCtx {
+    pub fn new(tag: FileLockTag) -> Self {
+        let mut ctx_tab = FILE_LOCK_CTX_TAB.lock().unwrap();
+        if !ctx_tab.insert(tag) {
+            panic!("BUG: file lock context '{:x}' reused", tag);
+        }
+        FileLockCtx { tag }
+    }
+}
+
+impl Drop for FileLockCtx {
+    fn drop(&mut self) {
+        let mut ctx_tab = FILE_LOCK_CTX_TAB.lock().unwrap();
+        if !ctx_tab.remove(&self.tag) {
+            panic!(
+                "BUG: file lock context '{:x}' reused without being held",
+                self.tag
+            );
+        }
+    }
+}
 
 pub struct FileLock {
+    _ctx: FileLockCtx,
     _f: fs::File,
 }
 
 impl FileLock {
-    pub fn exclusive_on_file(f: std::fs::File) -> Result<FileLock, std::io::Error> {
+    pub fn exclusive_on_file(
+        ctx_tag: FileLockTag,
+        f: std::fs::File,
+    ) -> Result<FileLock, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_WRLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -20,19 +76,22 @@ impl FileLock {
             l_len: 0,
             l_pid: 0,
         };
+
+        let ctx = FileLockCtx::new(ctx_tag);
+
         match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLKW(&lock_opts)) {
-            Ok(_) => (),
-            Err(err) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("unable to get exclusive lock: {}", err),
-                ))
-            }
-        };
-        Ok(FileLock { _f: f })
+            Ok(_) => Ok(FileLock { _ctx: ctx, _f: f }),
+            Err(err) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("unable to get exclusive lock: {}", err),
+            )),
+        }
     }
 
-    pub fn try_exclusive_on_file(f: std::fs::File) -> Result<Option<FileLock>, std::io::Error> {
+    pub fn try_exclusive_on_file(
+        ctx_tag: FileLockTag,
+        f: std::fs::File,
+    ) -> Result<Option<FileLock>, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_WRLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -40,21 +99,24 @@ impl FileLock {
             l_len: 0,
             l_pid: 0,
         };
+
+        let ctx = FileLockCtx::new(ctx_tag);
+
         match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLK(&lock_opts)) {
-            Ok(_) => (),
+            Ok(_) => Ok(Some(FileLock { _ctx: ctx, _f: f })),
             Err(nix::Error::Sys(nix::errno::Errno::EAGAIN))
-            | Err(nix::Error::Sys(nix::errno::Errno::EACCES)) => return Ok(None),
-            Err(err) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("unable to get exclusive lock: {}", err),
-                ))
-            }
-        };
-        Ok(Some(FileLock { _f: f }))
+            | Err(nix::Error::Sys(nix::errno::Errno::EACCES)) => Ok(None),
+            Err(err) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("unable to get exclusive lock: {}", err),
+            )),
+        }
     }
 
-    pub fn shared_on_file(f: std::fs::File) -> Result<FileLock, std::io::Error> {
+    pub fn shared_on_file(
+        ctx_tag: FileLockTag,
+        f: std::fs::File,
+    ) -> Result<FileLock, std::io::Error> {
         let lock_opts = libc::flock {
             l_type: libc::F_RDLCK as libc::c_short,
             l_whence: libc::SEEK_SET as libc::c_short,
@@ -62,31 +124,34 @@ impl FileLock {
             l_len: 0,
             l_pid: 0,
         };
+
+        let ctx = FileLockCtx::new(ctx_tag);
+
         match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLKW(&lock_opts)) {
-            Ok(_) => (),
-            Err(err) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("unable to get shared lock: {}", err),
-                ))
-            }
-        };
-        Ok(FileLock { _f: f })
+            Ok(_) => Ok(FileLock { _ctx: ctx, _f: f }),
+            Err(err) => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("unable to get shared lock: {}", err),
+            )),
+        }
     }
 
-    pub fn get_exclusive(p: &Path) -> Result<FileLock, std::io::Error> {
+    pub fn get_exclusive(ctx_tag: FileLockTag, p: &Path) -> Result<FileLock, std::io::Error> {
         let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
-        FileLock::exclusive_on_file(f)
+        FileLock::exclusive_on_file(ctx_tag, f)
     }
 
-    pub fn try_get_exclusive(p: &Path) -> Result<Option<FileLock>, std::io::Error> {
+    pub fn try_get_exclusive(
+        ctx_tag: FileLockTag,
+        p: &Path,
+    ) -> Result<Option<FileLock>, std::io::Error> {
         let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
-        FileLock::try_exclusive_on_file(f)
+        FileLock::try_exclusive_on_file(ctx_tag, f)
     }
 
-    pub fn get_shared(p: &Path) -> Result<FileLock, std::io::Error> {
+    pub fn get_shared(ctx_tag: FileLockTag, p: &Path) -> Result<FileLock, std::io::Error> {
         let f = fs::OpenOptions::new().read(true).write(true).open(p)?;
-        FileLock::shared_on_file(f)
+        FileLock::shared_on_file(ctx_tag, f)
     }
 }
 
