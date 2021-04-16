@@ -19,16 +19,37 @@ enum RollbackOp {
     TruncateFile((String, serde_bare::Uint)),
 }
 
-struct RollbackJournalWriter {
+#[derive(Debug)]
+struct FileTeeHasher {
     f: std::fs::File,
     h: blake3::Hasher,
+}
+
+impl std::io::Write for FileTeeHasher {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.h.write_all(buf)?;
+        self.f.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct RollbackJournalWriter {
+    bw: std::io::BufWriter<FileTeeHasher>,
 }
 
 impl RollbackJournalWriter {
     fn create(dirf: &openat::Dir) -> Result<Self, std::io::Error> {
         Ok(Self {
-            f: dirf.write_file(RJ_NAME, 0o666)?,
-            h: blake3::Hasher::new(),
+            bw: std::io::BufWriter::with_capacity(
+                256 * 1024,
+                FileTeeHasher {
+                    f: dirf.write_file(RJ_NAME, 0o666)?,
+                    h: blake3::Hasher::new(),
+                },
+            ),
         })
     }
 
@@ -37,25 +58,36 @@ impl RollbackJournalWriter {
         Ok(())
     }
 
+    fn borrow_buf_writer(&mut self) -> &mut std::io::BufWriter<FileTeeHasher> {
+        &mut self.bw
+    }
+
     fn finish(mut self) -> Result<(), std::io::Error> {
-        // RollbackComplete
-        self.write_all(&[0])?;
-        let h = self.h.finalize();
+        // Write RollbackComplete entry.
+        self.bw.write_all(&[0])?;
+        self.bw.flush()?;
+        // unwrap ok, we already flushed.
+        // unstable api's would let us remove the extra
+        // write syscall, for most people this doesn't matter,
+        // for network filesystems it might let us skip a roundtrip.
+        let tw = self.bw.into_inner().unwrap();
+        let h = tw.h;
+        let mut f = tw.f;
+        let h = h.finalize();
         let h = h.as_bytes();
-        self.f.write_all(&h[..])?;
-        self.f.sync_all()?;
+        f.write_all(&h[..])?;
+        f.sync_all()?;
         Ok(())
     }
 }
 
 impl std::io::Write for RollbackJournalWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.h.write_all(buf)?;
-        self.f.write(buf)
+        self.bw.write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        self.f.sync_data()
+        self.bw.flush()
     }
 }
 
@@ -244,7 +276,14 @@ impl WriteTxn {
                                 let rollback_op =
                                     RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
                                 rj.write_op(rollback_op)?;
-                                std::io::copy(&mut f, &mut rj)?;
+                                // copy is specialized for BufWriter, so use that.
+                                let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
+                                if n != md.size() {
+                                    return Err(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        "file modified outside of write transaction",
+                                    ));
+                                }
                             }
                             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                                 // Nothing to do.
@@ -259,9 +298,13 @@ impl WriteTxn {
                                 let rollback_op =
                                     RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
                                 rj.write_op(rollback_op)?;
-                                let n = std::io::copy(&mut f, &mut rj)?;
+                                // copy is specialized for BufWriter, so use that.
+                                let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
                                 if n != md.size() {
-                                    panic!("file modified outside of write transaction");
+                                    return Err(std::io::Error::new(
+                                        std::io::ErrorKind::Other,
+                                        "file modified outside of write transaction",
+                                    ))
                                 }
                             }
                             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
