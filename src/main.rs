@@ -885,7 +885,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             Ok(v) => v,
             Err(err) => anyhow::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err),
         },
-        Err(_) => 1073741824,
+        Err(_) => 21474836480,
     };
 
     let send_log = if matches.opt_present("no-send-log") {

@@ -174,7 +174,7 @@ The following tags are reserved and cannot be set manually:
 * BUPSTASH_CHECKPOINT_BYTES:
   When send logging is enabled, bupstash will checkpoint the log every BUPSTASH_CHECKPOINT_BYTES
   of data that is sent. If an upload is interrupted after a successful checkpoint, data will not need
-  to be resent over the network. The default value of this option is 1073741824, which is 1 GiB.
+  to be resent over the network. The default value of this option is 21474836480, which is 20 GiB.
 
 ## EXAMPLES
 
