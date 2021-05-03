@@ -5,13 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub struct SendLog {
-    // We retain two connections, the send log, and an anonymous
-    // copy of the send log. Commiting the send log involves copying
-    // the temp db over the send log. We do this so the user can do
-    // multiple puts without any locks and the last put wins
-    // when it comes to what is left on the disk.
     db_conn: rusqlite::Connection,
-    tmp_conn: rusqlite::Connection,
 }
 
 pub struct SendLogSession<'a> {
@@ -35,9 +29,18 @@ impl SendLog {
     pub fn open(p: &Path) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
 
-        db_conn.busy_timeout(std::time::Duration::new(600, 0))?;
+        // Only one put per send log at a time.
+        db_conn.query_row(
+            "PRAGMA locking_mode = EXCLUSIVE;",
+            rusqlite::NO_PARAMS,
+            |_r| Ok(()),
+        )?;
 
-        let tx = db_conn.transaction()?;
+        db_conn.busy_timeout(std::time::Duration::new(7 * 24 * 60 * 60, 0))?;
+
+        // Immediate lock with exclusive mode immediately blocks all other writers for the life
+        // of this open connection.
+        let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute(
             "create table if not exists LogMeta(Key primary key, Value) without rowid;",
             rusqlite::NO_PARAMS,
@@ -85,12 +88,9 @@ impl SendLog {
             db_conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
         }
 
-        let mut tmp_conn = rusqlite::Connection::open("")?;
-        tmp_conn.set_prepared_statement_cache_capacity(8);
-        // tmp conn does not need fsync, it disappears on os crash.
-        tmp_conn.execute("pragma synchronous = OFF;", rusqlite::NO_PARAMS)?;
-
         if needs_init {
+            let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
+
             let tx = tmp_conn.transaction()?;
 
             tx.execute(
@@ -119,21 +119,32 @@ impl SendLog {
             )?;
 
             tx.commit()?;
-        } else {
-            // Copy the persistent send log to the anonymous one.
-            let backup = rusqlite::backup::Backup::new(&db_conn, &mut tmp_conn)?;
+
+            let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut db_conn)?;
             if backup.step(-1)? != rusqlite::backup::StepResult::Done {
                 anyhow::bail!("unable to start send log transaction");
             }
         }
 
-        Ok(SendLog { db_conn, tmp_conn })
+        // On 64 bit platforms use sqlite3 memory mapped io.
+        if std::mem::size_of::<usize>() == 8 {
+            // 16GiB mmap size, just an estimate of the largest sendlog we are likely to see.
+            db_conn.query_row("PRAGMA mmap_size=17179869184;", rusqlite::NO_PARAMS, |_r| {
+                Ok(())
+            })?;
+        }
+
+        // We want a rather large page cache for the send log.
+        // default is -2000 which is 2000 * 1024 bytes.
+        db_conn.execute("PRAGMA cache_size = -20000;", rusqlite::NO_PARAMS)?;
+
+        Ok(SendLog { db_conn })
     }
 
     pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, anyhow::Error> {
         // We manually control the sqlite3 transaction so we are able
         // to issue checkpoints and commit part way through a send operation.
-        self.tmp_conn
+        self.db_conn
             .execute("begin immediate;", rusqlite::NO_PARAMS)?;
 
         Ok(SendLogSession {
@@ -145,7 +156,7 @@ impl SendLog {
     }
 
     pub fn last_send_id(&self) -> Result<Option<Xid>, anyhow::Error> {
-        match self.tmp_conn.query_row(
+        match self.db_conn.query_row(
             "select value from LogMeta where key = 'last-send-id';",
             rusqlite::NO_PARAMS,
             |r| {
@@ -173,20 +184,20 @@ impl<'a> SendLogSession<'a> {
         let last_send_id = self.last_send_id()?;
 
         if had_send_id {
-            self.log.tmp_conn.execute(
+            self.log.db_conn.execute(
                 "delete from Sent where (GCGeneration != ?) and (ItemId != ?);",
                 rusqlite::params![self.gc_generation, last_send_id.unwrap()],
             )?;
-            self.log.tmp_conn.execute(
+            self.log.db_conn.execute(
                 "delete from StatCache where (GCGeneration != ?) and (ItemId != ?);",
                 rusqlite::params![self.gc_generation, last_send_id.unwrap()],
             )?;
         } else {
-            self.log.tmp_conn.execute(
+            self.log.db_conn.execute(
                 "delete from Sent where GCGeneration != ?;",
                 &[self.gc_generation],
             )?;
-            self.log.tmp_conn.execute(
+            self.log.db_conn.execute(
                 "delete from StatCache where GCGeneration != ?;",
                 &[self.gc_generation],
             )?;
@@ -206,11 +217,11 @@ impl<'a> SendLogSession<'a> {
         if has_address {
             let mut stmt = self
                 .log
-                .tmp_conn
+                .db_conn
                 .prepare_cached("update Sent set LatestSessionId = ? where Address = ?;")?;
             stmt.execute(rusqlite::params![self.session_id, &addr.bytes[..]])?;
         } else {
-            let mut stmt = self.log.tmp_conn.prepare_cached(
+            let mut stmt = self.log.db_conn.prepare_cached(
                 "insert into Sent(GCGeneration, LatestSessionId, Address) values(?, ?, ?);",
             )?;
             stmt.execute(rusqlite::params![
@@ -226,7 +237,7 @@ impl<'a> SendLogSession<'a> {
     pub fn cached_address(&self, addr: &Address) -> Result<bool, anyhow::Error> {
         let mut stmt = self
             .log
-            .tmp_conn
+            .db_conn
             .prepare_cached("select 1 from Sent where Address = ?;")?;
 
         let hit = match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
@@ -248,7 +259,7 @@ impl<'a> SendLogSession<'a> {
         };
 
         // We update and not replace so we can keep an old item id if it exists.
-        let mut stmt = self.log.tmp_conn.prepare_cached(
+        let mut stmt = self.log.db_conn.prepare_cached(
             "insert into StatCache(GCGeneration, LatestSessionId, Hash, Cached) Values(?1, ?2, ?3, ?4) \
             on conflict(Hash) do update set LatestSessionId = ?2;"
         )?;
@@ -266,7 +277,7 @@ impl<'a> SendLogSession<'a> {
     pub fn stat_cache_lookup(&self, hash: &[u8]) -> Result<Option<StatCacheEntry>, anyhow::Error> {
         let mut stmt = self
             .log
-            .tmp_conn
+            .db_conn
             .prepare_cached("select Cached from StatCache where Hash = ?;")?;
 
         match stmt.query_row(rusqlite::params![hash], |r| {
@@ -284,21 +295,12 @@ impl<'a> SendLogSession<'a> {
             anyhow::bail!("no active transaction");
         };
 
-        self.log.tmp_conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.log.db_conn.execute("commit;", rusqlite::NO_PARAMS)?;
         self.tx_active = false;
-
-        {
-            let backup = rusqlite::backup::Backup::new(&self.log.tmp_conn, &mut self.log.db_conn)?;
-            if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                anyhow::bail!("unable to checkpoint send log");
-            }
-        }
-
         self.log
-            .tmp_conn
+            .db_conn
             .execute("begin immediate;", rusqlite::NO_PARAMS)?;
         self.tx_active = true;
-
         Ok(())
     }
 
@@ -309,41 +311,33 @@ impl<'a> SendLogSession<'a> {
 
         // To keep the cache bounded, delete everything
         // that was not sent or updated during the current session.
-        self.log.tmp_conn.execute(
+        self.log.db_conn.execute(
             "delete from StatCache where LatestSessionId != ?;",
             &[&self.session_id],
         )?;
 
-        self.log.tmp_conn.execute(
+        self.log.db_conn.execute(
             "delete from Sent where LatestSessionId != ?;",
             &[&self.session_id],
         )?;
 
-        self.log.tmp_conn.execute(
+        self.log.db_conn.execute(
             "update StatCache set ItemId = ? where LatestSessionId = ?;",
             &[id, &self.session_id],
         )?;
 
-        self.log.tmp_conn.execute(
+        self.log.db_conn.execute(
             "update Sent set ItemId = ? where LatestSessionId = ?;",
             &[id, &self.session_id],
         )?;
 
-        self.log.tmp_conn.execute(
+        self.log.db_conn.execute(
             "insert or replace into LogMeta(Key, Value) Values('last-send-id', ?);",
             &[id],
         )?;
 
-        self.log.tmp_conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.log.db_conn.execute("commit;", rusqlite::NO_PARAMS)?;
         self.tx_active = false;
-
-        {
-            let backup = rusqlite::backup::Backup::new(&self.log.tmp_conn, &mut self.log.db_conn)?;
-            if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                anyhow::bail!("unable to commit send log");
-            }
-        }
-
         Ok(())
     }
 }
@@ -352,7 +346,7 @@ impl<'a> Drop for SendLogSession<'a> {
     fn drop(&mut self) {
         if self.tx_active {
             self.log
-                .tmp_conn
+                .db_conn
                 .execute("rollback;", rusqlite::NO_PARAMS)
                 .unwrap();
         }

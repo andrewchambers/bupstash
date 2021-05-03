@@ -888,25 +888,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         Err(_) => 21474836480,
     };
 
-    let send_log = if matches.opt_present("no-send-log") {
-        None
-    } else {
-        match matches.opt_str("send-log") {
-            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
-            None => match std::env::var_os("BUPSTASH_SEND_LOG") {
-                Some(send_log) => {
-                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
-                }
-                None => {
-                    let mut p = cache_dir()?;
-                    std::fs::create_dir_all(&p)?;
-                    p.push("bupstash.sendlog");
-                    Some(sendlog::SendLog::open(&p)?)
-                }
-            },
-        }
-    };
-
     let key = cli_to_key(&matches)?;
 
     if !key.is_put_key() {
@@ -1077,6 +1058,26 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     if serde_bare::to_vec(&tags)?.len() > oplog::MAX_TAG_SET_SIZE {
         anyhow::bail!("tags must not exceed {} bytes", oplog::MAX_TAG_SET_SIZE);
     }
+
+    let send_log = if matches.opt_present("no-send-log") {
+        None
+    } else {
+        progress.set_message(&"acquiring exclusive lock on send-log...");
+        match matches.opt_str("send-log") {
+            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
+            None => match std::env::var_os("BUPSTASH_SEND_LOG") {
+                Some(send_log) => {
+                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
+                }
+                None => {
+                    let mut p = cache_dir()?;
+                    std::fs::create_dir_all(&p)?;
+                    p.push("bupstash.sendlog");
+                    Some(sendlog::SendLog::open(&p)?)
+                }
+            },
+        }
+    };
 
     let mut serve_proc =
         cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
