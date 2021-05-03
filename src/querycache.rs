@@ -33,6 +33,8 @@ pub struct ListOptions {
     pub query: Option<query::Query>,
 }
 
+const SCHEMA_VERSION: i64 = 2;
+
 impl QueryCache {
     pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
@@ -45,7 +47,7 @@ impl QueryCache {
             rusqlite::NO_PARAMS,
         )?;
 
-        match tx.query_row(
+        let needs_init = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'schema-version';",
             rusqlite::NO_PARAMS,
             |r| {
@@ -53,28 +55,46 @@ impl QueryCache {
                 Ok(v)
             },
         ) {
-            Ok(v) => {
-                if v != 2 {
-                    anyhow::bail!("query cache at {:?} is from an incompatible version of the software and must be removed manually", &p);
-                }
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                tx.execute(
-                    "insert into QueryCacheMeta(Key, Value) values('schema-version', 2);",
-                    rusqlite::NO_PARAMS,
-                )?;
-                tx.execute(
-                    "create table if not exists ItemOpLog(LogOffset INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
-                    rusqlite::NO_PARAMS,
-                )?;
-                tx.execute(
-                    // No rowid so means we don't need a secondary index for itemid lookups.
-                    "create table if not exists Items(ItemId PRIMARY KEY, LogOffset INTEGER NOT NULL, Metadata NOT NULL, UNIQUE(LogOffset)) WITHOUT ROWID;",
-                    rusqlite::NO_PARAMS,
-                )?;
-            }
+            Ok(v) => v != SCHEMA_VERSION,
+            Err(rusqlite::Error::QueryReturnedNoRows) => true,
             Err(err) => return Err(err.into()),
+        };
+
+        tx.commit()?;
+
+        if needs_init {
+            let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
+
+            let tx = tmp_conn.transaction()?;
+
+            tx.execute(
+                "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.execute(
+                "insert into QueryCacheMeta(Key, Value) values('schema-version', ?);",
+                &[SCHEMA_VERSION],
+            )?;
+            tx.execute(
+                "create table if not exists ItemOpLog(LogOffset INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
+                rusqlite::NO_PARAMS,
+            )?;
+            tx.execute(
+                // No rowid so means we don't need a secondary index for itemid lookups.
+                "create table if not exists Items(ItemId PRIMARY KEY, LogOffset INTEGER NOT NULL, Metadata NOT NULL, UNIQUE(LogOffset)) WITHOUT ROWID;",
+                rusqlite::NO_PARAMS,
+            )?;
+
+            tx.commit()?;
+
+            let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut conn)?;
+            if backup.step(-1)? != rusqlite::backup::StepResult::Done {
+                anyhow::bail!("unable to start send log transaction");
+            }
         }
+
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         let recently_cleared = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'recently-cleared';",
