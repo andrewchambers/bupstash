@@ -61,7 +61,7 @@ fn to_hex_chars(b: u8) -> (char, char) {
     (hi as char, lo as char)
 }
 
-// from.len() MUST exactly half to.len()
+// from.len() MUST be exactly half to.len()
 pub fn encode(from: &[u8], to: &mut [u8]) {
     assert!(to.len() == 2 * from.len());
 

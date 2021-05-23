@@ -421,8 +421,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     self.ctx.want_xattrs,
                 ) {
                     Ok(ent) => ent,
-                    // The entry was removed while we were it's metadata
-                    // in a way that was unrecoverable. For example a symlink was removed so
+                    // The entry was removed, for example a symlink was removed so
                     // we cannot do a valid readlink.
                     Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
                     Err(err) => anyhow::bail!(
@@ -533,7 +532,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             let file_len = self.write_data(&mut f, &mut on_data_chunk)?;
 
                             // The true size is just what we read from disk. In the case
-                            // of snapshotting an modified file we can't guarantee consistency anyway.
+                            // of snapshotting a modified file we can't guarantee consistency anyway.
                             index_ent.size.0 = file_len;
                             index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
                             ent_data_chunk_end_idx =

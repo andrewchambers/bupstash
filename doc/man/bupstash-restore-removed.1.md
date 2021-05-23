@@ -12,7 +12,7 @@ yet been deleted via garbage collection.
 
 `bupstash restore-removed` allows a user to undo all 'rm' operations that
 have taken place since the last invocation of bupstash-gc(1).
-In other words, this command provides a way to correct errors and other unforeseen accidental
+In other words, this command provides a way to correct errors and accidental
 invocations of bupstash-rm(1).
 
 `bupstash restore-removed` requires 'put' and 'get' permissions for the repository being operated on.
