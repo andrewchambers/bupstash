@@ -1279,7 +1279,7 @@ fn receive_htree(
     Ok(())
 }
 
-fn write_index_as_tarball(
+fn write_indexed_data_as_tarball(
     read_data: &mut dyn FnMut() -> Result<Option<Vec<u8>>, anyhow::Error>,
     index: &index::CompressedIndex,
     out: &mut dyn std::io::Write,
@@ -1402,7 +1402,7 @@ fn receive_indexed_htree_as_tarball(
         Ok(None)
     };
 
-    write_index_as_tarball(&mut read_data, index, out)
+    write_indexed_data_as_tarball(&mut read_data, index, out)
 }
 
 fn receive_partial_htree(
@@ -1534,7 +1534,7 @@ fn receive_partial_htree(
     };
 
     if pick.is_subtar {
-        write_index_as_tarball(&mut read_data, &pick.index, out)?;
+        write_indexed_data_as_tarball(&mut read_data, &pick.index, out)?;
     } else {
         while let Some(data) = read_data()? {
             out.write_all(&data)?;
