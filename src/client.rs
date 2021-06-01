@@ -658,15 +658,13 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             address: data_tree_meta.address,
         };
 
-        let idx_tree_meta = if let Some(ref idx_tree_meta) = idx_tree_meta {
-            Some(oplog::HTreeMetadata {
+        let idx_tree_meta = idx_tree_meta
+            .as_ref()
+            .map(|idx_tree_meta| oplog::HTreeMetadata {
                 height: serde_bare::Uint(idx_tree_meta.height as u64),
                 data_chunk_count: serde_bare::Uint(idx_tree_meta.data_chunk_count),
                 address: idx_tree_meta.address,
-            })
-        } else {
-            None
-        };
+            });
 
         Ok((data_tree_meta, idx_tree_meta, stats))
     }

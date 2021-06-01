@@ -304,10 +304,8 @@ fn cli_to_serve_process(
     let mut serve_cmd_args = {
         let repo = if matches.opt_present("repository") {
             Some(matches.opt_str("repository").unwrap())
-        } else if let Some(r) = std::env::var_os("BUPSTASH_REPOSITORY") {
-            Some(r.into_string().unwrap())
         } else {
-            None
+            std::env::var_os("BUPSTASH_REPOSITORY").map(|r| r.into_string().unwrap())
         };
 
         match repo {
@@ -390,15 +388,13 @@ fn cli_to_serve_process(
 
         let stderr_reader = std::thread::spawn(move || {
             let buf_reader = std::io::BufReader::new(proc_stderr);
-            for line in buf_reader.lines() {
-                if let Ok(line) = line {
-                    progress.println(&line);
-                    // Theres a tiny race condition here where we may print an
-                    // error line twice, I can't see how to fix this unless we
-                    // rewrite the progress bar library to report if the print happened.
-                    if progress.is_finished() || progress.is_hidden() {
-                        let _ = writeln!(std::io::stderr(), "{}", line);
-                    }
+            for line in buf_reader.lines().flatten() {
+                progress.println(&line);
+                // Theres a tiny race condition here where we may print an
+                // error line twice, I can't see how to fix this unless we
+                // rewrite the progress bar library to report if the print happened.
+                if progress.is_finished() || progress.is_hidden() {
+                    let _ = writeln!(std::io::stderr(), "{}", line);
                 }
             }
         });
@@ -724,11 +720,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     }
                     let unix_timestamp_millis = match metadata {
                         oplog::VersionedItemMetadata::V1(_) => {
-                            if let Some(secret_metadata) = secret_metadata {
-                                Some(secret_metadata.timestamp.timestamp_millis() as u64)
-                            } else {
-                                None
-                            }
+                            secret_metadata.map(|secret_metadata| {
+                                secret_metadata.timestamp.timestamp_millis() as u64
+                            })
                         }
                         oplog::VersionedItemMetadata::V2(ref metadata) => {
                             Some(metadata.plain_text_metadata.unix_timestamp_millis)
@@ -1299,9 +1293,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     client::request_data_stream(
         client::DataRequestContext {
             primary_key_id,
+            data_hash_key_part_1,
             data_dctx,
             metadata_dctx,
-            data_hash_key_part_1,
         },
         id,
         &metadata,
@@ -1559,8 +1553,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::IndexRequestContext {
             primary_key_id,
             idx_hash_key_part_1,
-            metadata_dctx,
             idx_dctx,
+            metadata_dctx,
         },
         id,
         &metadata,

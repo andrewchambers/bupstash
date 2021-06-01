@@ -233,10 +233,7 @@ impl TreeReader {
 
     pub fn current_height(&mut self) -> Option<usize> {
         self.prune_empty();
-        match self.tree_heights.last() {
-            Some(h) => Some(*h),
-            None => None,
-        }
+        self.tree_heights.last().copied()
     }
 }
 
