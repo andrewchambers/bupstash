@@ -368,43 +368,72 @@ impl Engine for DirStorage {
         Ok(std::fs::read_dir(&self.dir_path)?.count().try_into()?)
     }
 
-    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
+    fn sweep(
+        &mut self,
+        update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
+        reachable: abloom::ABloom,
+    ) -> Result<repository::GcStats, anyhow::Error> {
+        // We don't strictly need to stop them, but it saves memory.
         self.stop_workers();
 
         // Collect removals into memory first so we don't have to
         // worry about fs semantics when removing while iterating.
-        let mut to_remove = Vec::new();
+        let mut to_remove = Vec::with_capacity(512);
 
         let mut chunks_remaining: u64 = 0;
         let mut chunks_deleted: u64 = 0;
         let mut bytes_deleted: u64 = 0;
         let mut bytes_remaining: u64 = 0;
 
-        for e in std::fs::read_dir(&self.dir_path)? {
+        // Simple filter to reduce the number of time syscalls, but still look natural.
+        let is_update_idx = |i| i % 991 == 0;
+        let update_delay_millis = std::time::Duration::from_millis(500);
+        let mut last_progress_update = std::time::Instant::now()
+            .checked_sub(update_delay_millis)
+            .unwrap();
+
+        // XXX: The following steps should probably be done parallel.
+        // XXX: we are slowing the gc down by doing stat operatons on each chunk for diagnostics.
+
+        for (i, e) in std::fs::read_dir(&self.dir_path)?.enumerate() {
+            if is_update_idx(i) && last_progress_update.elapsed() >= update_delay_millis {
+                last_progress_update = std::time::Instant::now();
+                update_progress_msg(format!(
+                    "enumerating chunks, {} reachable, {} unreachable...",
+                    chunks_remaining, chunks_deleted
+                ))?;
+            }
+
             let e = e?;
             match Address::from_hex_str(&e.file_name().to_string_lossy()) {
-                Ok(addr) => {
-                    if reachable.probably_has(&addr) {
-                        if let Ok(md) = e.metadata() {
-                            bytes_remaining += md.len() as u64
-                        }
-                        chunks_remaining += 1
-                    } else {
-                        if let Ok(md) = e.metadata() {
-                            bytes_deleted += md.len() as u64
-                        }
-                        to_remove.push(e.path());
-                        chunks_deleted += 1;
+                Ok(addr) if reachable.probably_has(&addr) => {
+                    if let Ok(md) = e.metadata() {
+                        bytes_remaining += md.len() as u64
                     }
+                    chunks_remaining += 1
                 }
-                Err(_) => {
-                    // This is not a chunk, so don't count it.
+                _ => {
+                    if let Ok(md) = e.metadata() {
+                        bytes_deleted += md.len() as u64
+                    }
                     to_remove.push(e.path());
+                    chunks_deleted += 1;
                 }
             }
         }
 
-        for p in to_remove.iter() {
+        for (i, p) in to_remove.iter().enumerate() {
+            // Limit the number of updates, but always show the final update.
+            if (is_update_idx(i) && last_progress_update.elapsed() >= update_delay_millis)
+                || ((i + 1) as u64 == chunks_deleted)
+            {
+                last_progress_update = std::time::Instant::now();
+                update_progress_msg(format!(
+                    "deleting unreachable chunk {}/{}...",
+                    i + 1,
+                    chunks_deleted
+                ))?;
+            }
             std::fs::remove_file(p)?;
         }
 
@@ -417,9 +446,8 @@ impl Engine for DirStorage {
     }
 
     fn sweep_completed(&mut self, _gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
-        // The fact this has been called means the sweep must have finished.
         // For the dir storage engine we can only call this if we have an exclusive
-        // repository lock.
+        // repository lock, which means the sweep has definitely finished.
         Ok(true)
     }
 }
