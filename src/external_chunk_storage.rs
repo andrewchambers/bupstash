@@ -69,14 +69,14 @@ impl Engine for ExternalStorage {
         }
     }
 
-    fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+    fn prepare_for_sweep(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error> {
         protocol::write_packet(
             &mut self.sock,
-            &protocol::Packet::TStoragePrepareForGc(gc_id),
+            &protocol::Packet::TStoragePrepareForSweep(gc_id),
         )?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::RStoragePrepareForGc) => (),
-            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForGc"),
+            Ok(protocol::Packet::RStoragePrepareForSweep) => (),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected RStoragePrepareForSweep"),
             Err(err) => return Err(err),
         }
         Ok(())
@@ -91,28 +91,28 @@ impl Engine for ExternalStorage {
         }
     }
 
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
-        protocol::write_begin_gc(&mut self.sock, &reachable)?;
+    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
+        protocol::write_begin_sweep(&mut self.sock, &reachable)?;
         std::mem::drop(reachable);
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::StorageGcComplete(stats)) => {
+            Ok(protocol::Packet::StorageSweepComplete(stats)) => {
                 let _ =
                     protocol::write_packet(&mut self.sock, &protocol::Packet::EndOfTransmission);
                 Ok(stats)
             }
-            Ok(_) => anyhow::bail!("unexpected packet response, expected StorageGcComplete"),
+            Ok(_) => anyhow::bail!("unexpected packet response, expected StorageSweepComplete"),
             Err(err) => Err(err),
         }
     }
 
-    fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
+    fn sweep_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
         protocol::write_packet(
             &mut self.sock,
-            &protocol::Packet::TStorageGcCompleted(gc_id),
+            &protocol::Packet::TStorageQuerySweepCompleted(gc_id),
         )?;
         match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE)? {
-            protocol::Packet::RStorageGcCompleted(completed) => Ok(completed),
-            _ => anyhow::bail!("unexpected packet response, expected RStorageGcCompleted"),
+            protocol::Packet::RStorageQuerySweepCompleted(completed) => Ok(completed),
+            _ => anyhow::bail!("unexpected packet response, expected RStorageSweepCompleted"),
         }
     }
 }

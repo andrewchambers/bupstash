@@ -15,16 +15,16 @@ pub trait Engine {
     // Get a chunk from the storage engine.
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error>;
 
-    // Set the gc_id for the following call to gc. This is a form
+    // Set the gc_id for the following call to sweep. This is a form
     // of two phase commit where we ensure the backend saves this
     // id so we can later check if it has completed.
-    fn prepare_for_gc(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
+    fn prepare_for_sweep(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
 
     // Remove all chunks not in the reachable set.
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error>;
+    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error>;
 
-    // Check that a previous invocation of gc has finished.
-    fn gc_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;
+    // Check that a previous invocation of sweep has finished.
+    fn sweep_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;
 
     // Add a chunk, potentially asynchronously. Does not overwrite existing
     // chunks with the same name to protect historic items from corruption.
