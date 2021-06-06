@@ -16,7 +16,7 @@ impl ExternalStorage {
         protocol::write_packet(
             &mut sock,
             &protocol::Packet::StorageConnect(protocol::StorageConnect {
-                protocol: "s-4".to_string(),
+                protocol: "s-5".to_string(),
                 path: path.to_string(),
             }),
         )?;
@@ -91,17 +91,28 @@ impl Engine for ExternalStorage {
         }
     }
 
-    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
+    fn sweep(
+        &mut self,
+        update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
+        reachable: abloom::ABloom,
+    ) -> Result<repository::GcStats, anyhow::Error> {
         protocol::write_begin_sweep(&mut self.sock, &reachable)?;
         std::mem::drop(reachable);
-        match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
-            Ok(protocol::Packet::StorageSweepComplete(stats)) => {
-                let _ =
-                    protocol::write_packet(&mut self.sock, &protocol::Packet::EndOfTransmission);
-                Ok(stats)
+        loop {
+            match protocol::read_packet(&mut self.sock, protocol::DEFAULT_MAX_PACKET_SIZE) {
+                Ok(protocol::Packet::Progress(protocol::Progress::SetMessage(msg))) => {
+                    update_progress_msg(msg)?;
+                }
+                Ok(protocol::Packet::StorageSweepComplete(stats)) => {
+                    let _ = protocol::write_packet(
+                        &mut self.sock,
+                        &protocol::Packet::EndOfTransmission,
+                    );
+                    return Ok(stats);
+                }
+                Ok(_) => anyhow::bail!("unexpected packet response, expected StorageSweepComplete"),
+                Err(err) => return Err(err),
             }
-            Ok(_) => anyhow::bail!("unexpected packet response, expected StorageSweepComplete"),
-            Err(err) => Err(err),
         }
     }
 

@@ -21,7 +21,11 @@ pub trait Engine {
     fn prepare_for_sweep(&mut self, gc_id: xid::Xid) -> Result<(), anyhow::Error>;
 
     // Remove all chunks not in the reachable set.
-    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error>;
+    fn sweep(
+        &mut self,
+        update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
+        reachable: abloom::ABloom,
+    ) -> Result<repository::GcStats, anyhow::Error>;
 
     // Check that a previous invocation of sweep has finished.
     fn sweep_completed(&mut self, gc_id: xid::Xid) -> Result<bool, anyhow::Error>;

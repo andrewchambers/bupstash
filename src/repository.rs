@@ -13,6 +13,7 @@ use super::oplog;
 use super::protocol;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs;
 use std::io::BufRead;
@@ -458,7 +459,6 @@ impl Repo {
         // as we never modify an open op.log or op.tx except via appending.
         let mut log_file = txn.open("repo.oplog")?;
         let log_meta = log_file.metadata()?;
-
         txn.end();
 
         if let Some(after) = after {
@@ -563,20 +563,15 @@ impl Repo {
                 .max(MIN_GC_BLOOM_SIZE);
 
         // Set of item ids we have walked before.
-        let mut xid_wset = std::collections::HashSet::with_capacity(65536);
+        let mut xid_wset = HashSet::with_capacity(65536);
         // Fixed size cache of addresses we have walked before.
         let mut address_wcache = acache::ACache::new(65536);
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
         let mut walk_item = |storage_engine: &mut dyn chunk_storage::Engine,
-                             item_id: Xid,
                              metadata: oplog::VersionedItemMetadata|
          -> Result<(), anyhow::Error> {
-            if !xid_wset.insert(item_id) {
-                return Ok(());
-            }
-
             // For garbage collection walking in order is not a concern,
             // we just need to ensure we touch each reachable node.
             //
@@ -611,29 +606,79 @@ impl Repo {
             Ok(())
         };
 
-        let mut walk_items = |storage_engine: &mut dyn chunk_storage::Engine,
-                              txn: &mut fstx::ReadTxn|
-         -> Result<(), anyhow::Error> {
-            for item in txn.read_dir("items")? {
-                let item = item?;
-                let item_id_string = item.file_name().to_string_lossy();
-                let item_id = Xid::parse(&item_id_string)?;
-                let metadata =
-                    serde_bare::from_slice(&txn.read(&format!("items/{}", item_id_string))?)?;
-                walk_item(storage_engine, item_id, metadata)?;
-            }
-            Ok(())
-        };
+        let mut walk_items =
+            |repo_path: &Path,
+             update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
+             storage_engine: &mut dyn chunk_storage::Engine|
+             -> Result<(), anyhow::Error> {
+                let txn = fstx::ReadTxn::begin(repo_path)?;
+
+                let mut items_dir_ents: Vec<_> = txn.read_dir("items")?.collect();
+                let mut reachable_items = HashSet::with_capacity(items_dir_ents.len());
+
+                for item in items_dir_ents.drain(..) {
+                    let item = item?;
+                    let item_id_string = item.file_name().to_string_lossy();
+                    let item_id = Xid::parse(&item_id_string)?;
+                    reachable_items.insert(item_id);
+                }
+
+                let update_delay_millis = std::time::Duration::from_millis(500);
+                let mut last_progress_update = std::time::Instant::now()
+                    .checked_sub(update_delay_millis)
+                    .unwrap();
+
+                let mut i = 1; // Start at 1, the progress update is item 1/N.
+
+                let log_file = txn.open("repo.oplog")?;
+                let log_meta = log_file.metadata()?;
+                // It's an explicit guarantee we make that op logs are only appended to, so
+                // we can get a consistent snapshot of the log by limiting our reads to
+                // what was present when we were in our read transaction.
+                let log_file = log_file.take(log_meta.size());
+                let mut log_file = std::io::BufReader::new(log_file);
+                // We close the transaction so other operations can continue concurrently
+                // while we are walking the log.
+                txn.end();
+
+                while !log_file.fill_buf()?.is_empty() {
+                    let op = serde_bare::from_reader(&mut log_file)?;
+                    if let oplog::LogOp::AddItem((item_id, metadata)) = op {
+                        if !reachable_items.contains(&item_id) {
+                            continue;
+                        }
+                        if !xid_wset.insert(item_id) {
+                            continue;
+                        }
+                        // Put a rate limit on updates but always show
+                        // the last item, this just looks better.
+                        if last_progress_update.elapsed() >= update_delay_millis
+                            || i == reachable_items.len()
+                        {
+                            last_progress_update = std::time::Instant::now();
+                            update_progress_msg(format!(
+                                "walking item {}/{}...",
+                                i,
+                                reachable_items.len()
+                            ))?;
+                        }
+                        walk_item(storage_engine, metadata)?;
+                        i += 1;
+                    }
+                }
+
+                Ok(())
+            };
 
         // Walk all reachable data WITHOUT locking the repository.
         // We should be able to walk most of the data except data
         // that arrives between the end of this walk and us locking
         // the repository.
-        {
-            let mut txn = fstx::ReadTxn::begin(&self.repo_path)?;
-            walk_items(&mut *self.storage_engine, &mut txn)?;
-            txn.end();
-        }
+        walk_items(
+            &self.repo_path,
+            update_progress_msg,
+            &mut *self.storage_engine,
+        )?;
 
         // From this point on, nobody else is modifying the repository.
         update_progress_msg("getting exclusive repository lock...".to_string())?;
@@ -643,8 +688,8 @@ impl Repo {
         // this marks a sweep in progress for this gc_generation such that it
         // can't be removed until the storage engine confirms it has terminated.
         // It *MUST* be done before the gc_dirty flag is set. This then operates
-        // as a two phase commit preventing a new put from happening in a storage
-        // engine is still happening in an external storage plugin process.
+        // as a two phase commit preventing a new put from happening before the
+        // external plugin process has finished sweeping.
         self.storage_engine.prepare_for_sweep(gc_generation)?;
 
         update_progress_msg("compacting repository log...".to_string())?;
@@ -700,11 +745,11 @@ impl Repo {
         // Now that we have gc_dirty marked, and have effectively locked the storage
         // engine, we walk all the items again, this will be fast for items we already walked, and
         // lets us pick up any new items that arrived between the old walk and before we marked gc_dirty.
-        {
-            let mut txn = fstx::ReadTxn::begin(&self.repo_path)?;
-            walk_items(&mut *self.storage_engine, &mut txn)?;
-            txn.end();
-        }
+        walk_items(
+            &self.repo_path,
+            update_progress_msg,
+            &mut *self.storage_engine,
+        )?;
 
         if std::env::var("BUPSTASH_DEBUG_GC").is_ok() {
             eprintln!("dbg_gc_estimated_chunk_count={}", estimated_chunk_count);
@@ -736,8 +781,7 @@ impl Repo {
         std::mem::drop(xid_wset);
         std::mem::drop(address_wcache);
 
-        update_progress_msg("deleting unused chunks...".to_string())?;
-        let stats = self.storage_engine.sweep(reachable)?;
+        let stats = self.storage_engine.sweep(update_progress_msg, reachable)?;
 
         // We are now done and can stop, mark the gc as complete.
         {
