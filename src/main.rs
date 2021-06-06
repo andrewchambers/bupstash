@@ -32,6 +32,7 @@ pub mod xtar;
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
@@ -954,9 +955,13 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("data sources should be a file, directory, or command (use '-' for stdin).");
     } else if source_args.len() == 1 {
         if source_args[0] == "-" {
+            // Dup stdin so we can read the data from an unbuffered file.
+            let inf = unsafe {
+                std::fs::File::from_raw_fd(nix::unistd::dup(std::io::stdin().as_raw_fd())?)
+            };
             data_source = client::DataSource::Readable {
                 description: "<stdin>".to_string(),
-                data: Box::new(Box::new(std::io::stdin())),
+                data: Box::new(inf),
             };
         } else {
             let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
@@ -1290,6 +1295,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
+    // rust line buffers stdin and stdout unconditionally, so bypass it.
+    let mut stdout_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDOUT_FILENO) };
+
     client::request_data_stream(
         client::DataRequestContext {
             primary_key_id,
@@ -1303,8 +1311,11 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         content_index,
         &mut serve_out,
         &mut serve_in,
-        &mut std::io::stdout().lock(),
+        &mut stdout_unbuffered,
     )?;
+
+    // Prevent stdout from being closed prematurely.
+    stdout_unbuffered.into_raw_fd();
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -2235,6 +2246,10 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         );
     }
 
+    // rust line buffers stdin and stdout unconditionally, so bypass it.
+    let mut stdin_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDIN_FILENO) };
+    let mut stdout_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDOUT_FILENO) };
+
     server::serve(
         server::ServerConfig {
             allow_init,
@@ -2245,9 +2260,13 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             allow_list,
             repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
         },
-        &mut std::io::stdin().lock(),
-        &mut std::io::stdout().lock(),
+        &mut stdin_unbuffered,
+        &mut stdout_unbuffered,
     )?;
+
+    // Prevent stdin/stdout form being closed.
+    stdin_unbuffered.into_raw_fd();
+    stdout_unbuffered.into_raw_fd();
 
     Ok(())
 }
