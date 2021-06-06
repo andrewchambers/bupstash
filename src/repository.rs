@@ -303,22 +303,21 @@ impl Repo {
                 // 6. The delete object message gets processed by the backend.
                 //
                 // To solve this we:
-                // - explicitly start a gc hold with an id in the storage engine.
+                // - explicitly start a sweep hold with an id in the storage engine.
                 // - We then mark the repository as gc-dirty=id.
-                // - we then save the gc hold id as gc-hold in the metadata table.
-                // - We finally signal to the storage engine it is safe to begin gc deletions.
+                // - We finally signal to the storage engine it is safe to begin sweeping deletions.
                 // - when deletions finish successfully, we set can delete the gc-dirty metadata.
                 //
-                // If during this process, bupstash crashes or is terminated gc-dirty will be set,
+                // If during this process, bupstash terminates, gc-dirty will be set.
                 // We cannot safely perform and write or gc operations until we are sure that the interrupted
                 // gc has safely terminated in the storage engine.
                 //
-                // To continue safely gc or writes we must check the gc has finished, we must:
+                // To continue gc or write operations we must check the sweep has finished, we must:
                 //
                 //  - ensure we have a write or exclusive repository lock.
                 //  - check gc-dirty is not set, we can then continue with no problems.
                 //  - if gc-dirty is set, we must explicitly wait for the storage engine
-                //    backend to tell us our gc operation is complete.
+                //    backend to tell us our sweep operation is complete.
                 //  - We can finally remove the gc-dirty marker.
 
                 let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
@@ -331,7 +330,7 @@ impl Repo {
                         const MAX_DELAY: u64 = 10_000;
                         let mut delay = 500;
                         loop {
-                            if self.storage_engine.gc_completed(dirty_generation)? {
+                            if self.storage_engine.sweep_completed(dirty_generation)? {
                                 txn.add_rm("meta/gc_dirty");
                                 break;
                             }
@@ -555,11 +554,6 @@ impl Repo {
 
         let gc_generation = Xid::new();
 
-        // Signal to the storage engine a gc is about to begin, this involves marking a gc
-        // in progress for this gc_generation such that it can't be removed until the
-        // storage engine confirms it has terminated.
-        self.storage_engine.prepare_for_gc(gc_generation)?;
-
         update_progress_msg("walking reachable data...".to_string())?;
 
         let estimated_chunk_count = self.storage_engine.estimate_chunk_count()?;
@@ -644,6 +638,14 @@ impl Repo {
         // From this point on, nobody else is modifying the repository.
         update_progress_msg("getting exclusive repository lock...".to_string())?;
         self.alter_lock_mode(RepoLockMode::Exclusive)?;
+
+        // Signal to the storage engine a sweep is about to begin,
+        // this marks a sweep in progress for this gc_generation such that it
+        // can't be removed until the storage engine confirms it has terminated.
+        // It *MUST* be done before the gc_dirty flag is set. This then operates
+        // as a two phase commit preventing a new put from happening in a storage
+        // engine is still happening in an external storage plugin process.
+        self.storage_engine.prepare_for_sweep(gc_generation)?;
 
         update_progress_msg("compacting repository log...".to_string())?;
         {
@@ -735,7 +737,7 @@ impl Repo {
         std::mem::drop(address_wcache);
 
         update_progress_msg("deleting unused chunks...".to_string())?;
-        let stats = self.storage_engine.gc(reachable)?;
+        let stats = self.storage_engine.sweep(reachable)?;
 
         // We are now done and can stop, mark the gc as complete.
         {

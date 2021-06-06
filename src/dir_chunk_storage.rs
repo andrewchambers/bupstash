@@ -360,7 +360,7 @@ impl Engine for DirStorage {
         self.sync_write_workers()
     }
 
-    fn prepare_for_gc(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
+    fn prepare_for_sweep(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
         Ok(())
     }
 
@@ -368,7 +368,7 @@ impl Engine for DirStorage {
         Ok(std::fs::read_dir(&self.dir_path)?.count().try_into()?)
     }
 
-    fn gc(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
+    fn sweep(&mut self, reachable: abloom::ABloom) -> Result<repository::GcStats, anyhow::Error> {
         self.stop_workers();
 
         // Collect removals into memory first so we don't have to
@@ -416,8 +416,8 @@ impl Engine for DirStorage {
         })
     }
 
-    fn gc_completed(&mut self, _gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
-        // The fact this has been called means the gc must have finished.
+    fn sweep_completed(&mut self, _gc_id: xid::Xid) -> Result<bool, anyhow::Error> {
+        // The fact this has been called means the sweep must have finished.
         // For the dir storage engine we can only call this if we have an exclusive
         // repository lock.
         Ok(true)
