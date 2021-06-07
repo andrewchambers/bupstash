@@ -10,28 +10,23 @@ pub fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>, utc_timestamps: bool
 }
 
 pub fn format_size(n: u64) -> String {
-    if n > 1_000_000_000_000_000 {
-        format!(
-            "{}.{:0>2}PB",
-            n / 1_000_000_000_000_000,
-            (n % 1_000_000_000_000_000) / 10_000_000_000_000
-        )
-    } else if n > 1_000_000_000_000 {
-        format!(
-            "{}.{:0>2}TB",
-            n / 1_000_000_000_000,
-            (n % 1_000_000_000_000 / 10_000_000_000)
-        )
-    } else if n > 1_000_000_000 {
-        format!(
-            "{}.{:0>2}GB",
-            n / 1_000_000_000,
-            (n % 1_000_000_000) / 10_000_000
-        )
-    } else if n > 1_000_000 {
-        format!("{}.{:0>2}MB", n / 1_000_000, (n % 1_000_000) / 10_000)
-    } else if n > 1_000 {
-        format!("{}.{:0>2}kB", n / 1_000, (n % 1_000) / 10)
+    // Binary units, not SI units.
+    const K: u64 = 1024;
+    const M: u64 = 1024 * K;
+    const G: u64 = 1024 * M;
+    const T: u64 = 1024 * G;
+    const P: u64 = 1024 * T;
+
+    if n > P {
+        format!("{}.{:0>2}PiB", n / P, (n % P) / (P / 100))
+    } else if n > T {
+        format!("{}.{:0>2}TiB", n / T, (n % T) / (T / 100))
+    } else if n > G {
+        format!("{}.{:0>2}GiB", n / G, (n % G) / (G / 100))
+    } else if n > M {
+        format!("{}.{:0>2}MiB", n / M, (n % M) / (M / 100))
+    } else if n > K {
+        format!("{}.{:0>2}KiB", n / K, (n % K) / (K / 100))
     } else {
         format!("{}B", n)
     }
