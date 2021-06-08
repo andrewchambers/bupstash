@@ -1030,10 +1030,9 @@ impl std::io::Read for TeeHashFileReader {
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
-
         fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
             // Try with O_NOATIME first; if it fails, e.g. because the user we
-            // run as is not the file owner, retry without. See #106.
+            // run as is not the file owner, retry without..
             let f = std::fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOATIME)
@@ -1049,15 +1048,14 @@ cfg_if::cfg_if! {
                     }
                 })?;
 
-            // For linux at least, shift file pages to the tail of the page cache, allowing
-            // the kernel to quickly evict these pages. This works well for the case of system
-            // backups, where we don't to trash the users current cache.
-            // One source on how linux treats this hint - https://lwn.net/Articles/449420
+            // We would like to use something like POSIX_FADV_NOREUSE to preserve
+            // the user page cache... this is actually a NOOP on linux.
+            // Instead we can at least boost performance by hinting our access pattern.
             match nix::fcntl::posix_fadvise(
                 f.as_raw_fd(),
                 0,
                 0,
-                nix::fcntl::PosixFadviseAdvice::POSIX_FADV_NOREUSE,
+                nix::fcntl::PosixFadviseAdvice::POSIX_FADV_SEQUENTIAL
             ) {
                 Ok(_) => (),
                 Err(err) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("fadvise failed: {}", err))),
@@ -1065,10 +1063,8 @@ cfg_if::cfg_if! {
 
             Ok(f)
         }
-
-    // XXX More platforms should support NOATIME or at the very least POSIX_FADV_NOREUSE
+    // XXX More platforms should support NOATIME and/or posix_fadvise
     } else {
-
         fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
             let f = std::fs::OpenOptions::new()
                 .read(true)
