@@ -1,0 +1,94 @@
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build-release:
+    strategy:
+      matrix:
+        include:
+        - build: linux
+          arch: x86_64
+          os: ubuntu-latest
+          musl_toolchain: x86_64-linux-musl
+          rust_target: x86_64-unknown-linux-musl
+          rust_linker_var: CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER
+        - build: linux
+          arch: aarch64
+          os: ubuntu-latest
+          musl_toolchain: aarch64-linux-musl
+          rust_target: aarch64-unknown-linux-musl
+          rust_linker_var: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER
+
+    name: Release (${{ matrix.build }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Install musl toolchain (linux)
+      if: matrix.build == 'linux'
+      shell: bash
+      run: |
+        wget http://musl.cc/${{ matrix.musl_toolchain }}-cross.tgz
+        tar -xf ${{ matrix.musl_toolchain }}-cross.tgz
+        echo "$(pwd)/${{ matrix.musl_toolchain }}-cross/bin" >> $GITHUB_PATH
+        echo "${{ matrix.rust_linker_var }}=${{ matrix.musl_toolchain }}-ld" >> $GITHUB_ENV
+
+    - name: Print musl version
+      run: |
+        ${{ matrix.musl_toolchain }}-gcc  --version
+
+    - name: Compile libsodium for static linking
+      shell: bash
+      run: |
+        wget --content-disposition https://github.com/jedisct1/libsodium/archive/refs/tags/1.0.18.tar.gz
+        tar -xf libsodium-1.0.18.tar.gz
+        cd libsodium-1.0.18
+        mkdir target
+        ./autogen.sh
+        ./configure --host ${{ matrix.musl_toolchain }} --prefix=$(pwd)/target --enable-shared=no
+        make -j$(nproc)
+        make install
+        echo "PKG_CONFIG_PATH=$(pwd)/target/lib/pkgconfig" >> $GITHUB_ENV
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        profile: minimal
+        override: true
+        target: ${{ matrix.rust_target }}
+
+    - name: Print Rust version
+      run: |
+        rustc --version
+        cargo version
+
+    - name: Build release binary
+      env:
+        PKG_CONFIG_ALLOW_CROSS: 1
+        SODIUM_STATIC: 1
+        RUST_BACKTRACE: 1
+        CC: ${{ matrix.musl_toolchain }}-gcc
+      run: cargo build --release --target ${{ matrix.rust_target }}
+
+    - name: Strip release binary (linux)
+      if: matrix.build == 'linux'
+      run: ${{ matrix.musl_toolchain}}-strip "target/${{ matrix.rust_target }}/release/bupstash"
+
+    - name: Set binary name
+      shell: bash
+      run: |
+        echo "BINARY_NAME=bupstash-${GITHUB_REF#refs/tags/}-${{ matrix.build }}-${{ matrix.arch }}" >> $GITHUB_ENV
+
+    - name: Rename release binary
+      run: mv "target/${{ matrix.rust_target }}/release/bupstash" ${{ env.BINARY_NAME }}
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.BINARY_NAME }}
