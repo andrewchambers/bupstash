@@ -488,6 +488,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         .add_stat_cache_data(&hash[..], &cache_entry)?;
                 }
                 None => {
+                    let mut smear_detected = false;
                     let mut dir_data_size: u64 = 0;
                     let mut addresses = Vec::new();
 
@@ -520,10 +521,14 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         if index_ent.is_file() {
                             let mut f = match open_file_for_sending(&ent_path) {
                                 Ok(f) => TeeHashFileReader::new(f),
-                                // The file was deleted, treat it like it did not exist.
-                                // It's unlikely this stat cache entry will hit again as
-                                // the ctime definitely would change in this case.
-                                Err(err) if likely_smear_error(&err) => continue 'add_dir_ents,
+
+                                Err(err) if likely_smear_error(&err) => {
+                                    // This can happen if the file was deleted,
+                                    // or the filesystem was unmounted during upload.
+                                    // We simply skip this entry but don't cache the result.
+                                    smear_detected = true;
+                                    continue 'add_dir_ents;
+                                }
                                 Err(err) => {
                                     anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
                                 }
@@ -531,9 +536,13 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
                             let file_len = self.write_data(&mut f, &mut on_data_chunk)?;
 
-                            // The true size is just what we read from disk. In the case
-                            // of snapshotting a modified file we can't guarantee consistency anyway.
-                            index_ent.size.0 = file_len;
+                            if file_len != index_ent.size.0 {
+                                // Don't cache a smeared entry that is immediately invalidated by ctime.
+                                smear_detected = true;
+                                // The true size is what we read from disk.
+                                index_ent.size.0 = file_len;
+                            }
+
                             index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
                             ent_data_chunk_end_idx =
                                 self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
@@ -569,7 +578,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         on_data_chunk(&addr, boundary_chunk_len);
                     }
 
-                    if self.send_log_session.is_some() && use_stat_cache {
+                    if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
                         self.send_log_session
                             .as_ref()
                             .unwrap()
