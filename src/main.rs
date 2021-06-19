@@ -414,7 +414,7 @@ fn cli_to_opened_serve_process(
     progress: &indicatif::ProgressBar,
     open_mode: protocol::OpenMode,
 ) -> Result<ServeProcess, anyhow::Error> {
-    let mut retry_duration = 2;
+    let mut retry_delay_secs = 2;
     let mut retry_count: u64 = 0;
 
     loop {
@@ -449,8 +449,8 @@ fn cli_to_opened_serve_process(
                             message
                         ));
                     }
-                    std::thread::sleep(std::time::Duration::from_secs(retry_duration));
-                    retry_duration = (retry_duration * 2).min(180);
+                    std::thread::sleep(std::time::Duration::from_secs(retry_delay_secs));
+                    retry_delay_secs = (retry_delay_secs * 2).min(180);
                     retry_count += 1;
                     if retry_count < 50 {
                         continue;
