@@ -1061,7 +1061,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let send_log = if matches.opt_present("no-send-log") {
         None
     } else {
-        progress.set_message(&"acquiring exclusive lock on send-log...");
+        progress.set_message(&"acquiring exclusive lock on send log...");
         match matches.opt_str("send-log") {
             Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
             None => match std::env::var_os("BUPSTASH_SEND_LOG") {
