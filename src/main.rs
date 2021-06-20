@@ -1082,7 +1082,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
-    let mut ctx = client::SendContext {
+
+    let ctx = client::SendContext {
         progress: progress.clone(),
         compression,
         checkpoint_bytes,
@@ -1100,7 +1101,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     let (id, stats) = client::send(
-        &mut ctx,
+        ctx,
         &mut serve_out,
         &mut serve_in,
         send_log,

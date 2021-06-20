@@ -134,8 +134,7 @@ impl Drop for BoxKey {
 
 #[inline(always)]
 pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedKey) -> BoxKey {
-    let mut unmixed_key_bytes: [u8; BOX_BEFORENMBYTES] =
-        unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+    let mut unmixed_key_bytes = [0; BOX_BEFORENMBYTES];
     if unsafe {
         sodium::crypto_box_curve25519xchacha20poly1305_beforenm(
             unmixed_key_bytes.as_mut_ptr(),

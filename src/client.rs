@@ -120,6 +120,7 @@ struct SendSession<'a, 'b, 'c> {
     data_size: u64,
     r: &'c mut dyn std::io::Read,
     w: &'c mut dyn std::io::Write,
+    scratch_buf: Vec<u8>,
 }
 
 impl<'a, 'b, 'c> htree::Sink for SendSession<'a, 'b, 'c> {
@@ -243,17 +244,18 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         data: &mut dyn std::io::Read,
         on_chunk: &mut dyn FnMut(&Address, usize),
     ) -> Result<u64, anyhow::Error> {
-        let mut buf: [u8; 512 * 1024] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         let mut n_written: u64 = 0;
         loop {
-            match data.read(&mut buf) {
+            match data.read(&mut self.scratch_buf[..]) {
                 Ok(0) => {
                     return Ok(n_written);
                 }
                 Ok(n_read) => {
                     let mut n_chunked = 0;
                     while n_chunked != n_read {
-                        let (n, c) = self.data_chunker.add_bytes(&buf[n_chunked..n_read]);
+                        let (n, c) = self
+                            .data_chunker
+                            .add_bytes(&self.scratch_buf[n_chunked..n_read]);
                         n_chunked += n;
                         if let Some(chunk_data) = c {
                             let data_len = chunk_data.len();
@@ -714,7 +716,7 @@ pub struct SendStats {
 }
 
 pub fn send(
-    ctx: &mut SendContext,
+    mut ctx: SendContext,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     mut send_log: Option<sendlog::SendLog>,
@@ -767,6 +769,7 @@ pub fn send(
         data_size: 0,
         w,
         r,
+        scratch_buf: vec![0; 512 * 1024],
     };
 
     match data {
@@ -1119,7 +1122,7 @@ pub fn request_data_stream(
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
     if let Some(ref pick) = pick {
-        if !pick.is_subtar && pick.data_chunk_ranges.is_empty() {
+        if pick.index.is_none() && pick.data_chunk_ranges.is_empty() {
             return Ok(());
         }
     }
@@ -1536,8 +1539,8 @@ fn receive_partial_htree(
         Ok(None)
     };
 
-    if pick.is_subtar {
-        write_indexed_data_as_tarball(&mut read_data, &pick.index, out)?;
+    if let Some(ref index) = pick.index {
+        write_indexed_data_as_tarball(&mut read_data, index, out)?;
     } else {
         while let Some(data) = read_data()? {
             out.write_all(&data)?;
