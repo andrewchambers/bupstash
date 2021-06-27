@@ -14,13 +14,16 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
-use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
+use std::{
+    cell::{Cell, RefCell},
+    fs::DirEntry,
+};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
@@ -387,29 +390,46 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 )
             });
 
-            let mut index_ents = Vec::new();
+            // Calls `stat()` on a directory entry.
+            let stat_dirent =
+                |entry: DirEntry| -> Option<anyhow::Result<(DirEntry, std::fs::Metadata)>> {
+                    let ent_path = entry.path();
 
-            'collect_dir_ents: for entry in dir_ents {
-                let ent_path = entry.path();
-
-                for excl in exclusions {
-                    if excl.matches_path(&ent_path) {
-                        continue 'collect_dir_ents;
+                    // Check if file is excluded.
+                    for excl in exclusions.iter() {
+                        if excl.matches_path(&ent_path) {
+                            return None;
+                        }
                     }
-                }
 
-                let metadata = match entry.metadata() {
-                    Ok(metadata) => metadata,
-                    // If the entry was deleted from under us, treat it as if it was excluded.
-                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                    Err(err) => anyhow::bail!(
-                        "unable to fetch metadata for {}: {}",
-                        ent_path.display(),
-                        err
-                    ),
+                    // Perform the stat.
+                    match entry.metadata() {
+                        Ok(metadata) => Some(Ok((entry, metadata))),
+                        // If the entry was deleted from under us, treat it as if it was excluded.
+                        Err(err) if likely_smear_error(&err) => None,
+                        Err(err) => Some(Err(anyhow::anyhow!(
+                            "unable to fetch metadata for {}: {}",
+                            ent_path.display(),
+                            err
+                        ))),
+                    }
                 };
 
-                // There is no meaningful way to backup a unix socket.
+            // Do statting ahead of collecting, so that we can parallelise
+            // it in the future.
+            // On Linux, there is no asynchronous variant of the `stat()`
+            // syscall (except `io_uring`), so threads need to be used.
+            let dir_ents_with_metadata: Vec<(DirEntry, std::fs::Metadata)> = dir_ents
+                .into_iter() // We need to move the data into the `stat_dirent` closure.
+                .map(stat_dirent)
+                .flatten()
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut index_ents = Vec::new();
+
+            'collect_dir_ents: for (entry, metadata) in dir_ents_with_metadata {
+                let ent_path = entry.path();
+
                 if metadata.file_type().is_socket() {
                     continue 'collect_dir_ents;
                 }
