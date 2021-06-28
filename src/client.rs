@@ -14,6 +14,7 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
+use pipeliner::Pipeline;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
@@ -23,6 +24,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{
     cell::{Cell, RefCell},
     fs::DirEntry,
+    sync::Arc,
 };
 
 cfg_if::cfg_if! {
@@ -290,7 +292,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         &mut self,
         base: &std::path::Path,
         paths: &[std::path::PathBuf],
-        exclusions: &[glob::Pattern],
+        exclusions: &Arc<[glob::Pattern]>,
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
@@ -390,9 +392,12 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 )
             });
 
+            // Cloned `Arc` that we can use from our static `stat_dirent` closure.
+            let exclusions = exclusions.clone();
+
             // Calls `stat()` on a directory entry.
             let stat_dirent =
-                |entry: DirEntry| -> Option<anyhow::Result<(DirEntry, std::fs::Metadata)>> {
+                move |entry: DirEntry| -> Option<anyhow::Result<(DirEntry, std::fs::Metadata)>> {
                     let ent_path = entry.path();
 
                     // Check if file is excluded.
@@ -415,12 +420,13 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     }
                 };
 
-            // Do statting ahead of collecting, so that we can parallelise
-            // it in the future.
+            // Do statting in parallel.
             // On Linux, there is no asynchronous variant of the `stat()`
             // syscall (except `io_uring`), so threads need to be used.
             let dir_ents_with_metadata: Vec<(DirEntry, std::fs::Metadata)> = dir_ents
                 .into_iter() // We need to move the data into the `stat_dirent` closure.
+                // TODO: Figure out why `pipeliner` spams `thread_yield()` syscall.
+                .with_threads(100)
                 .map(stat_dirent)
                 .flatten()
                 .collect::<Result<Vec<_>, _>>()?;
@@ -710,7 +716,8 @@ pub enum DataSource {
     Filesystem {
         base: std::path::PathBuf,
         paths: Vec<std::path::PathBuf>,
-        exclusions: Vec<glob::Pattern>,
+        // Arc so that threads can check exclusions independently.
+        exclusions: Arc<[glob::Pattern]>,
     },
 }
 

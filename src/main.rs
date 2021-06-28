@@ -985,7 +985,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 data_source = client::DataSource::Filesystem {
                     base: input_path.clone(),
                     paths: vec![input_path],
-                    exclusions,
+                    exclusions: exclusions.into_boxed_slice().into(),
                 };
             } else if md.is_file() {
                 if default_tags {
@@ -1048,7 +1048,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         data_source = client::DataSource::Filesystem {
             base: base_path,
             paths: pruned_paths,
-            exclusions,
+            exclusions: exclusions.into_boxed_slice().into(),
         };
     };
 
