@@ -48,6 +48,7 @@ in a backwards incompatible way unless there is *very* strong justification. Fut
 Initialize a new Bupstash repository via ssh.
 ```
 $ export BUPSTASH_REPOSITORY=ssh://$SERVER/home/me/backups
+$ # Ensure bupstash is on the $PATH of both machines.
 $ bupstash init
 ```
 

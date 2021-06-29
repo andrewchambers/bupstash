@@ -1,7 +1,14 @@
+// This file contains code to perform repository migrations.
+// The code here is often deliberately duplicated and avoids dependencies
+// on other modules so that the upgrade migration code can avoid churn with
+// other changes.
 use super::fstx;
 use super::fsutil;
 use super::xid;
 use std::path::Path;
+
+// This lock context tag is duplicated from repository to make migrate a stand alone module.
+const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
 
 fn repo_upgrade_2_to_3(
     conn: &mut rusqlite::Connection,
@@ -173,5 +180,35 @@ pub fn repo_upgrade_to_5(
         );
     }
 
+    Ok(())
+}
+
+pub fn repo_upgrade_to_5_to_6(repo_path: &Path) -> Result<(), anyhow::Error> {
+    // This upgrade mainly just prevents clients from seeing index entries they
+    // cannot decode... repositories of version 5 and 6 are compatible except
+    // for an additional index entry type.
+    // This upgrade simply increments the schema version.
+    eprintln!("upgrading repository schema from version 5 to version 6...");
+
+    eprintln!("getting exclusive repository lock for upgrade...");
+    let lock_path = {
+        let mut p = repo_path.to_owned();
+        p.push("repo.lock");
+        p
+    };
+    let lock = fsutil::FileLock::get_exclusive(REPO_LOCK_CTX_TAG, &lock_path)?;
+
+    let mut fstx = fstx::WriteTxn::begin(&repo_path)?;
+    let schema_version = fstx.read_string("meta/schema_version")?;
+    if schema_version != "5" {
+        anyhow::bail!(
+            "unable to upgrade, expected schema version 5, got {}",
+            schema_version
+        )
+    }
+    fstx.add_write("meta/schema_version", "6".to_string().into_bytes());
+    fstx.commit()?;
+    eprintln!("repository upgrade successful...");
+    std::mem::drop(lock);
     Ok(())
 }

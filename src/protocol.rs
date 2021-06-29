@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use thiserror::Error;
 
+pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "9";
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]

@@ -19,7 +19,7 @@ pub struct SendLogSession<'a> {
 pub struct StatCacheEntry {
     pub total_size: u64,
     pub addresses: Vec<Address>,
-    pub base_offsets: Vec<index::IndexEntryOffsets>,
+    pub data_cursors: Vec<index::RelativeDataCursor>,
     pub hashes: Vec<index::ContentCryptoHash>,
 }
 
@@ -386,7 +386,7 @@ mod tests {
                     &StatCacheEntry {
                         total_size: 123,
                         addresses: vec![],
-                        base_offsets: vec![],
+                        data_cursors: vec![],
                         hashes: vec![],
                     },
                 )
@@ -454,7 +454,7 @@ mod tests {
                     &StatCacheEntry {
                         total_size: 123,
                         addresses: vec![],
-                        base_offsets: vec![],
+                        data_cursors: vec![],
                         hashes: vec![],
                     },
                 )
@@ -519,7 +519,7 @@ mod tests {
                     &StatCacheEntry {
                         total_size: 123,
                         addresses: vec![],
-                        base_offsets: vec![],
+                        data_cursors: vec![],
                         hashes: vec![],
                     },
                 )
@@ -539,7 +539,7 @@ mod tests {
                     &StatCacheEntry {
                         total_size: 123,
                         addresses: vec![],
-                        base_offsets: vec![],
+                        data_cursors: vec![],
                         hashes: vec![],
                     },
                 )

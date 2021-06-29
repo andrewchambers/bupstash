@@ -23,7 +23,7 @@ inc_result () {
 }
 
 thrash_worker () {
-  for i in $(seq 50)
+  for i in $(seq 30)
   do
     expected=$(uuidgen)
     
@@ -85,7 +85,7 @@ bupstash_serve_chaos_worker () {
 }
 
 # Outer loop is to control the size of the gc set.
-for i in $(seq 50)
+for i in $(seq 30)
 do
 
   bupstash rm --allow-many thrash_test=yes >&2

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 // N.B.
-// fsutil file locks uses fcntl style locks, which have error prone semantics,
+// fsutil file locks use fcntl style locks. These have error prone semantics,
 // but are widely supported. The semantics mean a lock is process global and
 // you can't open a file with lock multiple times from the same process and expect
 // them to block eachother. To mitigate this problem, bupstash creates a global

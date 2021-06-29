@@ -48,7 +48,7 @@ pub fn open_repository(
         w,
         &Packet::TOpenRepository(TOpenRepository {
             open_mode,
-            protocol_version: "8".to_string(),
+            protocol_version: CURRENT_REPOSITORY_PROTOCOL_VERSION.to_string(),
         }),
     )?;
 
@@ -301,7 +301,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             anyhow::bail!("{} is not a directory", base.display());
         }
 
-        let ent = index::VersionedIndexEntry::V2(
+        let ent = index::VersionedIndexEntry::V3(
             dir_ent_to_index_ent(
                 &mut dev_normalizer,
                 &base,
@@ -345,7 +345,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
                 initial_paths.remove(&cur_dir);
                 let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-                let ent = index::VersionedIndexEntry::V2(
+                let ent = index::VersionedIndexEntry::V3(
                     dir_ent_to_index_ent(
                         &mut dev_normalizer,
                         &cur_dir,
@@ -460,9 +460,6 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
             match cache_lookup {
                 Some(cache_entry) => {
-                    let dir_data_chunk_idx =
-                        self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
-
                     let mut data_tw = self.data_tw.take().unwrap();
                     for addr in &cache_entry.addresses {
                         data_tw.add_data_addr(self, &addr)?;
@@ -471,15 +468,12 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     self.data_size += cache_entry.total_size;
                     self.ctx.progress.inc(cache_entry.total_size);
 
-                    assert!(cache_entry.base_offsets.len() == index_ents.len());
                     assert!(cache_entry.hashes.len() == index_ents.len());
 
                     for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
                         index_ent.data_hash = cache_entry.hashes[i];
-                        index_ent.offsets = cache_entry.base_offsets[i];
-                        index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
-                        index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
-                        self.write_idx_ent(&index::VersionedIndexEntry::V2(index_ent))?;
+                        index_ent.data_cursor = cache_entry.data_cursors[i];
+                        self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
                     }
 
                     // Re-add the cache entry so it isn't invalidated.
@@ -503,22 +497,20 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
                     let cache_vec_capacity = if use_stat_cache { index_ents.len() } else { 0 };
 
-                    let mut dir_index_offsets: Vec<index::IndexEntryOffsets> =
+                    let mut data_cursors: Vec<index::RelativeDataCursor> =
                         Vec::with_capacity(cache_vec_capacity);
 
                     let mut content_hashes: Vec<index::ContentCryptoHash> =
                         Vec::with_capacity(cache_vec_capacity);
 
-                    let dir_data_chunk_idx =
-                        self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+                    let n_idx_ents = index_ents.len();
 
-                    'add_dir_ents: for (ent_path, mut index_ent) in index_ents.drain(..) {
-                        let ent_data_chunk_idx =
+                    'add_dir_ents: for (i, (ent_path, mut index_ent)) in
+                        index_ents.drain(..).enumerate()
+                    {
+                        let ent_data_chunk_start_idx =
                             self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
-                        let ent_data_chunk_offset = self.data_chunker.buffered_count() as u64;
-
-                        let mut ent_data_chunk_end_idx = ent_data_chunk_idx;
-                        let mut ent_data_chunk_end_offset = ent_data_chunk_offset;
+                        let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;
 
                         if index_ent.is_file() {
                             let mut f = match open_file_for_sending(&ent_path) {
@@ -546,38 +538,36 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             }
 
                             index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
-                            ent_data_chunk_end_idx =
-                                self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
-                            ent_data_chunk_end_offset = self.data_chunker.buffered_count() as u64;
                         }
 
-                        let cur_offsets = index::IndexEntryOffsets {
-                            data_chunk_idx: serde_bare::Uint(
-                                ent_data_chunk_idx - dir_data_chunk_idx,
+                        if i == n_idx_ents - 1 {
+                            // Force a new chunk for the final directory entry so we can
+                            // cache whole directories as a single block.
+                            if let Some(boundary_chunk) = self.data_chunker.force_split() {
+                                let boundary_chunk_len = boundary_chunk.len();
+                                let addr = self.add_data_chunk(boundary_chunk)?;
+                                on_data_chunk(&addr, boundary_chunk_len);
+                            }
+                        }
+
+                        let ent_data_chunk_end_idx =
+                            self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
+                        let ent_end_byte_offset = self.data_chunker.buffered_count() as u64;
+
+                        index_ent.data_cursor = index::RelativeDataCursor {
+                            chunk_delta: serde_bare::Uint(
+                                ent_data_chunk_end_idx - ent_data_chunk_start_idx,
                             ),
-                            data_chunk_end_idx: serde_bare::Uint(
-                                ent_data_chunk_end_idx - dir_data_chunk_idx,
-                            ),
-                            data_chunk_offset: serde_bare::Uint(ent_data_chunk_offset),
-                            data_chunk_end_offset: serde_bare::Uint(ent_data_chunk_end_offset),
+                            start_byte_offset: serde_bare::Uint(ent_start_byte_offset),
+                            end_byte_offset: serde_bare::Uint(ent_end_byte_offset),
                         };
 
                         if use_stat_cache {
-                            dir_index_offsets.push(cur_offsets);
+                            data_cursors.push(index_ent.data_cursor);
                             content_hashes.push(index_ent.data_hash)
                         }
 
-                        index_ent.offsets = cur_offsets;
-                        index_ent.offsets.data_chunk_idx.0 += dir_data_chunk_idx;
-                        index_ent.offsets.data_chunk_end_idx.0 += dir_data_chunk_idx;
-
-                        self.write_idx_ent(&index::VersionedIndexEntry::V2(index_ent))?;
-                    }
-
-                    if let Some(boundary_chunk) = self.data_chunker.force_split() {
-                        let boundary_chunk_len = boundary_chunk.len();
-                        let addr = self.add_data_chunk(boundary_chunk)?;
-                        on_data_chunk(&addr, boundary_chunk_len);
+                        self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
                     }
 
                     if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
@@ -589,8 +579,8 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                                 &hash[..],
                                 &sendlog::StatCacheEntry {
                                     addresses,
+                                    data_cursors,
                                     total_size: dir_data_size,
-                                    base_offsets: dir_index_offsets,
                                     hashes: content_hashes,
                                 },
                             )?;
@@ -999,11 +989,10 @@ fn dir_ent_to_index_ent(
         norm_dev: serde_bare::Uint(dev_normalizer.normalize(metadata.dev())),
         ino: serde_bare::Uint(metadata.ino()),
         xattrs,
-        offsets: index::IndexEntryOffsets {
-            data_chunk_idx: serde_bare::Uint(0),
-            data_chunk_end_idx: serde_bare::Uint(0),
-            data_chunk_offset: serde_bare::Uint(0),
-            data_chunk_end_offset: serde_bare::Uint(0),
+        data_cursor: index::RelativeDataCursor {
+            chunk_delta: serde_bare::Uint(0),
+            start_byte_offset: serde_bare::Uint(0),
+            end_byte_offset: serde_bare::Uint(0),
         },
         data_hash: index::ContentCryptoHash::None, // Set by caller.
     })

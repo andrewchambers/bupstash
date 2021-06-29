@@ -74,7 +74,7 @@ pub enum ItemSyncEvent {
 }
 
 const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
-const CURRENT_SCHEMA_VERSION: &str = "5";
+const CURRENT_SCHEMA_VERSION: &str = "6";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 1024 * 1024 * 1024;
 
@@ -178,7 +178,7 @@ impl Repo {
         repo_path.pop();
 
         if !tx_file_exists {
-            // Handle upgrade from sqlite3 repository format.
+            // Handle upgrade from the old sqlite3 repository format.
             repo_path.push("bupstash.sqlite3");
             let sqlite3_db_path = repo_path.clone();
             repo_path.pop();
@@ -195,7 +195,7 @@ impl Repo {
             }
         }
 
-        let repo_lock = match initial_lock_mode {
+        let mut repo_lock = match initial_lock_mode {
             RepoLockMode::None => RepoLock::None,
             RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
                 REPO_LOCK_CTX_TAG,
@@ -207,15 +207,26 @@ impl Repo {
             )?),
         };
 
-        let txn = fstx::ReadTxn::begin(&repo_path)?;
-
-        let schema_version = txn.read_string("meta/schema_version")?;
+        let mut txn = fstx::ReadTxn::begin(&repo_path)?;
+        let mut schema_version = txn.read_string("meta/schema_version")?;
         if schema_version != CURRENT_SCHEMA_VERSION {
-            anyhow::bail!(
-                "expected repository schema version {}, got {}",
-                CURRENT_SCHEMA_VERSION,
-                schema_version
-            );
+            txn.end();
+            // Unlock for upgrades, which can lock again if they need to.
+            repo_lock = RepoLock::None;
+
+            if schema_version == "5" {
+                migrate::repo_upgrade_to_5_to_6(&repo_path)?;
+            }
+            // restart read transaction we cancelled...
+            txn = fstx::ReadTxn::begin(&repo_path)?;
+            schema_version = txn.read_string("meta/schema_version")?;
+            if schema_version != CURRENT_SCHEMA_VERSION {
+                anyhow::bail!(
+                    "the current version of bupstash expects repository schema version {}, got {}",
+                    CURRENT_SCHEMA_VERSION,
+                    schema_version
+                );
+            }
         }
 
         let storage_engine: Box<dyn chunk_storage::Engine> = {

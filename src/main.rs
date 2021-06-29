@@ -1648,7 +1648,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         None => ListFormat::Human,
     };
-    let mut diff_mask = index::INDEX_COMPARE_MASK_OFFSETS;
+    let mut diff_mask = index::INDEX_COMPARE_MASK_DATA_CURSORS;
 
     if let Some(ignore) = matches.opt_str("ignore") {
         for ignore in ignore.split(',') {
