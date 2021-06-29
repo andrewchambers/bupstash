@@ -668,33 +668,54 @@ _concurrent_modify_worker () {
   bupstash restore-removed
 }
 
-@test "pick torture" {
-  if test -z "$PICK_TORTURE_DIR"
-  then
-    skip "Set PICK_TORTURE_DIR to run this test."
-  fi
+@test "pick fuzz torture" {
+  
+  rand_dir="$SCRATCH/random_dir"
+  restore_dir="$SCRATCH/restore_dir"
+  copy_dir="$SCRATCH/copy_dir"
 
-  # Put twice so we test caching code paths.
-  id1=$(bupstash put :: "$PICK_TORTURE_DIR")
-  id2=$(bupstash put :: "$PICK_TORTURE_DIR")
-
-  for id in $(echo $id1 $id2)
+  for i in `seq 100`
   do
-    for f in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type f | cut -c 3- ")
+    rm -rf "$rand_dir"
+
+    "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
+
+    # Put twice so we test caching code paths.
+    id1=$(bupstash put :: "$rand_dir")
+    id2=$(bupstash put :: "$rand_dir")
+
+    for id in $(echo $id1 $id2)
     do
-      echo file "'$f'"
-      cmp <(bupstash get --pick "$f"  "id=$id") "$PICK_TORTURE_DIR/$f"
+      for f in $(cd "$rand_dir" ; find . -type f | cut -c 3-)
+      do
+        cmp <(bupstash get --pick "$f"  "id=$id") "$rand_dir/$f"
+      done
+
+      for d in $(cd "$rand_dir" ; find . -type d | sed 's,^\./,,g')
+      do
+        rm -rf "$copy_dir" "$restore_dir"
+        mkdir "$copy_dir" "$restore_dir"
+
+        tar -C "$rand_dir" -cf - $d | tar -C "$copy_dir" -xf -
+        bupstash get --pick "$d" "id=$id" | tar -C "$restore_dir" -xf -
+
+        diff -u \
+          <(cd "$restore_dir" ; find . | sort) \
+          <(cd "$copy_dir" ; find . | sort)
+
+        for f in $(cd "$copy_dir" ; find . -type f | cut -c 3-)
+        do
+          cmp "$copy_dir/$f" "$restore_dir/$f"
+        done
+      done
+    
+      bupstash rm id=$id
     done
 
-    for d in $(sh -c "cd $PICK_TORTURE_DIR ; find . -type d | sed 's,^\./,,g' ")
-    do
-      echo dir "'$d'"
-      diff -u \
-        <(bupstash get --pick "$d"  "id=$id" | tar -tf - | sort) \
-        <(sh -c "cd \"$PICK_TORTURE_DIR\" ; find "$d" | sed 's,^\./,,g' | sort")
-    done
+    bupstash gc
   done
 }
+
 
 @test "repo rollback torture" {
   if ! test -d "$BUPSTASH_REPOSITORY" || \
@@ -707,7 +728,7 @@ _concurrent_modify_worker () {
   unset BUPSTASH_REPOSITORY
 
   now=$(date "+%s")
-  test_end=$(($now + 30))
+  test_end=$(($now + 15))
 
   while test $(date "+%s") -lt "$test_end"
   do
