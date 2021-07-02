@@ -172,7 +172,7 @@ impl Repo {
             anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
         }
 
-        let mut repo_path = fs::canonicalize(&repo_path)?;
+        let mut repo_path = fsutil::absolute_path(&repo_path)?;
         repo_path.push("tx.lock");
         let tx_file_exists = repo_path.exists();
         repo_path.pop();

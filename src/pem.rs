@@ -376,7 +376,7 @@ pub fn encode_many_config(pems: &[Pem], config: EncodeConfig) -> String {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     const SAMPLE_CRLF: &'static str = "-----BEGIN RSA PRIVATE KEY-----\r

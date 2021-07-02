@@ -10,11 +10,13 @@ pub mod crypto;
 pub mod dir_chunk_storage;
 pub mod external_chunk_storage;
 pub mod fmtutil;
+pub mod fprefetch;
 pub mod fstx;
 pub mod fsutil;
 pub mod hex;
 pub mod htree;
 pub mod index;
+pub mod indexer;
 pub mod keys;
 pub mod migrate;
 pub mod oplog;
@@ -965,7 +967,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         } else {
             let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
-            let input_path = std::fs::canonicalize(&input_path)?;
+            let input_path = fsutil::absolute_path(&input_path)?;
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
@@ -983,7 +985,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 }
 
                 data_source = client::DataSource::Filesystem {
-                    base: input_path.clone(),
                     paths: vec![input_path],
                     exclusions,
                 };
@@ -1002,39 +1003,17 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     } else {
         // Gather absolute paths.
-        let mut canonicalized = Vec::new();
+        let mut absolute_paths = Vec::new();
         for input_path in source_args.iter() {
-            let input_path = match std::fs::canonicalize(input_path) {
+            let input_path = match fsutil::absolute_path(input_path) {
                 Ok(p) => p,
                 Err(err) => anyhow::bail!("unable to put {:?}: {}", input_path, err),
             };
-            canonicalized.push(input_path)
-        }
-        canonicalized.sort();
-        canonicalized.dedup();
-        // Prune away paths that encapsulate eachother, for example
-        // 'put /a /a/b'  is really just 'put /a'.
-        let mut pruned_paths = Vec::new();
-        let mut i = 0;
-        while i < canonicalized.len() {
-            let mut j = i + 1;
-            loop {
-                match (&canonicalized[i], canonicalized.get(j)) {
-                    (_, None) => break,
-                    (a, Some(b)) => {
-                        if fsutil::common_path(a, b).unwrap() != *a {
-                            break;
-                        }
-                    }
-                }
-                j += 1;
-            }
-            pruned_paths.push(canonicalized[i].clone());
-            i = j;
+            absolute_paths.push(input_path)
         }
 
         // We should always have at least "/" in common.
-        let base_path = fsutil::common_path_all(&pruned_paths).unwrap();
+        let base_path = fsutil::common_path_all(&absolute_paths).unwrap();
 
         if default_tags {
             let name = match base_path.file_name() {
@@ -1046,8 +1025,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
 
         data_source = client::DataSource::Filesystem {
-            base: base_path,
-            paths: pruned_paths,
+            paths: absolute_paths,
             exclusions,
         };
     };

@@ -1,6 +1,6 @@
 [package]
 name = "bupstash"
-version = "0.9.1"
+version = "0.10.0"
 authors = ["Andrew Chambers <ac@acha.ninja>"]
 edition = "2018"
 license = "MIT"

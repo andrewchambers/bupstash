@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
+pub type Xattrs = std::collections::BTreeMap<String, Vec<u8>>;
+
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VersionedIndexEntry {
@@ -43,7 +45,7 @@ pub struct V1IndexEntry {
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
+    pub xattrs: Option<Xattrs>,
     pub data_cursor: AbsoluteDataCursor,
 }
 
@@ -64,7 +66,7 @@ pub struct V2IndexEntry {
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
+    pub xattrs: Option<Xattrs>,
     pub data_cursor: AbsoluteDataCursor,
     pub data_hash: ContentCryptoHash,
 }
@@ -86,7 +88,7 @@ pub struct IndexEntry {
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<std::collections::BTreeMap<String, Vec<u8>>>,
+    pub xattrs: Option<Xattrs>,
     pub data_cursor: RelativeDataCursor,
     pub data_hash: ContentCryptoHash,
 }
@@ -317,6 +319,10 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
                         // Match the directory and children.
                         if !ent.path.starts_with(&prefix) {
                             cur_chunk_idx += ent.data_cursor.chunk_delta.0;
+                            // We don't assume all children are contiguous in
+                            // memory, instead we just scan the whole index.
+                            // We could potentially change this, but it may
+                            // affect older backups.
                             continue;
                         }
 
@@ -587,25 +593,54 @@ impl Default for CompressedIndexWriter {
 }
 
 pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
-    // This sort order is aimed at creating better compression while creating a sensible
-    // order within the backup archives.
+    // This path comparison is designed such that our
+    // 'put' indexer always produces lists of files that are
+    // sorted according to it's order. This lets our diff
+    // assume they are sorted.
     //
     // '.' is always first.
-    // Tar entries with fewer slashes come next.
-    // Finally compare lexically.
+    // Children directories always come after parents.
+    // However, importantly, 'uncles and aunties' come before 'neices and nephews'
     //
-    // Experiments with sorting priority based on file extension did not show
+    // As an example, here is an ordering:
+    // a/b, a/c, a/b/c, a/c/c
+    //
+    // a/c comes before a/b/c because a/c is a sibling to a/b.
+    //
+    // This ordering makes sense when you know we store entries grouped by
+    // directory, then walk to children in order.
+    //
+    // Note, we could consider sorting such a similar suffix is together, but
+    // experiments with sorting priority based on file extension did not show
     // any consistent or measurable improvement, we could revisit in the future.
+    use std::cmp::Ordering::*;
     if l == r {
-        std::cmp::Ordering::Equal
+        Equal
     } else if l == "." {
-        std::cmp::Ordering::Greater
+        Less
     } else if r == "." {
-        std::cmp::Ordering::Less
-    } else if l.chars().filter(|c| *c == '/').count() < r.chars().filter(|c| *c == '/').count() {
-        std::cmp::Ordering::Greater
+        Greater
     } else {
-        l.cmp(r)
+        let mut liter = l.split('/');
+        let mut riter = r.split('/');
+        loop {
+            match (liter.next(), riter.next()) {
+                (Some(lelem), Some(relem)) => match lelem.cmp(relem) {
+                    Equal => (),
+                    Greater => match (liter.next(), riter.next()) {
+                        (None, Some(_)) => return Less,
+                        _ => return Greater,
+                    },
+                    Less => match (liter.next(), riter.next()) {
+                        (Some(_), None) => return Greater,
+                        _ => return Less,
+                    },
+                },
+                (Some(_), None) => return Greater,
+                (None, Some(_)) => return Less,
+                (None, None) => unreachable!(),
+            }
+        }
     }
 }
 
@@ -657,6 +692,51 @@ pub fn diff(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_path_cmp() {
+        use std::cmp::Ordering::*;
+
+        assert!(path_cmp(".", ".") == Equal);
+        assert!(path_cmp(".", "a") == Less);
+        assert!(path_cmp("a", ".") == Greater);
+        assert!(path_cmp("a", "b/c/e") == Less);
+        assert!(path_cmp("b/c/e", "a") == Greater);
+        assert!(path_cmp("a", "b") == Less);
+        assert!(path_cmp("a/b/c", "b") == Greater);
+        assert!(path_cmp("a/b/c", "d/e") == Less);
+        assert!(path_cmp("a/b/a", "a/b/c") == Less);
+        assert!(path_cmp("a/b/c", "a/b/c") == Equal);
+        assert!(path_cmp("b/a/d", "b/z") == Greater);
+        assert!(path_cmp("b/z", "b/a/d",) == Less);
+        assert!(path_cmp("b/z/d", "b/a/d") == Greater);
+        assert!(path_cmp("b/a/d", "b/z/d") == Less);
+
+        let mut v = vec![
+            "a/x.txt",
+            ".",
+            "a/y",
+            "b",
+            "b/c/d",
+            "b/derp.txt",
+            "c/d/slurm",
+        ];
+        v.sort_by(|l, r| path_cmp(l, r));
+        assert_eq!(
+            v,
+            vec![
+                ".",
+                "b",
+                "a/x.txt",
+                "a/y",
+                "b/derp.txt",
+                "b/c/d",
+                "c/d/slurm",
+            ]
+        );
+    }
+
     #[test]
     fn test_index_mode_bits() {
         // If there are platforms where these do not

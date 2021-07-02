@@ -326,3 +326,13 @@ mod tests {
         assert!(common_path(&one, &two).is_none());
     }
 }
+
+// A smear error is an error likely caused by the filesystem being altered
+// by a concurrent process as we are making a snapshot. An example of this
+// happening is we found a file, then tried to open it and it did not exist.
+pub fn likely_smear_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
+    )
+}
