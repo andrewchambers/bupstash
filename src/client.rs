@@ -3,9 +3,11 @@ use super::address::*;
 use super::chunker;
 use super::compression;
 use super::crypto;
-use super::fsutil;
+use super::fprefetch;
+use super::fsutil::likely_smear_error;
 use super::htree;
 use super::index;
+use super::indexer;
 use super::oplog;
 use super::protocol::*;
 use super::querycache;
@@ -15,19 +17,9 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::FileTypeExt;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
-
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-    }
-}
 
 // These chunk parameters could be investigated and tuned.
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
@@ -285,168 +277,40 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
     fn send_dir(
         &mut self,
-        base: &std::path::Path,
         paths: &[std::path::PathBuf],
         exclusions: &[glob::Pattern],
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
-        let mut dev_normalizer = DevNormalizer::new();
+        let mut file_opener = fprefetch::ReadaheadFileOpener::new();
 
-        let metadata = std::fs::metadata(&base).map_err(|err| {
-            anyhow::format_err!("unable to fetch metadata for {}: {}", base.display(), err)
-        })?;
+        let indexer = indexer::FsIndexer::new(
+            paths,
+            indexer::FsIndexerOptions {
+                one_file_system: self.ctx.one_file_system,
+                want_xattrs: self.ctx.want_xattrs,
+                exclusions: exclusions.to_vec(),
+            },
+        )?
+        .background();
 
-        if !metadata.is_dir() {
-            anyhow::bail!("{} is not a directory", base.display());
-        }
-
-        let ent = index::VersionedIndexEntry::V3(
-            dir_ent_to_index_ent(
-                &mut dev_normalizer,
-                &base,
-                &std::path::PathBuf::from("."),
-                &metadata,
-                self.ctx.want_xattrs,
-            )
-            .map_err(|err| {
-                anyhow::format_err!("unable build index entry for {}: {}", base.display(), err)
-            })?,
-        );
-
-        self.write_idx_ent(&ent)?;
-
-        let mut work_list = std::collections::VecDeque::new();
-
-        let mut initial_paths = std::collections::HashSet::new();
-        for p in paths {
-            let initial_md = std::fs::metadata(&p).map_err(|err| {
-                anyhow::format_err!("unable to fetch metadata for {}: {}", p.display(), err)
-            })?;
-            if !initial_md.is_dir() {
-                // We should be able to lift this restriction in the future.
-                anyhow::bail!(
-                    "{} is not a directory, files cannot be part of multi-dir put",
-                    p.display()
-                );
-            }
-            work_list.push_back((p.clone(), initial_md));
-            if p != base {
-                initial_paths.insert(p.clone());
-            }
-        }
-
-        while let Some((cur_dir, cur_dir_md)) = work_list.pop_front() {
-            assert!(cur_dir_md.is_dir());
+        for indexed_dir in indexer {
+            let mut indexed_dir = indexed_dir?;
 
             self.ctx
                 .progress
-                .set_message(cur_dir.to_string_lossy().to_string());
-
-            // These inital paths do not have a parent who will add an index entry
-            // for them, so we add before we process the dir contents.
-            if !initial_paths.is_empty() && initial_paths.contains(&cur_dir) {
-                initial_paths.remove(&cur_dir);
-                let index_path = cur_dir.strip_prefix(&base).unwrap().to_path_buf();
-                let ent = index::VersionedIndexEntry::V3(
-                    dir_ent_to_index_ent(
-                        &mut dev_normalizer,
-                        &cur_dir,
-                        &index_path,
-                        &cur_dir_md,
-                        self.ctx.want_xattrs,
-                    )
-                    .map_err(|err| {
-                        anyhow::format_err!(
-                            "unable build index entry for {}: {}",
-                            cur_dir.display(),
-                            err
-                        )
-                    })?,
-                );
-                self.write_idx_ent(&ent)?;
-            }
+                .set_message(indexed_dir.dir_path.to_string_lossy().to_string());
 
             let mut hash_state = crypto::HashState::new(Some(&self.ctx.idx_hash_key));
 
-            // Incorporate the absolute dir in our cache key.
-            hash_state.update(cur_dir.as_os_str().as_bytes());
-            // Null byte marks the end of path in the hash space.
-            hash_state.update(&[0]);
-
-            let mut dir_ents = match fsutil::read_dirents(&cur_dir) {
-                Ok(dir_ents) => dir_ents,
-                // If the directory was deleted from under us, treat it as empty.
-                Err(err) if likely_smear_error(&err) => vec![],
-                Err(err) => anyhow::bail!("unable list {}: {}", cur_dir.display(), err),
-            };
-
-            // Note sorting by extension or reverse filename might give better compression,
-            // but we should not add this without checking how it affects the diff command.
-            dir_ents.sort_by(|l, r| {
-                index::path_cmp(
-                    &l.file_name().to_string_lossy(),
-                    &r.file_name().to_string_lossy(),
-                )
-            });
-
-            let mut index_ents = Vec::new();
-
-            'collect_dir_ents: for entry in dir_ents {
-                let ent_path = entry.path();
-
-                for excl in exclusions {
-                    if excl.matches_path(&ent_path) {
-                        continue 'collect_dir_ents;
-                    }
+            if use_stat_cache {
+                // Incorporate the absolute dir in our cache key.
+                hash_state.update(indexed_dir.dir_path.as_os_str().as_bytes());
+                // Null byte marks the end of path in the hash space.
+                hash_state.update(&[0]);
+                for ent in indexed_dir.index_ents.iter() {
+                    hash_state.update(&serde_bare::to_vec(ent).unwrap());
                 }
-
-                let metadata = match entry.metadata() {
-                    Ok(metadata) => metadata,
-                    // If the entry was deleted from under us, treat it as if it was excluded.
-                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                    Err(err) => anyhow::bail!(
-                        "unable to fetch metadata for {}: {}",
-                        ent_path.display(),
-                        err
-                    ),
-                };
-
-                // There is no meaningful way to backup a unix socket.
-                if metadata.file_type().is_socket() {
-                    continue 'collect_dir_ents;
-                }
-
-                let index_path = ent_path.strip_prefix(&base).unwrap().to_path_buf();
-                let index_ent = match dir_ent_to_index_ent(
-                    &mut dev_normalizer,
-                    &ent_path,
-                    &index_path,
-                    &metadata,
-                    self.ctx.want_xattrs,
-                ) {
-                    Ok(ent) => ent,
-                    // The entry was removed, for example a symlink was removed so
-                    // we cannot do a valid readlink.
-                    Err(err) if likely_smear_error(&err) => continue 'collect_dir_ents,
-                    Err(err) => anyhow::bail!(
-                        "unable build index entry for {}: {}",
-                        ent_path.display(),
-                        err
-                    ),
-                };
-
-                if metadata.is_dir()
-                    && ((cur_dir_md.dev() == metadata.dev()) || !self.ctx.one_file_system)
-                {
-                    work_list.push_back((ent_path.clone(), metadata));
-                }
-
-                if use_stat_cache {
-                    hash_state.update(&serde_bare::to_vec(&index_ent).unwrap());
-                }
-
-                index_ents.push((ent_path, index_ent));
             }
 
             let hash = hash_state.finish();
@@ -471,9 +335,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     self.data_size += cache_entry.total_size;
                     self.ctx.progress.inc(cache_entry.total_size);
 
-                    assert!(cache_entry.hashes.len() == index_ents.len());
+                    assert!(cache_entry.hashes.len() == indexed_dir.index_ents.len());
 
-                    for (i, (_, mut index_ent)) in index_ents.drain(..).enumerate() {
+                    for (i, mut index_ent) in indexed_dir.index_ents.drain(..).enumerate() {
                         index_ent.data_hash = cache_entry.hashes[i];
                         index_ent.data_cursor = cache_entry.data_cursors[i];
                         self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
@@ -498,7 +362,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         }
                     };
 
-                    let cache_vec_capacity = if use_stat_cache { index_ents.len() } else { 0 };
+                    let n_idx_ents = indexed_dir.index_ents.len();
+
+                    let cache_vec_capacity = if use_stat_cache { n_idx_ents } else { 0 };
 
                     let mut data_cursors: Vec<index::RelativeDataCursor> =
                         Vec::with_capacity(cache_vec_capacity);
@@ -506,27 +372,35 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     let mut content_hashes: Vec<index::ContentCryptoHash> =
                         Vec::with_capacity(cache_vec_capacity);
 
-                    let n_idx_ents = index_ents.len();
+                    // Setup the file readahead immediately.
+                    for (_, ent_path) in indexed_dir
+                        .index_ents
+                        .iter()
+                        .zip(indexed_dir.ent_paths.drain(..))
+                        .filter(|x| x.0.is_file())
+                    {
+                        file_opener.add_to_queue(ent_path);
+                    }
 
-                    'add_dir_ents: for (i, (ent_path, mut index_ent)) in
-                        index_ents.drain(..).enumerate()
+                    'add_dir_ents: for (i, mut index_ent) in
+                        indexed_dir.index_ents.drain(..).enumerate()
                     {
                         let ent_data_chunk_start_idx =
                             self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
                         let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;
 
                         if index_ent.is_file() {
-                            let mut f = match open_file_for_sending(&ent_path) {
-                                Ok(f) => TeeHashFileReader::new(f),
+                            let mut f = match file_opener.next_file().unwrap() {
+                                (_, Ok(f)) => TeeHashFileReader::new(f),
 
-                                Err(err) if likely_smear_error(&err) => {
+                                (_, Err(err)) if likely_smear_error(&err) => {
                                     // This can happen if the file was deleted,
                                     // or the filesystem was unmounted during upload.
                                     // We simply skip this entry but don't cache the result.
                                     smear_detected = true;
                                     continue 'add_dir_ents;
                                 }
-                                Err(err) => {
+                                (ent_path, Err(err)) => {
                                     anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
                                 }
                             };
@@ -573,7 +447,11 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
                     }
 
-                    if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
+                    if self.send_log_session.is_some()
+                        && use_stat_cache
+                        && !smear_detected
+                        && !addresses.is_empty()
+                    {
                         self.send_log_session
                             .as_ref()
                             .unwrap()
@@ -681,7 +559,6 @@ pub enum DataSource {
         data: Box<dyn std::io::Read>,
     },
     Filesystem {
-        base: std::path::PathBuf,
         paths: Vec<std::path::PathBuf>,
         exclusions: Vec<glob::Pattern>,
     },
@@ -769,8 +646,8 @@ pub fn send(
         DataSource::Subprocess(args) => {
             let quoted_args: Vec<String> =
                 args.iter().map(|x| shlex::quote(x).to_string()).collect();
-            let progress_msg = format!("exec: {}", quoted_args.join(" "));
-            ctx.progress.set_message(progress_msg);
+            ctx.progress
+                .set_message(format!("exec: {}", quoted_args.join(" ")));
 
             let mut child = std::process::Command::new(args[0].clone())
                 .args(&args[1..])
@@ -788,15 +665,11 @@ pub fn send(
             description,
             ref mut data,
         } => {
-            ctx.progress.set_message(description.clone());
+            ctx.progress.set_message(description.to_string());
             session.write_data(data, &mut |_: &Address, _: usize| {})?;
         }
-        DataSource::Filesystem {
-            base,
-            paths,
-            exclusions,
-        } => {
-            session.send_dir(base, paths, exclusions)?;
+        DataSource::Filesystem { paths, exclusions } => {
+            session.send_dir(paths, exclusions)?;
         }
     }
 
@@ -845,162 +718,6 @@ pub fn send(
     }
 }
 
-// A smear error is an error likely caused by the filesystem being altered
-// by a concurrent process as we are making a snapshot.
-fn likely_smear_error(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
-    )
-}
-
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-
-        fn dev_major(dev: u64) -> u32 {
-            (((dev >> 32) & 0xffff_f000) |
-             ((dev >>  8) & 0x0000_0fff)) as u32
-        }
-
-        fn dev_minor(dev: u64) -> u32 {
-            (((dev >> 12) & 0xffff_ff00) |
-             ((dev      ) & 0x0000_00ff)) as u32
-        }
-
-    } else if #[cfg(target_os = "openbsd")] {
-
-        fn dev_major(dev: u64) -> u32 {
-            ((dev >> 8) & 0x0000_00ff) as u32
-        }
-
-        fn dev_minor(dev: u64) -> u32 {
-            ((dev & 0x0000_00ff) | ((dev & 0xffff_0000) >> 8)) as u32
-        }
-
-    } else {
-
-        fn dev_major(_dev: u64) -> u32 {
-            panic!("unable to get device major number on this platform (file a bug report)");
-        }
-
-        fn dev_minor(_dev: u64) -> u32 {
-            panic!("unable to get device minor number on this platform (file a bug report)");
-        }
-
-    }
-}
-
-pub struct DevNormalizer {
-    count: u64,
-    tab: HashMap<u64, u64>,
-}
-
-impl DevNormalizer {
-    fn new() -> Self {
-        DevNormalizer {
-            count: 0,
-            tab: HashMap::new(),
-        }
-    }
-
-    fn normalize(&mut self, dev: u64) -> u64 {
-        match self.tab.get(&dev) {
-            Some(nd) => *nd,
-            None => {
-                let nd = self.count;
-                self.count += 1;
-                self.tab.insert(dev, nd);
-                nd
-            }
-        }
-    }
-}
-
-fn dir_ent_to_index_ent(
-    dev_normalizer: &mut DevNormalizer,
-    full_path: &std::path::Path,
-    short_path: &std::path::Path,
-    metadata: &std::fs::Metadata,
-    want_xattrs: bool,
-) -> Result<index::IndexEntry, std::io::Error> {
-    // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
-    // how best to handle this?
-
-    let t = metadata.file_type();
-
-    let (dev_major, dev_minor) = if t.is_block_device() || t.is_char_device() {
-        (dev_major(metadata.rdev()), dev_minor(metadata.rdev()))
-    } else {
-        (0, 0)
-    };
-
-    let mut xattrs = None;
-
-    if want_xattrs && (t.is_file() || t.is_dir()) {
-        match xattr::list(full_path) {
-            Ok(attrs) => {
-                for attr in attrs {
-                    match xattr::get(full_path, &attr) {
-                        Ok(Some(value)) => {
-                            if xattrs.is_none() {
-                                xattrs = Some(std::collections::BTreeMap::new())
-                            }
-                            match xattrs {
-                                Some(ref mut xattrs) => {
-                                    xattrs.insert(attr.to_string_lossy().to_string(), value);
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        Ok(None) => (), // The file had it's xattr removed, assume it never had it.
-                        Err(err) if likely_smear_error(&err) => (), // The file was modified, assume it never had this xattr.
-                        Err(err) => return Err(err),
-                    }
-                }
-            }
-            Err(err) if likely_smear_error(&err) => (), // The file was modified, assume no xattrs for what we have.
-            Err(err) => return Err(err),
-        }
-    }
-
-    Ok(index::IndexEntry {
-        path: short_path.to_string_lossy().to_string(),
-        size: serde_bare::Uint(if metadata.is_file() {
-            metadata.size()
-        } else {
-            0
-        }),
-        uid: serde_bare::Uint(metadata.uid() as u64),
-        gid: serde_bare::Uint(metadata.gid() as u64),
-        mode: serde_bare::Uint(metadata.permissions().mode() as u64),
-        ctime: serde_bare::Uint(metadata.ctime() as u64),
-        ctime_nsec: serde_bare::Uint(metadata.ctime_nsec() as u64),
-        mtime: serde_bare::Uint(metadata.mtime() as u64),
-        mtime_nsec: serde_bare::Uint(metadata.mtime_nsec() as u64),
-        nlink: serde_bare::Uint(metadata.nlink()),
-        link_target: if t.is_symlink() {
-            Some(
-                std::fs::read_link(&full_path)?
-                    .to_string_lossy() // XXX Avoid this lossy conversion?
-                    .to_string(),
-            )
-        } else {
-            None
-        },
-        dev_major: serde_bare::Uint(dev_major as u64),
-        dev_minor: serde_bare::Uint(dev_minor as u64),
-        norm_dev: serde_bare::Uint(dev_normalizer.normalize(metadata.dev())),
-        ino: serde_bare::Uint(metadata.ino()),
-        xattrs,
-        data_cursor: index::RelativeDataCursor {
-            chunk_delta: serde_bare::Uint(0),
-            start_byte_offset: serde_bare::Uint(0),
-            end_byte_offset: serde_bare::Uint(0),
-        },
-        data_hash: index::ContentCryptoHash::None, // Set by caller.
-    })
-}
-
 // Read a file while also blake3 hashing any data.
 struct TeeHashFileReader {
     f: std::fs::File,
@@ -1028,52 +745,6 @@ impl std::io::Read for TeeHashFileReader {
                 Ok(n)
             }
             err => err,
-        }
-    }
-}
-
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
-            // Try with O_NOATIME first; if it fails, e.g. because the user we
-            // run as is not the file owner, retry without..
-            let f = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOATIME)
-                .open(fpath)
-                .or_else(|error| {
-                    match error.kind() {
-                        std::io::ErrorKind::PermissionDenied => {
-                            std::fs::OpenOptions::new()
-                                .read(true)
-                                .open(fpath)
-                        }
-                        _ => Err(error)
-                    }
-                })?;
-
-            // We would like to use something like POSIX_FADV_NOREUSE to preserve
-            // the user page cache... this is actually a NOOP on linux.
-            // Instead we can at least boost performance by hinting our access pattern.
-            match nix::fcntl::posix_fadvise(
-                f.as_raw_fd(),
-                0,
-                0,
-                nix::fcntl::PosixFadviseAdvice::POSIX_FADV_SEQUENTIAL
-            ) {
-                Ok(_) => (),
-                Err(err) => return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("fadvise failed: {}", err))),
-            };
-
-            Ok(f)
-        }
-    // XXX More platforms should support NOATIME and/or posix_fadvise
-    } else {
-        fn open_file_for_sending(fpath: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
-            let f = std::fs::OpenOptions::new()
-                .read(true)
-                .open(fpath)?;
-            Ok(f)
         }
     }
 }
