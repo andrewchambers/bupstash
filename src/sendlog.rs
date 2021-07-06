@@ -128,8 +128,8 @@ impl SendLog {
 
         // On 64 bit platforms use sqlite3 memory mapped io.
         if std::mem::size_of::<usize>() == 8 {
-            // 16GiB mmap size, just an estimate of the largest sendlog we are likely to see.
-            db_conn.query_row("PRAGMA mmap_size=17179869184;", rusqlite::NO_PARAMS, |_r| {
+            // 64GiB mmap size, just an estimate of the largest sendlog we are likely to see.
+            db_conn.query_row("PRAGMA mmap_size=68719476736;", rusqlite::NO_PARAMS, |_r| {
                 Ok(())
             })?;
         }
