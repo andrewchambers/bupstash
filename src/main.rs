@@ -1302,122 +1302,6 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn format_human_content_listing(
-    ent: &index::IndexEntry,
-    utc_timestamps: bool,
-    pad_size_to: usize,
-) -> String {
-    let mut result = String::new();
-    std::fmt::write(&mut result, format_args!("{}", ent.display_mode())).unwrap();
-    let size = if ent.is_file() {
-        fmtutil::format_size(ent.size.0)
-    } else {
-        "-".to_string()
-    };
-    let size_padding: String = std::iter::repeat(' ')
-        .take(pad_size_to - size.len())
-        .collect();
-    std::fmt::write(&mut result, format_args!(" {}{}", size, size_padding)).unwrap();
-    let ts = chrono::NaiveDateTime::from_timestamp(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32);
-    let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
-    let ts = fmtutil::format_timestamp(&ts, utc_timestamps);
-    std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();
-    std::fmt::write(&mut result, format_args!(" {}", ent.path)).unwrap();
-    result
-}
-
-fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
-    let mut result = String::new();
-    std::fmt::write(&mut result, format_args!("{{"))?;
-    std::fmt::write(
-        &mut result,
-        format_args!("\"mode\":{}", serde_json::to_string(&ent.mode.0)?),
-    )?;
-    std::fmt::write(&mut result, format_args!(",\"size\":{}", ent.size.0))?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"path\":{}", serde_json::to_string(&ent.path)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"mtime\":{}", serde_json::to_string(&ent.mtime.0)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(
-            ",\"mtime_nsec\":{}",
-            serde_json::to_string(&ent.mtime_nsec.0)?
-        ),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"ctime\":{}", serde_json::to_string(&ent.ctime.0)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(
-            ",\"ctime_nsec\":{}",
-            serde_json::to_string(&ent.ctime_nsec.0)?
-        ),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"uid\":{}", serde_json::to_string(&ent.uid.0)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"gid\":{}", serde_json::to_string(&ent.gid.0)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"norm_dev\":{}", serde_json::to_string(&ent.norm_dev.0)?),
-    )?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"nlink\":{}", serde_json::to_string(&ent.nlink.0)?),
-    )?;
-    if ent.is_dev_node() {
-        std::fmt::write(
-            &mut result,
-            format_args!(
-                ",\"dev_major\":{}",
-                serde_json::to_string(&ent.dev_major.0)?
-            ),
-        )?;
-        std::fmt::write(
-            &mut result,
-            format_args!(
-                ",\"dev_minor\":{}",
-                serde_json::to_string(&ent.dev_minor.0)?
-            ),
-        )?;
-    }
-    if let Some(ref xattrs) = ent.xattrs {
-        std::fmt::write(
-            &mut result,
-            format_args!(",\"xattrs\":{}", serde_json::to_string(xattrs)?),
-        )?;
-    }
-    if let Some(ref link_target) = ent.link_target {
-        std::fmt::write(
-            &mut result,
-            format_args!(",\"link_target\":{}", serde_json::to_string(link_target)?),
-        )?;
-    }
-    match ent.data_hash {
-        index::ContentCryptoHash::None => (),
-        index::ContentCryptoHash::Blake3(h) => std::fmt::write(
-            &mut result,
-            format_args!(
-                ",\"data_hash\":{}",
-                serde_json::to_string(&format!("blake3:{}", hex::easy_encode_to_string(&h)))?
-            ),
-        )?,
-    };
-    std::fmt::write(&mut result, format_args!("}}"))?;
-    Ok(result)
-}
-
 fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
@@ -1564,25 +1448,20 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     match list_format {
         ListFormat::Human => {
-            let mut max_size_digits = 0;
-            for ent in content_index.iter() {
-                let ent = ent?;
-                max_size_digits =
-                    std::cmp::max(fmtutil::format_size(ent.size.0).len(), max_size_digits)
-            }
+            let widths = fmtutil::estimate_index_human_display_widths(&content_index)?;
             for ent in content_index.iter() {
                 let ent = ent?;
                 writeln!(
                     out,
                     "{}",
-                    format_human_content_listing(&ent, utc_timestamps, max_size_digits),
+                    fmtutil::format_human_content_listing(&ent, utc_timestamps, &widths),
                 )?;
             }
         }
         ListFormat::Jsonl1 => {
             for ent in content_index.iter() {
                 let ent = ent?;
-                writeln!(out, "{}", format_jsonl1_content_listing(&ent)?)?;
+                writeln!(out, "{}", fmtutil::format_jsonl1_content_listing(&ent)?)?;
             }
         }
         ListFormat::Bare => {
@@ -1790,18 +1669,14 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     match list_format {
         ListFormat::Human => {
-            let mut max_size_digits = 1;
-            // Can we avoid walking twice?
-            index::diff(
-                &to_diff[0],
-                &to_diff[1],
-                diff_mask,
-                &mut |_: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
-                    max_size_digits =
-                        std::cmp::max(fmtutil::format_size(e.size.0).len(), max_size_digits);
-                    Ok(())
-                },
-            )?;
+            let lwidths = fmtutil::estimate_index_human_display_widths(&to_diff[0])?;
+            let rwidths = fmtutil::estimate_index_human_display_widths(&to_diff[1])?;
+            let widths = fmtutil::IndexHumanDisplayWidths {
+                human_size_digits: std::cmp::max(
+                    lwidths.human_size_digits,
+                    rwidths.human_size_digits,
+                ),
+            };
             index::diff(
                 &to_diff[0],
                 &to_diff[1],
@@ -1811,7 +1686,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         std::io::stdout(),
                         "{} {}",
                         op,
-                        format_human_content_listing(e, utc_timestamps, max_size_digits)
+                        fmtutil::format_human_content_listing(e, utc_timestamps, &widths)
                     )?;
                     Ok(())
                 },
@@ -1827,7 +1702,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         std::io::stdout(),
                         "{} {}",
                         op,
-                        format_jsonl1_content_listing(e)?
+                        fmtutil::format_jsonl1_content_listing(e)?
                     )?;
                     Ok(())
                 },
