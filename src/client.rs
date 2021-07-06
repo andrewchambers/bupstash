@@ -338,7 +338,10 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
         while let Some((cur_dir, cur_dir_md)) = work_list.pop_front() {
             assert!(cur_dir_md.is_dir());
-            self.ctx.progress.set_message(&cur_dir.to_string_lossy());
+
+            self.ctx
+                .progress
+                .set_message(cur_dir.to_string_lossy().to_string());
 
             // These inital paths do not have a parent who will add an index entry
             // for them, so we add before we process the dir contents.
@@ -766,8 +769,8 @@ pub fn send(
         DataSource::Subprocess(args) => {
             let quoted_args: Vec<String> =
                 args.iter().map(|x| shlex::quote(x).to_string()).collect();
-            ctx.progress
-                .set_message(&format!("exec: {}", quoted_args.join(" ")));
+            let progress_msg = format!("exec: {}", quoted_args.join(" "));
+            ctx.progress.set_message(progress_msg);
 
             let mut child = std::process::Command::new(args[0].clone())
                 .args(&args[1..])
@@ -785,7 +788,7 @@ pub fn send(
             description,
             ref mut data,
         } => {
-            ctx.progress.set_message(&description);
+            ctx.progress.set_message(description.clone());
             session.write_data(data, &mut |_: &Address, _: usize| {})?;
         }
         DataSource::Filesystem {
@@ -1567,7 +1570,7 @@ pub fn gc(
                 progress.println(&msg);
             }
             Packet::Progress(Progress::SetMessage(msg)) => {
-                progress.set_message(&msg);
+                progress.set_message(msg);
             }
             Packet::RGc(rgc) => return Ok(rgc.stats),
             _ => anyhow::bail!("protocol error, expected gc packet or progress packe."),

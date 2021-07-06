@@ -30,11 +30,7 @@ impl SendLog {
         let mut db_conn = rusqlite::Connection::open(p)?;
 
         // Only one put per send log at a time.
-        db_conn.query_row(
-            "PRAGMA locking_mode = EXCLUSIVE;",
-            rusqlite::NO_PARAMS,
-            |_r| Ok(()),
-        )?;
+        db_conn.query_row("PRAGMA locking_mode = EXCLUSIVE;", [], |_r| Ok(()))?;
 
         db_conn.busy_timeout(std::time::Duration::new(7 * 24 * 60 * 60, 0))?;
 
@@ -43,12 +39,12 @@ impl SendLog {
         let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute(
             "create table if not exists LogMeta(Key primary key, Value) without rowid;",
-            rusqlite::NO_PARAMS,
+            [],
         )?;
 
         let needs_init = match tx.query_row(
             "select Value from LogMeta where Key = 'schema-version';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let v: i64 = r.get(0)?;
                 Ok(v)
@@ -61,20 +57,20 @@ impl SendLog {
 
         let sequence_number = match tx.query_row(
             "select Value from LogMeta where Key = 'sequence-number';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| r.get(0),
         ) {
             Ok(n) => {
                 tx.execute(
                     "update LogMeta set Value = Value + 1 where Key = 'sequence-number';",
-                    rusqlite::NO_PARAMS,
+                    [],
                 )?;
                 n
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 tx.execute(
                     "insert into LogMeta(Key, Value) values('sequence-number', 1);",
-                    rusqlite::NO_PARAMS,
+                    [],
                 )?;
                 1
             }
@@ -85,7 +81,7 @@ impl SendLog {
 
         /* Simple policy to decide when to defragment our send log. */
         if cfg!(debug_assertions) || sequence_number % 10 == 0 {
-            db_conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+            db_conn.execute("vacuum;", [])?;
         }
 
         if needs_init {
@@ -95,7 +91,7 @@ impl SendLog {
 
             tx.execute(
                 "create table LogMeta(Key primary key, Value) without rowid;",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.execute(
@@ -105,17 +101,17 @@ impl SendLog {
 
             tx.execute(
                 "insert into LogMeta(Key, Value) values('sequence-number', 1);",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.execute(
                 "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid;",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.execute(
                 "create table StatCache(Hash primary key, Cached, GCGeneration, LatestSessionId, ItemId) without rowid; ",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.commit()?;
@@ -129,14 +125,12 @@ impl SendLog {
         // On 64 bit platforms use sqlite3 memory mapped io.
         if std::mem::size_of::<usize>() == 8 {
             // 64GiB mmap size, just an estimate of the largest sendlog we are likely to see.
-            db_conn.query_row("PRAGMA mmap_size=68719476736;", rusqlite::NO_PARAMS, |_r| {
-                Ok(())
-            })?;
+            db_conn.query_row("PRAGMA mmap_size=68719476736;", [], |_r| Ok(()))?;
         }
 
         // We want a rather large page cache for the send log.
         // default is -2000 which is 2000 * 1024 bytes.
-        db_conn.execute("PRAGMA cache_size = -20000;", rusqlite::NO_PARAMS)?;
+        db_conn.execute("PRAGMA cache_size = -20000;", [])?;
 
         Ok(SendLog { db_conn })
     }
@@ -144,8 +138,7 @@ impl SendLog {
     pub fn session(&mut self, gc_generation: Xid) -> Result<SendLogSession, anyhow::Error> {
         // We manually control the sqlite3 transaction so we are able
         // to issue checkpoints and commit part way through a send operation.
-        self.db_conn
-            .execute("begin immediate;", rusqlite::NO_PARAMS)?;
+        self.db_conn.execute("begin immediate;", [])?;
 
         Ok(SendLogSession {
             gc_generation,
@@ -158,7 +151,7 @@ impl SendLog {
     pub fn last_send_id(&self) -> Result<Option<Xid>, anyhow::Error> {
         match self.db_conn.query_row(
             "select value from LogMeta where key = 'last-send-id';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let send_id: Xid = r.get(0)?;
                 Ok(send_id)
@@ -195,11 +188,11 @@ impl<'a> SendLogSession<'a> {
         } else {
             self.log.db_conn.execute(
                 "delete from Sent where GCGeneration != ?;",
-                &[self.gc_generation],
+                [self.gc_generation],
             )?;
             self.log.db_conn.execute(
                 "delete from StatCache where GCGeneration != ?;",
-                &[self.gc_generation],
+                [self.gc_generation],
             )?;
         }
 
@@ -295,11 +288,9 @@ impl<'a> SendLogSession<'a> {
             anyhow::bail!("no active transaction");
         };
 
-        self.log.db_conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.log.db_conn.execute("commit;", [])?;
         self.tx_active = false;
-        self.log
-            .db_conn
-            .execute("begin immediate;", rusqlite::NO_PARAMS)?;
+        self.log.db_conn.execute("begin immediate;", [])?;
         self.tx_active = true;
         Ok(())
     }
@@ -336,7 +327,7 @@ impl<'a> SendLogSession<'a> {
             &[id],
         )?;
 
-        self.log.db_conn.execute("commit;", rusqlite::NO_PARAMS)?;
+        self.log.db_conn.execute("commit;", [])?;
         self.tx_active = false;
         Ok(())
     }
@@ -345,10 +336,7 @@ impl<'a> SendLogSession<'a> {
 impl<'a> Drop for SendLogSession<'a> {
     fn drop(&mut self) {
         if self.tx_active {
-            self.log
-                .db_conn
-                .execute("rollback;", rusqlite::NO_PARAMS)
-                .unwrap();
+            self.log.db_conn.execute("rollback;", []).unwrap();
         }
     }
 }

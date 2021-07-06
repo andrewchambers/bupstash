@@ -38,18 +38,18 @@ const SCHEMA_VERSION: i64 = 2;
 impl QueryCache {
     pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
-        conn.query_row("pragma journal_mode=WAL;", rusqlite::NO_PARAMS, |_r| Ok(()))?;
+        conn.query_row("pragma journal_mode=WAL;", [], |_r| Ok(()))?;
 
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         tx.execute(
             "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
-            rusqlite::NO_PARAMS,
+            [],
         )?;
 
         let needs_init = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'schema-version';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let v: i64 = r.get(0)?;
                 Ok(v)
@@ -69,21 +69,21 @@ impl QueryCache {
 
             tx.execute(
                 "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.execute(
                 "insert into QueryCacheMeta(Key, Value) values('schema-version', ?);",
-                &[SCHEMA_VERSION],
+                [SCHEMA_VERSION],
             )?;
             tx.execute(
                 "create table if not exists ItemOpLog(LogOffset INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
             tx.execute(
                 // No rowid so means we don't need a secondary index for itemid lookups.
                 "create table if not exists Items(ItemId PRIMARY KEY, LogOffset INTEGER NOT NULL, Metadata NOT NULL, UNIQUE(LogOffset)) WITHOUT ROWID;",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
 
             tx.commit()?;
@@ -98,7 +98,7 @@ impl QueryCache {
 
         let recently_cleared = match tx.query_row(
             "select Value from QueryCacheMeta where Key = 'recently-cleared';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let v: bool = r.get(0)?;
                 Ok(v)
@@ -112,14 +112,14 @@ impl QueryCache {
         if recently_cleared {
             tx.execute(
                 "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 0);",
-                rusqlite::NO_PARAMS,
+                [],
             )?;
         }
 
         tx.commit()?;
 
         if recently_cleared {
-            conn.execute("vacuum;", rusqlite::NO_PARAMS)?;
+            conn.execute("vacuum;", [])?;
         }
 
         Ok(QueryCache { conn })
@@ -135,12 +135,11 @@ impl QueryCache {
 
 impl<'a> QueryCacheTx<'a> {
     fn clear(&mut self) -> Result<(), anyhow::Error> {
-        self.tx.execute("delete from Items;", rusqlite::NO_PARAMS)?;
-        self.tx
-            .execute("delete from ItemOpLog;", rusqlite::NO_PARAMS)?;
+        self.tx.execute("delete from Items;", [])?;
+        self.tx.execute("delete from ItemOpLog;", [])?;
         self.tx.execute(
             "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 1);",
-            rusqlite::NO_PARAMS,
+            [],
         )?;
         Ok(())
     }
@@ -148,7 +147,7 @@ impl<'a> QueryCacheTx<'a> {
     pub fn last_log_op_offset(&mut self) -> Result<Option<u64>, anyhow::Error> {
         let last_id = match self.tx.query_row(
             "select LogOffset from ItemOpLog order by LogOffset desc limit 1;",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let last: i64 = r.get(0)?;
                 Ok(last as u64)
@@ -165,7 +164,7 @@ impl<'a> QueryCacheTx<'a> {
     pub fn current_gc_generation(&mut self) -> Result<Option<Xid>, anyhow::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let generation: Xid = r.get(0)?;
                 Ok(generation)
@@ -180,7 +179,7 @@ impl<'a> QueryCacheTx<'a> {
     pub fn start_sync(&mut self, gc_generation: Xid) -> Result<(), anyhow::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let generation: Xid = r.get(0)?;
                 Ok(generation)
@@ -207,7 +206,7 @@ impl<'a> QueryCacheTx<'a> {
 
         match self.tx.query_row(
             "select LogOffset, OpData from ItemOpLog order by LogOffset desc limit 1;",
-            rusqlite::NO_PARAMS,
+            [],
             |r| {
                 let last: i64 = r.get(0)?;
                 let data: Vec<u8> = r.get(1)?;
@@ -244,7 +243,7 @@ impl<'a> QueryCacheTx<'a> {
                 )?;
                 for item_id in items {
                     self.tx
-                        .execute("delete from Items where ItemId = ?;", &[item_id])?;
+                        .execute("delete from Items where ItemId = ?;", [item_id])?;
                 }
             }
             oplog::LogOp::RestoreRemoved => {
@@ -255,7 +254,7 @@ impl<'a> QueryCacheTx<'a> {
                 let mut stmt = self.tx.prepare(
                     "select LogOffset, OpData from ItemOpLog where (ItemId is not null) and (ItemId not in (select ItemId from Items));",
                 )?;
-                let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+                let mut rows = stmt.query([])?;
                 while let Some(row) = rows.next()? {
                     let offset: i64 = row.get(0)?;
                     let op: Vec<u8> = row.get(1)?;
@@ -292,7 +291,7 @@ impl<'a> QueryCacheTx<'a> {
         let mut stmt = self
             .tx
             .prepare("select ItemId, Metadata from Items order by LogOffset asc;")?;
-        let mut rows = stmt.query(rusqlite::NO_PARAMS)?;
+        let mut rows = stmt.query([])?;
 
         while let Some(row) = rows.next()? {
             let item_id: Xid = row.get(0)?;
