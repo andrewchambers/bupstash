@@ -16,18 +16,21 @@ incremental = false
 
 [dependencies]
 
-lz4 = "1.23"
-anyhow = "1.0"
+# More trusted dependencies
+crossbeam-channel = "*"
+blake3 = "*"
+rusqlite = { version = "*", features = ["bundled", "backup"] }
+
+lz4 = "1.2"
+anyhow = "1"
 thiserror = "1.0"
-crossbeam-channel = "0.5"
 libc = "0.2"
-rusqlite = { version = "0.23", features = ["bundled", "backup"] }
 getopts = "0.2"
 codemap = "0.1"
 codemap-diagnostic = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_bare = "0.3"
+serde_bare = "0.4"
 path-clean = "0.1.0"
 humantime = "2.0.1"
 atty = "0.2"
@@ -39,9 +42,8 @@ chrono = { version = "0.4", features = ["serde"]}
 cfg-if = "0.1"
 shlex = "0.1"
 nix = "0.20"
-indicatif = "0.15"
-rangemap = "0.1.7"
-blake3 = "0.3"
+indicatif = "0.16"
+rangemap = "0.1.11"
 xattr = "0.2"
 openat = "0.1"
 lazy_static = "1.4"

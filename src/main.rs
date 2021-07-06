@@ -426,7 +426,7 @@ fn cli_to_opened_serve_process(
 
         match open_mode {
             protocol::OpenMode::ReadWrite | protocol::OpenMode::Gc => {
-                progress.set_message(&"acquiring repository lock...");
+                progress.set_message("acquiring repository lock...");
             }
             _ => (),
         }
@@ -478,7 +478,7 @@ fn cli_to_progress_bar(
         },
     );
     progress.set_style(style);
-    progress.set_message(&"connecting...");
+    progress.set_message("connecting...");
     if want_visible_progress {
         progress.enable_steady_tick(250)
     };
@@ -1061,7 +1061,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let send_log = if matches.opt_present("no-send-log") {
         None
     } else {
-        progress.set_message(&"acquiring exclusive lock on send log...");
+        progress.set_message("acquiring exclusive lock on send log...");
         match matches.opt_str("send-log") {
             Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
             None => match std::env::var_os("BUPSTASH_SEND_LOG") {
