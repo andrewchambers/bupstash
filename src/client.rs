@@ -342,13 +342,6 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         index_ent.data_cursor = cache_entry.data_cursors[i];
                         self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
                     }
-
-                    // Re-add the cache entry so it isn't invalidated.
-                    self.send_log_session
-                        .as_ref()
-                        .unwrap()
-                        .borrow_mut()
-                        .add_stat_cache_data(&hash[..], &cache_entry)?;
                 }
                 None => {
                     let mut smear_detected = false;

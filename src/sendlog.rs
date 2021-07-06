@@ -204,16 +204,21 @@ impl<'a> SendLogSession<'a> {
             anyhow::bail!("no active transaction");
         };
 
-        // TODO I think we can do this in one query instead of two.
-        let has_address = self.cached_address(addr)?;
+        let mut stmt = self
+            .log
+            .db_conn
+            .prepare_cached("update Sent set LatestSessionId = ? where Address = ? returning 1;")?;
 
-        if has_address {
-            let mut stmt = self
-                .log
-                .db_conn
-                .prepare_cached("update Sent set LatestSessionId = ? where Address = ?;")?;
-            stmt.execute(rusqlite::params![self.session_id, &addr.bytes[..]])?;
-        } else {
+        let has_address = match stmt
+            .query_row(rusqlite::params![self.session_id, &addr.bytes[..]], |_r| {
+                Ok(())
+            }) {
+            Ok(_) => true,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(err) => return Err(err.into()),
+        };
+
+        if !has_address {
             let mut stmt = self.log.db_conn.prepare_cached(
                 "insert into Sent(GCGeneration, LatestSessionId, Address) values(?, ?, ?);",
             )?;
@@ -268,12 +273,11 @@ impl<'a> SendLogSession<'a> {
     }
 
     pub fn stat_cache_lookup(&self, hash: &[u8]) -> Result<Option<StatCacheEntry>, anyhow::Error> {
-        let mut stmt = self
-            .log
-            .db_conn
-            .prepare_cached("select Cached from StatCache where Hash = ?;")?;
+        let mut stmt = self.log.db_conn.prepare_cached(
+            "update StatCache set LatestSessionId = ?1 where Hash = ?2 returning Cached;",
+        )?;
 
-        match stmt.query_row(rusqlite::params![hash], |r| {
+        match stmt.query_row(rusqlite::params![self.session_id, hash], |r| {
             let data: Vec<u8> = r.get(0)?;
             Ok(data)
         }) {
