@@ -487,6 +487,10 @@ impl CompressedIndex {
             reader: lz4::Decoder::new(std::io::Cursor::new(&self.compressed_ents)).unwrap(),
         }
     }
+
+    pub fn compressed_size(&self) -> usize {
+        self.compressed_ents.len()
+    }
 }
 
 pub struct CompressedIndexIterator<'a> {
