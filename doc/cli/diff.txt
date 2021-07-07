@@ -2,7 +2,8 @@ bupstash diff [OPTIONS] QUERY1 :: QUERY2
 
 Diff two snapshots.
 
-See the bupstash manual for a description of diff semantics
+See the bupstash manual for a detauked description of diff semantics
 
 Examples:
   $ bupstash diff id=8f7* :: id=def*
+  $ bupstash diff --relaxed id="57de*" :: ./files

@@ -88,6 +88,9 @@ more information on the query cache.
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
+* --pick PATH:
+  List a sub-directory of the query.
+
 * --utc-timestamps:
   Display and search against timestamps in utc time instead of local time.
 

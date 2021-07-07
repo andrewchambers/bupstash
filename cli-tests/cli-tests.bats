@@ -502,6 +502,7 @@ _concurrent_modify_worker () {
       cmp <(bupstash get --pick "$f" id=$id) "$SCRATCH/foo/$f"
     done
     test $(bupstash get id=$id | tar -t | expr $(wc -l)) = 22
+    bupstash get --pick . id=$id | tar -t
     test $(bupstash get --pick . id=$id | tar -t | expr $(wc -l)) = 22
     test $(bupstash get --pick baz id=$id | tar -t | expr $(wc -l)) = 11
     test $(bupstash list-contents  id=$id | expr $(wc -l)) = 22
@@ -520,6 +521,19 @@ _concurrent_modify_worker () {
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
   test 5 = "$(bupstash list-contents id=$id | expr $(wc -l))"
   test 5 = "$(bupstash list-contents -k $LIST_CONTENTS_KEY id=$id | expr $(wc -l))"
+}
+
+@test "list-contents pick" {
+  mkdir "$SCRATCH/foo"
+  mkdir "$SCRATCH/foo/bar"
+  mkdir "$SCRATCH/foo/bar/baz"
+  mkdir "$SCRATCH/foo/bang"
+  echo foo > "$SCRATCH/foo/bar/baz/a.txt"
+
+  id=$(bupstash put :: "$SCRATCH/foo")
+  test 5 = "$(bupstash list-contents id=$id | expr $(wc -l))"
+  test 5 = "$(bupstash list-contents --pick . id=$id | expr $(wc -l))"
+  test 3 = "$(bupstash list-contents --pick bar id=$id | expr $(wc -l))"
 }
 
 @test "hard link short path" {
@@ -599,6 +613,16 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --ignore times id=$id1 :: id=$id2 | expr $(wc -l))"
   test 2 = "$(bupstash diff --ignore times id=$id2 :: id=$id3 | expr $(wc -l))"
   test 0 = "$(bupstash diff --ignore times,content id=$id2 :: id=$id3 | expr $(wc -l))"
+}
+
+@test "simple local diff" {
+  mkdir "$SCRATCH"/d{1,2,3}
+  echo -n "abc" > "$SCRATCH/d1/a.txt"
+  echo -n "abc" > "$SCRATCH/d2/a.txt"
+  echo -n "abcd" > "$SCRATCH/d3/a.txt"
+  test 4 = "$(bupstash diff $SCRATCH/d1 :: $SCRATCH/d2 | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d1 :: $SCRATCH/d2 | expr $(wc -l))"
+  test 2 = "$(bupstash diff --relaxed $SCRATCH/d1 :: $SCRATCH/d3 | expr $(wc -l))"
 }
 
 @test "access controls" {
@@ -696,7 +720,7 @@ _concurrent_modify_worker () {
         rm -rf "$copy_dir" "$restore_dir"
         mkdir "$copy_dir" "$restore_dir"
 
-        tar -C "$rand_dir" -cf - $d | tar -C "$copy_dir" -xf -
+        tar -C "$rand_dir/$d" -cf - . | tar -C "$copy_dir" -xf -
         bupstash get --pick "$d" "id=$id" | tar -C "$restore_dir" -xf -
 
         diff -u \

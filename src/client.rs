@@ -277,19 +277,20 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
     fn send_dir(
         &mut self,
-        paths: &[std::path::PathBuf],
-        exclusions: &[glob::Pattern],
+        paths: Vec<std::path::PathBuf>,
+        exclusions: Vec<glob::Pattern>,
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
         let mut file_opener = fprefetch::ReadaheadFileOpener::new();
 
         let indexer = indexer::FsIndexer::new(
-            paths,
+            &paths,
             indexer::FsIndexerOptions {
                 one_file_system: self.ctx.one_file_system,
                 want_xattrs: self.ctx.want_xattrs,
-                exclusions: exclusions.to_vec(),
+                want_hash: false,
+                exclusions,
             },
         )?
         .background();
@@ -584,7 +585,7 @@ pub fn send(
     w: &mut dyn std::io::Write,
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
-    data: &mut DataSource,
+    data: DataSource,
 ) -> Result<(Xid, SendStats), anyhow::Error> {
     let start_time = chrono::Utc::now();
 
@@ -656,10 +657,10 @@ pub fn send(
         }
         DataSource::Readable {
             description,
-            ref mut data,
+            mut data,
         } => {
-            ctx.progress.set_message(description.to_string());
-            session.write_data(data, &mut |_: &Address, _: usize| {})?;
+            ctx.progress.set_message(description);
+            session.write_data(&mut data, &mut |_: &Address, _: usize| {})?;
         }
         DataSource::Filesystem { paths, exclusions } => {
             session.send_dir(paths, exclusions)?;
