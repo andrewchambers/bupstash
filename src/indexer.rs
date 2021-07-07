@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 struct CombinedMetadata {
     metadata: std::fs::Metadata,
     xattrs: Option<index::Xattrs>,
+    data_hash: index::ContentCryptoHash,
 }
 
 enum FsMetadataRequest {
@@ -26,14 +27,17 @@ impl Drop for FsMetadataFetcher {
         for _i in 0..self.workers.len() {
             self.dispatch_tx.send(FsMetadataRequest::Done).unwrap();
         }
-
         for w in self.workers.drain(..) {
             w.join().unwrap()
         }
     }
 }
 
-fn get_metadata(path: &Path, want_xattrs: bool) -> std::io::Result<CombinedMetadata> {
+fn get_metadata(
+    path: &Path,
+    want_xattrs: bool,
+    want_hash: bool,
+) -> std::io::Result<CombinedMetadata> {
     let metadata = path.symlink_metadata()?;
     let mut xattrs = None;
     if want_xattrs && (metadata.is_file() || metadata.is_dir()) {
@@ -62,11 +66,25 @@ fn get_metadata(path: &Path, want_xattrs: bool) -> std::io::Result<CombinedMetad
             Err(err) => return Err(err),
         }
     }
-    Ok(CombinedMetadata { metadata, xattrs })
+
+    let data_hash = if metadata.is_file() && want_hash {
+        let mut hasher = blake3::Hasher::new();
+        let mut f = std::fs::File::open(path)?;
+        std::io::copy(&mut f, &mut hasher)?;
+        index::ContentCryptoHash::Blake3(hasher.finalize().into())
+    } else {
+        index::ContentCryptoHash::None
+    };
+
+    Ok(CombinedMetadata {
+        metadata,
+        xattrs,
+        data_hash,
+    })
 }
 
 impl FsMetadataFetcher {
-    fn new(num_workers: usize, want_xattrs: bool) -> FsMetadataFetcher {
+    fn new(num_workers: usize, want_xattrs: bool, want_hash: bool) -> FsMetadataFetcher {
         let num_workers = num_workers.max(1);
         let (dispatch_tx, dispatch_rx) = crossbeam_channel::bounded(0);
         let (result_tx, result_rx) = crossbeam_channel::bounded(0);
@@ -79,7 +97,7 @@ impl FsMetadataFetcher {
                 .spawn(move || loop {
                     match dispatch_rx.recv() {
                         Ok(FsMetadataRequest::SymlinkMetadata { path }) => {
-                            let r = get_metadata(&path, want_xattrs);
+                            let r = get_metadata(&path, want_xattrs, want_hash);
                             let _ = result_tx.send((path, r));
                         }
                         Ok(FsMetadataRequest::Done) => break,
@@ -183,12 +201,13 @@ impl DevNormalizer {
     }
 }
 
-pub fn fs_metadata_to_index_ent(
+pub fn metadata_to_index_ent(
     dev_normalizer: &mut DevNormalizer,
     full_path: &std::path::Path,
     index_path: &std::path::Path,
     metadata: &std::fs::Metadata,
     xattrs: Option<index::Xattrs>,
+    data_hash: index::ContentCryptoHash,
 ) -> Result<index::IndexEntry, std::io::Error> {
     // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
     // how best to handle this?
@@ -236,8 +255,7 @@ pub fn fs_metadata_to_index_ent(
             start_byte_offset: serde_bare::Uint(0),
             end_byte_offset: serde_bare::Uint(0),
         },
-        // Set by caller.
-        data_hash: index::ContentCryptoHash::None,
+        data_hash,
     })
 }
 
@@ -260,6 +278,7 @@ pub struct FsIndexer {
 pub struct FsIndexerOptions {
     pub exclusions: Vec<glob::Pattern>,
     pub want_xattrs: bool,
+    pub want_hash: bool,
     pub one_file_system: bool,
 }
 
@@ -321,6 +340,12 @@ impl FsIndexer {
             }
             root_paths.push(absolute_paths[i].clone());
             i = j;
+        }
+
+        for p in root_paths.iter() {
+            if !p.is_dir() {
+                anyhow::bail!("cannot index {:?}: is it not a directory", p)
+            }
         }
 
         // We should always have at least "/" in common.
@@ -390,6 +415,7 @@ impl FsIndexer {
         };
 
         let want_xattrs = opts.want_xattrs;
+        let want_hash = opts.want_hash;
 
         Ok(FsIndexer {
             opts,
@@ -398,7 +424,7 @@ impl FsIndexer {
             filler_children,
             work_stack: vec![vec![start_dir]],
             dev_normalizer: DevNormalizer::new(),
-            metadata_fetcher: FsMetadataFetcher::new(8, want_xattrs),
+            metadata_fetcher: FsMetadataFetcher::new(8, want_xattrs, want_hash),
         })
     }
 
@@ -454,6 +480,7 @@ impl FsIndexer {
                 Ok(CombinedMetadata {
                     metadata: md,
                     xattrs,
+                    data_hash,
                 }) => {
                     if md.file_type().is_socket() {
                         continue 'process_dir_ents;
@@ -465,12 +492,13 @@ impl FsIndexer {
                         dir_ent_path.strip_prefix(&self.base).unwrap().to_path_buf()
                     };
 
-                    let index_ent = match fs_metadata_to_index_ent(
+                    let index_ent = match metadata_to_index_ent(
                         &mut self.dev_normalizer,
                         &dir_ent_path,
                         &index_ent_path,
                         &md,
                         xattrs,
+                        data_hash,
                     ) {
                         Ok(index_ent) => index_ent,
                         Err(err) if fsutil::likely_smear_error(&err) => continue 'process_dir_ents,

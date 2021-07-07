@@ -105,7 +105,7 @@ pub const INDEX_COMPARE_MASK_GID: u64 = 1 << 7;
 pub const INDEX_COMPARE_MASK_INO: u64 = 1 << 8;
 pub const INDEX_COMPARE_MASK_NLINK: u64 = 1 << 9;
 pub const INDEX_COMPARE_MASK_LINK_TARGET: u64 = 1 << 10;
-pub const INDEX_COMPARE_MASK_DEV_NUMS: u64 = 1 << 11;
+pub const INDEX_COMPARE_MASK_DEVNOS: u64 = 1 << 11;
 pub const INDEX_COMPARE_MASK_XATTRS: u64 = 1 << 12;
 pub const INDEX_COMPARE_MASK_DATA_CURSORS: u64 = 1 << 13;
 
@@ -128,7 +128,7 @@ impl IndexEntry {
             && ((compare_mask & INDEX_COMPARE_MASK_NLINK != 0) || self.nlink == other.nlink)
             && ((compare_mask & INDEX_COMPARE_MASK_LINK_TARGET != 0)
                 || self.link_target == other.link_target)
-            && ((compare_mask & INDEX_COMPARE_MASK_DEV_NUMS != 0)
+            && ((compare_mask & INDEX_COMPARE_MASK_DEVNOS != 0)
                 || (self.dev_major == other.dev_major && self.dev_minor == other.dev_minor))
             && ((compare_mask & INDEX_COMPARE_MASK_DATA_CURSORS != 0)
                 || self.data_cursor == other.data_cursor)
@@ -286,9 +286,9 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
     let mut iter = file_index.iter();
 
     while let Some(ent) = iter.next() {
-        let ent = ent?;
+        let mut ent = ent?;
 
-        // magic unsupported marker.
+        // Post 1.0 we could perhaps be able to remove this check.
         if ent.data_cursor.chunk_delta.0 == u64::MAX {
             anyhow::bail!("this index was created by an older version of bupstash and we longer supports pick operations on it due to an unfortunate bug");
         }
@@ -296,12 +296,6 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
         if ent.path == path {
             match ent.kind() {
                 IndexEntryKind::Directory => {
-                    let prefix = if ent.path == "." {
-                        "".to_string()
-                    } else {
-                        format!("{}/", ent.path)
-                    };
-
                     let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
                     let mut incomplete_data_chunks: std::collections::HashMap<
                         u64,
@@ -309,15 +303,23 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
                     > = std::collections::HashMap::new();
 
                     let mut sub_index_writer = CompressedIndexWriter::new();
+
+                    ent.path = ".".to_string();
                     sub_index_writer.add(&ent);
+
+                    let strip_prefix = if path == "." {
+                        "".to_string()
+                    } else {
+                        format!("{}/", path)
+                    };
 
                     cur_chunk_idx += ent.data_cursor.chunk_delta.0;
 
                     for ent in iter {
-                        let ent = ent?;
+                        let mut ent = ent?;
 
                         // Match the directory and children.
-                        if !ent.path.starts_with(&prefix) {
+                        if !ent.path.starts_with(&strip_prefix) {
                             cur_chunk_idx += ent.data_cursor.chunk_delta.0;
                             // We don't assume all children are contiguous in
                             // memory, instead we just scan the whole index.
@@ -325,6 +327,8 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
                             // affect older backups.
                             continue;
                         }
+
+                        ent.path = ent.path[strip_prefix.len()..].to_string();
 
                         sub_index_writer.add(&ent);
 
@@ -468,6 +472,51 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
         }
 
         cur_chunk_idx += ent.data_cursor.chunk_delta.0;
+    }
+    anyhow::bail!("{} not found in content index", path)
+}
+
+pub fn pick_dir_without_data_ranges(
+    path: &str,
+    file_index: &CompressedIndex,
+) -> Result<CompressedIndex, anyhow::Error> {
+    let mut iter = file_index.iter();
+    while let Some(ent) = iter.next() {
+        let mut ent = ent?;
+        // Post 1.0 we could perhaps be able to remove this check.
+        if ent.data_cursor.chunk_delta.0 == u64::MAX {
+            anyhow::bail!("this index was created by an older version of bupstash and we longer supports pick operations on it due to an unfortunate bug");
+        }
+        if ent.path != path {
+            continue;
+        }
+        match ent.kind() {
+            IndexEntryKind::Directory => {
+                let mut sub_index_writer = CompressedIndexWriter::new();
+                ent.path = ".".to_string();
+                sub_index_writer.add(&ent);
+
+                let strip_prefix = if path == "." {
+                    "".to_string()
+                } else {
+                    format!("{}/", path)
+                };
+
+                for ent in iter {
+                    let mut ent = ent?;
+                    if !ent.path.starts_with(&strip_prefix) {
+                        continue;
+                    }
+                    ent.path = ent.path[strip_prefix.len()..].to_string();
+                    sub_index_writer.add(&ent);
+                }
+                return Ok(sub_index_writer.finish());
+            }
+            _ => anyhow::bail!(
+                "unable to pick {} in this context, it is not a directory",
+                path,
+            ),
+        }
     }
     anyhow::bail!("{} not found in content index", path)
 }
@@ -662,6 +711,12 @@ pub fn diff(
     while lent.is_some() && rent.is_some() {
         let l = lent.as_ref().unwrap().as_ref().unwrap();
         let r = rent.as_ref().unwrap().as_ref().unwrap();
+
+        // Post 1.0 we could perhaps be able to remove this check.
+        if l.data_cursor.chunk_delta.0 == u64::MAX || r.data_cursor.chunk_delta.0 == u64::MAX {
+            anyhow::bail!("index was created by an older version of bupstash and we longer supports diff operations on it due to an unfortunate bug");
+        }
+
         match path_cmp(&l.path, &r.path) {
             std::cmp::Ordering::Equal => {
                 if !l.masked_compare_eq(compare_mask, r) {

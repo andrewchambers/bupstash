@@ -10,13 +10,14 @@ Diff two snapshots printing the summary to stdout.
 ## DESCRIPTION
 
 `bupstash diff` fetches two snapshot listings from the remote server and compares them, printing
-the diff line output to stdout. 
+the diff line output to stdout. As a special case, if either query starts with './' or '/' a temporary
+listing is created for that local directory for comparison.
 
 `bupstash diff` is preferred over running traditional `diff` against the output of `bupstash list-contents`
 because it takes the full precision of timestamps and also the stored file hash into account when performing
 the diff operation.
 
-Bupstash supports ignoring items in the diff comparison to aid in analysis. Most useful are the `--ignore` values
+Bupstash supports ignoring items in the diff comparison to aid in analysis. Useful exmples are the `--ignore` values
 `times` to ignore file modification timestamps and `content` to ignore file size and hash changes.
 
 ## OUTPUT FORMAT
@@ -52,7 +53,17 @@ more information on the query cache.
 
 * -i, --ignore:
   Comma separated list of file attributes to ignore in comparisons.
-  Valid items are 'content,times,mode'
+  Valid items are ''content,dev,devnos,inode,mode,nlink,uid,gid,times,xattrs''
+
+* --relaxed:
+  Shortcut for --ignore dev,inode,nlink,uid,gid,times,xattrs.
+  This option is useful for comparing content without being so concerned with machine specific metadata.
+
+* --{left,right}-pick PATH:
+  Perform diff on a sub-directory of the left/right query.
+
+* --xattrs:
+  Fetch xattrs when indexing a local directories.
 
 * --format FORMAT:
   Set output format to one of the following 'human', 'jsonl'.
@@ -89,9 +100,15 @@ more information on the query cache.
 ### Compare two snapshots by query
 
 ```
-$ bupstash diff id="14eb*" :: id="57de"
+$ bupstash diff id="14eb*" :: id="57de*"
 - -rw-r--r-- 1.1kB hello.txt
 + -rw-r--r-- 1.3kB goodbye.txt
+```
+
+### Compare a snapshot and a local directory
+
+```
+$ bupstash diff --left-pick files --relaxed id="57de*" :: ./files
 ```
 
 ## SEE ALSO

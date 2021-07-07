@@ -132,6 +132,10 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
         &mut result,
         format_args!(",\"nlink\":{}", serde_json::to_string(&ent.nlink.0)?),
     )?;
+    std::fmt::write(
+        &mut result,
+        format_args!(",\"ino\":{}", serde_json::to_string(&ent.ino.0)?),
+    )?;
     if ent.is_dev_node() {
         std::fmt::write(
             &mut result,

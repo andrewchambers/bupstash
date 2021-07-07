@@ -35,18 +35,19 @@ pub mod xtar;
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+use std::path::{Path, PathBuf};
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
     std::process::exit(1);
 }
 
-fn cache_dir() -> Result<std::path::PathBuf, anyhow::Error> {
+fn cache_dir() -> Result<PathBuf, anyhow::Error> {
     let mut cache_dir = match std::env::var_os("XDG_CACHE_HOME") {
-        Some(cache_dir) => std::path::PathBuf::from(&cache_dir),
+        Some(cache_dir) => PathBuf::from(&cache_dir),
         None => match std::env::var_os("HOME") {
             Some(home) => {
-                let mut h = std::path::PathBuf::from(&home);
+                let mut h = PathBuf::from(&home);
                 h.push(".cache");
                 h
             }
@@ -234,11 +235,9 @@ fn new_sub_key_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn cli_to_query_cache(matches: &getopts::Matches) -> Result<querycache::QueryCache, anyhow::Error> {
     match matches.opt_str("query-cache") {
-        Some(query_cache) => querycache::QueryCache::open(&std::path::PathBuf::from(query_cache)),
+        Some(query_cache) => querycache::QueryCache::open(&PathBuf::from(query_cache)),
         None => match std::env::var_os("BUPSTASH_QUERY_CACHE") {
-            Some(query_cache) => {
-                querycache::QueryCache::open(&std::path::PathBuf::from(query_cache))
-            }
+            Some(query_cache) => querycache::QueryCache::open(&PathBuf::from(query_cache)),
             None => {
                 let mut p = cache_dir()?;
                 std::fs::create_dir_all(&p)?;
@@ -943,7 +942,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let default_tags = !matches.opt_present("no-default-tags");
 
-    let mut data_source: client::DataSource;
+    let data_source: client::DataSource;
 
     let progress = cli_to_progress_bar(
         &matches,
@@ -966,7 +965,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 data: Box::new(inf),
             };
         } else {
-            let input_path: std::path::PathBuf = std::convert::From::from(&source_args[0]);
+            let input_path: PathBuf = std::convert::From::from(&source_args[0]);
             let input_path = fsutil::absolute_path(&input_path)?;
 
             let md = match std::fs::metadata(&input_path) {
@@ -1041,11 +1040,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else {
         progress.set_message("acquiring exclusive lock on send log...");
         match matches.opt_str("send-log") {
-            Some(send_log) => Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?),
+            Some(send_log) => Some(sendlog::SendLog::open(&PathBuf::from(send_log))?),
             None => match std::env::var_os("BUPSTASH_SEND_LOG") {
-                Some(send_log) => {
-                    Some(sendlog::SendLog::open(&std::path::PathBuf::from(send_log))?)
-                }
+                Some(send_log) => Some(sendlog::SendLog::open(&PathBuf::from(send_log))?),
                 None => {
                     let mut p = cache_dir()?;
                     std::fs::create_dir_all(&p)?;
@@ -1084,7 +1081,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &mut serve_in,
         send_log,
         tags,
-        &mut data_source,
+        data_source,
     )?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -1143,7 +1140,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "pick",
-        "Pick a single file or directory from a directory snapshot.",
+        "Pick a single file or sub-directory from a directory snapshot.",
         "PATH",
     );
 
@@ -1253,7 +1250,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     };
 
     let pick = if matches.opt_present("pick") {
-        progress.set_message("fetching content index...");
+        progress.set_message("picking content...");
 
         if let Some(ref content_index) = content_index {
             Some(index::pick(
@@ -1312,6 +1309,12 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "format",
         "Output format, valid values are 'human' or 'jsonl1'.",
         "FORMAT",
+    );
+    opts.optopt(
+        "",
+        "pick",
+        "Pick a sub-directory from a directory snapshot.",
+        "PATH",
     );
 
     let matches = parse_cli_opts(opts, &args[..]);
@@ -1423,7 +1426,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     progress.set_message("fetching content index...");
-    let content_index = client::request_index(
+    let mut content_index = client::request_index(
         client::IndexRequestContext {
             primary_key_id,
             idx_hash_key_part_1,
@@ -1435,6 +1438,12 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &mut serve_out,
         &mut serve_in,
     )?;
+
+    if matches.opt_present("pick") {
+        progress.set_message("picking content...");
+        content_index =
+            index::pick_dir_without_data_ranges(&matches.opt_str("pick").unwrap(), &content_index)?;
+    }
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -1485,8 +1494,30 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "i",
         "ignore",
-        "Comma separated list of file attributes to ignore in comparisons. Valid items are 'content,times,mode'.",
+        "Comma separated list of file attributes to ignore in comparisons. Valid values are 'content,dev,devnos,inode,mode,nlink,uid,gid,times,xattrs'.",
         "IGNORE",
+    );
+    opts.optflag(
+        "",
+        "relaxed",
+        "Shortcut for --ignore dev,inode,nlink,uid,gid,times,xattrs.",
+    );
+    opts.optflag(
+        "",
+        "xattrs",
+        "Fetch xattrs when indexing a local directories.",
+    );
+    opts.optopt(
+        "",
+        "left-pick",
+        "Perform diff on a sub-directory of the left query.",
+        "PATH",
+    );
+    opts.optopt(
+        "",
+        "right-pick",
+        "Perform diff on a sub-directory of the right query.",
+        "PATH",
     );
     opts.optopt(
         "",
@@ -1505,22 +1536,42 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         None => ListFormat::Human,
     };
+
     let mut diff_mask = index::INDEX_COMPARE_MASK_DATA_CURSORS;
 
-    if let Some(ignore) = matches.opt_str("ignore") {
-        for ignore in ignore.split(',') {
-            match ignore {
-                "mode" => diff_mask |= index::INDEX_COMPARE_MASK_MODE,
-                "content" => {
-                    diff_mask |=
+    if matches.opt_present("relaxed") {
+        diff_mask |= index::INDEX_COMPARE_MASK_DEV;
+        diff_mask |= index::INDEX_COMPARE_MASK_INO;
+        diff_mask |= index::INDEX_COMPARE_MASK_NLINK;
+        diff_mask |= index::INDEX_COMPARE_MASK_MTIME | index::INDEX_COMPARE_MASK_CTIME;
+        diff_mask |= index::INDEX_COMPARE_MASK_UID;
+        diff_mask |= index::INDEX_COMPARE_MASK_GID;
+        diff_mask |= index::INDEX_COMPARE_MASK_XATTRS;
+    }
+
+    if let Some(fields) = matches.opt_str("ignore") {
+        let mut to_toggle = 0;
+        for f in fields.split(',') {
+            match f {
+                "dev" => to_toggle |= index::INDEX_COMPARE_MASK_DEV,
+                "devnos" => to_toggle |= index::INDEX_COMPARE_MASK_DEVNOS,
+                "uid" => to_toggle |= index::INDEX_COMPARE_MASK_UID,
+                "gid" => to_toggle |= index::INDEX_COMPARE_MASK_GID,
+                "inode" => to_toggle |= index::INDEX_COMPARE_MASK_INO,
+                "nlink" => to_toggle |= index::INDEX_COMPARE_MASK_NLINK,
+                "mode" => to_toggle |= index::INDEX_COMPARE_MASK_MODE,
+                "file-content" => {
+                    to_toggle |=
                         index::INDEX_COMPARE_MASK_SIZE | index::INDEX_COMPARE_MASK_DATA_HASH
                 }
                 "times" => {
-                    diff_mask |= index::INDEX_COMPARE_MASK_MTIME | index::INDEX_COMPARE_MASK_CTIME
+                    to_toggle |= index::INDEX_COMPARE_MASK_MTIME | index::INDEX_COMPARE_MASK_CTIME
                 }
-                _ => anyhow::bail!("'{}' is not a valid ignore value", ignore),
+                "xattrs" => to_toggle |= index::INDEX_COMPARE_MASK_XATTRS,
+                _ => anyhow::bail!("'{}' is not a valid ignore value", f),
             }
         }
+        diff_mask |= to_toggle
     }
 
     let mut queries = vec![vec![]];
@@ -1573,94 +1624,127 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
+    let mut already_synced = false;
     let mut to_diff = vec![];
 
     for query in queries {
-        let (id, query) = match query::parse(&query.join("•")) {
-            Ok(query) => (query::get_id_query(&query), query),
-            Err(e) => {
-                query::report_parse_error(e);
-                anyhow::bail!("query parse error");
+        if !query.is_empty() && (query[0].starts_with("./") || query[0].starts_with('/')) {
+            let paths: Vec<PathBuf> = query.iter().map(PathBuf::from).collect();
+            let mut ciw = index::CompressedIndexWriter::new();
+            for indexed_dir in indexer::FsIndexer::new(
+                &paths,
+                indexer::FsIndexerOptions {
+                    exclusions: vec![],
+                    want_xattrs: matches.opt_present("xattrs"),
+                    want_hash: true,
+                    one_file_system: false,
+                },
+            )? {
+                let indexed_dir = indexed_dir?;
+                for index_ent in indexed_dir.index_ents {
+                    ciw.add(&index_ent);
+                }
             }
-        };
+            to_diff.push(ciw.finish())
+        } else {
+            let (id, query) = match query::parse(&query.join("•")) {
+                Ok(query) => (query::get_id_query(&query), query),
+                Err(e) => {
+                    query::report_parse_error(e);
+                    anyhow::bail!("query parse error");
+                }
+            };
 
-        let id = match (id, query) {
-            (Some(id), _) => id,
-            (_, query) => {
-                let mut query_cache = cli_to_query_cache(&matches)?;
+            let id = match (id, query) {
+                (Some(id), _) => id,
+                (_, query) => {
+                    let mut query_cache = cli_to_query_cache(&matches)?;
 
-                // Only sync the client if we have a non id query.
-                client::sync(
-                    progress.clone(),
-                    &mut query_cache,
-                    &mut serve_out,
-                    &mut serve_in,
-                )?;
+                    if !already_synced {
+                        client::sync(
+                            progress.clone(),
+                            &mut query_cache,
+                            &mut serve_out,
+                            &mut serve_in,
+                        )?;
+                        already_synced = true;
+                    }
 
-                let mut n_matches: u64 = 0;
-                let mut id = xid::Xid::default();
+                    let mut n_matches: u64 = 0;
+                    let mut id = xid::Xid::default();
 
-                let mut on_match =
-                    |item_id: xid::Xid,
-                     _tags: &std::collections::BTreeMap<String, String>,
-                     _metadata: &oplog::VersionedItemMetadata,
-                     _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
-                        n_matches += 1;
-                        id = item_id;
+                    let mut on_match =
+                        |item_id: xid::Xid,
+                         _tags: &std::collections::BTreeMap<String, String>,
+                         _metadata: &oplog::VersionedItemMetadata,
+                         _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
+                            n_matches += 1;
+                            id = item_id;
 
-                        if n_matches > 1 {
-                            anyhow::bail!(
-                                "provided query matched {} items, need a single match",
-                                n_matches
-                            );
-                        }
+                            if n_matches > 1 {
+                                anyhow::bail!(
+                                    "provided query matched {} items, need a single match",
+                                    n_matches
+                                );
+                            }
 
-                        Ok(())
-                    };
+                            Ok(())
+                        };
 
-                let mut tx = query_cache.transaction()?;
-                tx.list(
-                    querycache::ListOptions {
-                        primary_key_id: Some(primary_key_id),
-                        metadata_dctx: Some(metadata_dctx.clone()),
-                        list_encrypted: matches.opt_present("query-encrypted"),
-                        query: Some(query),
-                        now: chrono::Utc::now(),
-                        utc_timestamps,
-                    },
-                    &mut on_match,
-                )?;
+                    let mut tx = query_cache.transaction()?;
+                    tx.list(
+                        querycache::ListOptions {
+                            primary_key_id: Some(primary_key_id),
+                            metadata_dctx: Some(metadata_dctx.clone()),
+                            list_encrypted: matches.opt_present("query-encrypted"),
+                            query: Some(query),
+                            now: chrono::Utc::now(),
+                            utc_timestamps,
+                        },
+                        &mut on_match,
+                    )?;
 
-                id
+                    id
+                }
+            };
+
+            progress.set_message("fetching item metadata...");
+            let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+
+            if metadata.index_tree().is_none() {
+                anyhow::bail!("diff is only supported for directory snapshots created by bupstash");
             }
-        };
 
-        progress.set_message("fetching item metadata...");
-        let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+            progress.set_message("fetching content index...");
+            let content_index = client::request_index(
+                client::IndexRequestContext {
+                    primary_key_id,
+                    idx_hash_key_part_1: idx_hash_key_part_1.clone(),
+                    metadata_dctx: metadata_dctx.clone(),
+                    idx_dctx: idx_dctx.clone(),
+                },
+                id,
+                &metadata,
+                &mut serve_out,
+                &mut serve_in,
+            )?;
 
-        if metadata.index_tree().is_none() {
-            anyhow::bail!("diff is only supported for directory snapshots created by bupstash");
+            to_diff.push(content_index);
         }
-
-        progress.set_message("fetching content index...");
-        let content_index = client::request_index(
-            client::IndexRequestContext {
-                primary_key_id,
-                idx_hash_key_part_1: idx_hash_key_part_1.clone(),
-                metadata_dctx: metadata_dctx.clone(),
-                idx_dctx: idx_dctx.clone(),
-            },
-            id,
-            &metadata,
-            &mut serve_out,
-            &mut serve_in,
-        )?;
-
-        to_diff.push(content_index);
     }
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
+
+    for (i, pick_opt) in ["left-pick", "right-pick"].iter().enumerate() {
+        if matches.opt_present(pick_opt) {
+            progress.set_message("picking content...");
+            to_diff[i] = index::pick_dir_without_data_ranges(
+                &matches.opt_str(pick_opt).unwrap(),
+                &to_diff[i],
+            )?;
+        }
+    }
 
     progress.finish_and_clear();
 
@@ -2112,7 +2196,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             allow_gc,
             allow_get,
             allow_list,
-            repo_path: std::path::Path::new(&matches.free[0]).to_path_buf(),
+            repo_path: Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut stdin_unbuffered,
         &mut stdout_unbuffered,
