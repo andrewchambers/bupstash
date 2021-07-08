@@ -331,114 +331,67 @@ fn send_partial_htree(
     ranges: Vec<index::HTreeDataRange>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    // The ranges are sent from the client, first validate them.
-    for (i, r) in ranges.iter().enumerate() {
-        if r.start_idx > r.end_idx {
-            anyhow::bail!("malformed htree fetch range, start point after end");
-        }
-
-        match ranges.get(i + 1) {
-            Some(next) if next.start_idx == r.end_idx => {
-                anyhow::bail!("malformed htree fetch range, not in minimal form")
-            }
-            Some(next) if next.start_idx < r.end_idx => {
-                anyhow::bail!("malformed htree fetch range, not in sorted order")
-            }
-            _ => (),
-        }
-    }
-
+    let mut data_addresses = Vec::with_capacity(64);
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
-    let start_chunk_idx = match ranges.get(0) {
-        Some(range) => range.start_idx,
-        None => serde_bare::Uint(0),
-    };
-
-    // Use the offset data in the htree to efficiently seek to the first data chunk.
-    loop {
-        let height = match tr.current_height() {
-            Some(v) => v,
-            None => anyhow::bail!("htree is corrupt, pick data not found"),
-        };
-
-        if height == 0 {
-            break;
-        }
-
-        let (_, address) = tr.next_addr().unwrap();
-
-        let chunk_data = repo.get_chunk(&address)?;
-        write_chunk(w, &address, &chunk_data)?;
-        let mut chunk_data = compression::unauthenticated_decompress(chunk_data)?;
-
-        let mut level_data_chunk_idx = current_data_chunk_idx;
-        let mut skip_count = 0;
-        for ent_slice in chunk_data.chunks(8 + address::ADDRESS_SZ) {
-            let data_chunk_count = u64::from_le_bytes(ent_slice[..8].try_into()?);
-            if level_data_chunk_idx + data_chunk_count > start_chunk_idx.0 {
-                break;
-            }
-            level_data_chunk_idx += data_chunk_count;
-            skip_count += 1;
-        }
-        current_data_chunk_idx = level_data_chunk_idx;
-        chunk_data.drain(0..(skip_count * (8 + address::ADDRESS_SZ)));
-        tr.push_level(height - 1, chunk_data)?;
-    }
-
-    if current_data_chunk_idx != start_chunk_idx.0 {
-        anyhow::bail!("htree is corrupt, seek went too far");
-    }
 
     let mut on_chunk = |addr: &address::Address, data: &[u8]| -> Result<(), anyhow::Error> {
         write_chunk(w, addr, data)?;
         Ok(())
     };
 
-    // Mostly the same as the less complicated send_htree function, but we filter out unwanted chunks and exit early.
     loop {
-        match tr.current_height() {
-            Some(0) => {
-                let address_buf = tr.pop_level().unwrap();
-                let mut filtered_addresses =
-                    Vec::with_capacity(address_buf.len() / (8 + address::ADDRESS_SZ) / 4);
-
-                // XXX This could be an iterator, but it wasn't easy to write nicely,
-                // I think when rust gets generators on stable we should use it here.
-                for addr in address_buf
-                    .chunks(8 + address::ADDRESS_SZ)
-                    .map(|x| address::Address::from_slice(&x[8..]).unwrap())
-                {
-                    match ranges.get(range_idx) {
-                        Some(current_range) => {
-                            if current_data_chunk_idx >= current_range.start_idx.0
-                                && current_data_chunk_idx <= current_range.end_idx.0
-                            {
-                                filtered_addresses.push(addr)
-                            }
-
-                            current_data_chunk_idx += 1;
-                            if current_data_chunk_idx > current_range.end_idx.0 {
-                                range_idx += 1;
-                            }
-                        }
-                        None => break,
-                    }
+        // Get the current range.
+        let range = match ranges.get(range_idx) {
+            Some(range) => {
+                if current_data_chunk_idx > range.end_idx.0 {
+                    range_idx += 1;
+                    continue;
                 }
-
-                repo.pipelined_get_chunks(&filtered_addresses, &mut on_chunk)?;
+                range
             }
-            Some(_) if ranges.get(range_idx).is_some() => {
-                if let Some((height, chunk_address)) = tr.next_addr() {
-                    let chunk_data = repo.get_chunk(&chunk_address)?;
-                    on_chunk(&chunk_address, &chunk_data)?;
+            None => break,
+        };
+
+        // Fast forward until we are at the correct data chunk boundary.
+        loop {
+            let num_skipped = tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
+            current_data_chunk_idx += num_skipped;
+            if let Some(height) = tr.current_height() {
+                if height == 0 && current_data_chunk_idx >= range.start_idx.0 {
+                    break;
+                } else {
+                    let (_, chunk_addr) = tr.next_addr().unwrap();
+                    let chunk_data = repo.get_chunk(&chunk_addr)?;
+                    on_chunk(&chunk_addr, &chunk_data)?;
                     let chunk_data = compression::unauthenticated_decompress(chunk_data)?;
                     tr.push_level(height - 1, chunk_data)?;
                 }
+            } else {
+                anyhow::bail!("hash tree ended before requested range");
             }
-            _ => break,
         }
+
+        if current_data_chunk_idx != range.start_idx.0 {
+            anyhow::bail!(
+                "requested data ranges do not match hash tree accounting, seek overshoot detected"
+            )
+        }
+
+        while current_data_chunk_idx + (data_addresses.len() as u64) <= range.end_idx.0 {
+            match tr.current_height() {
+                Some(0) => match tr.next_addr() {
+                    Some((0, chunk_addr)) => {
+                        data_addresses.push(chunk_addr);
+                    }
+                    _ => unreachable!(),
+                },
+                _ => break,
+            }
+        }
+        repo.pipelined_get_chunks(&data_addresses, &mut on_chunk)?;
+        current_data_chunk_idx += data_addresses.len() as u64;
+        data_addresses.clear();
     }
 
     Ok(())

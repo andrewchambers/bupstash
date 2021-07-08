@@ -184,56 +184,83 @@ impl TreeReader {
         if (data.len() % (8 + ADDRESS_SZ)) != 0 {
             return Err(HTreeError::CorruptOrTamperedDataError.into());
         }
-        self.read_offsets.push(0);
-        self.tree_heights.push(level);
-        self.tree_blocks.push(data);
+        if !data.is_empty() {
+            self.read_offsets.push(0);
+            self.tree_heights.push(level);
+            self.tree_blocks.push(data);
+        }
         Ok(())
     }
 
-    fn prune_empty(&mut self) {
-        loop {
-            if self.tree_blocks.is_empty() {
-                return;
-            }
-            let data = self.tree_blocks.last().unwrap();
-            let read_offset = self.read_offsets.last().unwrap();
-            let remaining = &data[*read_offset..];
-            if !remaining.is_empty() {
-                return;
-            }
-            self.pop_level();
-        }
-    }
-
     pub fn peek_addr(&mut self) -> Option<(usize, Address)> {
-        self.prune_empty();
-
         if self.tree_blocks.is_empty() {
             return None;
         }
-
         let data = self.tree_blocks.last().unwrap();
         let height = *self.tree_heights.last().unwrap();
         let read_offset = self.read_offsets.last().unwrap();
         let remaining = &data[*read_offset..];
-        assert!(!remaining.is_empty());
         let mut addr = Address::default();
         addr.bytes.clone_from_slice(&remaining[8..8 + ADDRESS_SZ]);
         Some((height, addr))
     }
 
     pub fn next_addr(&mut self) -> Option<(usize, Address)> {
-        let addr = self.peek_addr();
-        if addr.is_some() {
-            let read_offset = self.read_offsets.last_mut().unwrap();
+        if self.tree_blocks.is_empty() {
+            return None;
+        }
+        let data = self.tree_blocks.last().unwrap();
+        let height = *self.tree_heights.last().unwrap();
+        let read_offset = self.read_offsets.last_mut().unwrap();
+        let remaining = &data[*read_offset..];
+        let mut addr = Address::default();
+        addr.bytes.clone_from_slice(&remaining[8..8 + ADDRESS_SZ]);
+        if remaining.len() == 8 + ADDRESS_SZ {
+            self.pop_level();
+        } else {
             *read_offset += 8 + ADDRESS_SZ;
         }
-        addr
+        Some((height, addr))
+    }
+
+    pub fn remaining_level_addrs(&self) -> Option<usize> {
+        if let Some(data) = self.tree_blocks.last() {
+            let read_offset = self.read_offsets.last().unwrap();
+            let remaining = &data[*read_offset..];
+            Some(remaining.len() / (8 + ADDRESS_SZ))
+        } else {
+            None
+        }
     }
 
     pub fn current_height(&mut self) -> Option<usize> {
-        self.prune_empty();
         self.tree_heights.last().copied()
+    }
+
+    pub fn fast_forward(&mut self, num_chunks_to_skip: u64) -> Result<u64, anyhow::Error> {
+        let mut n_skipped = 0;
+        loop {
+            if n_skipped == num_chunks_to_skip {
+                return Ok(n_skipped);
+            }
+            match self.tree_blocks.last() {
+                Some(data) => {
+                    let read_offset = self.read_offsets.last_mut().unwrap();
+                    let remaining = &data[*read_offset..];
+                    let num_chunks = u64::from_le_bytes(remaining[0..8].try_into().unwrap());
+                    if n_skipped + num_chunks > num_chunks_to_skip {
+                        return Ok(n_skipped);
+                    }
+                    n_skipped += num_chunks;
+                    if remaining.len() == 8 + ADDRESS_SZ {
+                        self.pop_level();
+                    } else {
+                        *read_offset += 8 + ADDRESS_SZ;
+                    }
+                }
+                None => return Ok(n_skipped),
+            }
+        }
     }
 }
 

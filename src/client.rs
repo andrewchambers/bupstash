@@ -17,7 +17,7 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryInto;
 use std::os::unix::ffi::OsStrExt;
 
@@ -1076,124 +1076,92 @@ fn receive_partial_htree(
     pick: index::PickMap,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
+
+    let mut data_addresses = VecDeque::with_capacity(64);
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
 
-    // This complicated logic is mirroring the send logic
+    // This logic is mirroring the send logic
     // on the server side, only the chunks are coming from the remote.
     // We must also verify all the chunk addresses match what we expect.
 
-    let start_chunk_idx = match pick.data_chunk_ranges.get(0) {
-        Some(range) => range.start_idx.0,
-        None => 0,
-    };
-
-    loop {
-        let height = match tr.current_height() {
-            Some(v) => v,
-            None => anyhow::bail!("htree is corrupt, pick data not found"),
-        };
-
-        if height == 0 {
-            break;
-        }
-
-        let (_, address) = tr.next_addr().unwrap();
-
-        let mut chunk_data = receive_and_authenticate_htree_chunk(r, address)?;
-        let mut level_data_chunk_idx = current_data_chunk_idx;
-        let mut skip_count = 0;
-        for ent_slice in chunk_data.chunks(8 + ADDRESS_SZ) {
-            let data_chunk_count = u64::from_le_bytes(ent_slice[..8].try_into()?);
-            if level_data_chunk_idx + data_chunk_count > start_chunk_idx {
-                break;
-            }
-            level_data_chunk_idx += data_chunk_count;
-            skip_count += 1;
-        }
-        current_data_chunk_idx = level_data_chunk_idx;
-        chunk_data.drain(0..(skip_count * (8 + ADDRESS_SZ)));
-        tr.push_level(height - 1, chunk_data)?;
-    }
-
-    if current_data_chunk_idx != start_chunk_idx {
-        anyhow::bail!("htree is corrupt, seek went too far");
-    };
-
     let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
-        loop {
-            match tr.current_height() {
-                Some(0) => {
-                    let (_, chunk_address) = tr.next_addr().unwrap();
-
-                    match pick.data_chunk_ranges.get(range_idx) {
-                        Some(current_range) => {
-                            let mut to_output = None;
-
-                            if current_data_chunk_idx >= current_range.start_idx.0
-                                && current_data_chunk_idx <= current_range.end_idx.0
-                            {
-                                let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-                                    Packet::Chunk(chunk) => {
-                                        if chunk_address != chunk.address {
-                                            return Err(ClientError::CorruptOrTamperedData.into());
-                                        }
-                                        chunk.data
-                                    }
-                                    _ => anyhow::bail!("protocol error, expected chunk packet"),
-                                };
-
-                                let data = dctx.decrypt_data(data)?;
-                                if chunk_address != crypto::keyed_content_address(&data, &hash_key)
-                                {
-                                    return Err(ClientError::CorruptOrTamperedData.into());
-                                }
-
-                                match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
-                                    Some(ranges) => {
-                                        let mut filtered_data = Vec::with_capacity(data.len() / 2);
-
-                                        for range in ranges.iter() {
-                                            filtered_data.extend_from_slice(
-                                                &data[range.start
-                                                    ..std::cmp::min(data.len(), range.end)],
-                                            );
-                                        }
-
-                                        to_output = Some(filtered_data);
-                                    }
-                                    None => {
-                                        to_output = Some(data);
-                                    }
-                                }
-                            }
-
-                            current_data_chunk_idx += 1;
-                            if current_data_chunk_idx > current_range.end_idx.0 {
-                                range_idx += 1;
-                            }
-
-                            if to_output.is_some() {
-                                return Ok(to_output);
-                            }
+        'recurse: loop {
+            
+            if let Some(chunk_addr) = data_addresses.pop_front() {
+                let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::Chunk(chunk) => {
+                        if chunk_addr != chunk.address {
+                            return Err(ClientError::CorruptOrTamperedData.into());
                         }
-                        None => break,
+                        chunk.data
                     }
+                    _ => anyhow::bail!("protocol error, expected chunk packet"),
+                };
+                let data = dctx.decrypt_data(data)?;
+                if chunk_addr != crypto::keyed_content_address(&data, &hash_key) {
+                    return Err(ClientError::CorruptOrTamperedData.into());
                 }
-                Some(_) if pick.data_chunk_ranges.get(range_idx).is_some() => {
-                    match tr.next_addr() {
-                        Some((height, address)) => {
-                            let data = receive_and_authenticate_htree_chunk(r, address)?;
-                            tr.push_level(height - 1, data)?;
+                let data = match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
+                    Some(byte_ranges) => {
+                        let mut filtered_data = Vec::with_capacity(data.len() / 2);
+
+                        for byte_range in byte_ranges.iter() {
+                            filtered_data.extend_from_slice(
+                                &data[byte_range.start..std::cmp::min(data.len(), byte_range.end)],
+                            );
                         }
-                        None => break,
+
+                        filtered_data
                     }
+                    None => data,
+                };
+                current_data_chunk_idx += 1;
+                return Ok(Some(data));
+            }
+
+            let range = match pick.data_chunk_ranges.get(range_idx) {
+                Some(range) => {
+                    if current_data_chunk_idx > range.end_idx.0 {
+                        range_idx += 1;
+                        continue 'recurse;
+                    }
+                    range
                 }
-                _ => break,
+                None => return Ok(None),
+            };
+
+            // Fast forward until we are at the correct data chunk boundary.
+            loop {
+                let num_skipped = tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
+                current_data_chunk_idx += num_skipped;
+                if let Some(height) = tr.current_height() {
+                    if height == 0 && current_data_chunk_idx >= range.start_idx.0 {
+                        break;
+                    } else {
+                        let (_, chunk_addr) = tr.next_addr().unwrap();
+                        let chunk_data = receive_and_authenticate_htree_chunk(r, chunk_addr)?;
+                        tr.push_level(height - 1, chunk_data)?;
+                    }
+                } else {
+                    anyhow::bail!("hash tree ended before requested range");
+                }
+            }
+
+            if current_data_chunk_idx != range.start_idx.0 {
+                anyhow::bail!("requested data ranges do not match hash tree accounting, seek overshoot detected")
+            }
+
+            while current_data_chunk_idx + (data_addresses.len() as u64) <= range.end_idx.0 {
+                match tr.current_height() {
+                    Some(0) => match tr.next_addr() {
+                        Some((0, chunk_addr)) => data_addresses.push_back(chunk_addr),
+                        _ => unreachable!(),
+                    },
+                    _ => break,
+                }
             }
         }
-
-        Ok(None)
     };
 
     if let Some(ref index) = pick.index {
