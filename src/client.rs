@@ -779,8 +779,12 @@ pub fn request_data_stream(
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
     if let Some(ref pick) = pick {
-        if pick.index.is_none() && pick.data_chunk_ranges.is_empty() {
-            return Ok(());
+        if pick.data_chunk_ranges.is_empty() {
+            if let Some(ref index) = pick.index {
+                return write_indexed_data_as_tarball(&mut || Ok(None), index, out);
+            } else {
+                return Ok(());
+            }
         }
     }
 
@@ -804,17 +808,11 @@ pub fn request_data_stream(
 
     match pick {
         Some(pick) => {
-            write_packet(
-                w,
-                &Packet::RequestData(RequestData {
-                    id,
-                    ranges: Some(pick.data_chunk_ranges.clone()),
-                }),
-            )?;
-            receive_partial_htree(&mut ctx.data_dctx, &hash_key, r, &mut tr, pick, out)?;
+            write_packet(w, &Packet::RequestData(RequestData { id, partial: true }))?;
+            receive_partial_htree(&mut ctx.data_dctx, &hash_key, r, w, &mut tr, pick, out)?;
         }
         None => {
-            write_packet(w, &Packet::RequestData(RequestData { id, ranges: None }))?;
+            write_packet(w, &Packet::RequestData(RequestData { id, partial: false }))?;
 
             match index {
                 Some(index) => receive_indexed_htree_as_tarball(
@@ -1072,22 +1070,35 @@ fn receive_partial_htree(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
     r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
     tr: &mut htree::TreeReader,
     pick: index::PickMap,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
+    // This is avoided before we make a server request.
+    assert!(!pick.data_chunk_ranges.is_empty());
 
     let mut data_addresses = VecDeque::with_capacity(64);
-    let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
+    let mut range_idx: usize = 0;
+
+    // We send ranges in groups to keep a bound on server memory usage.
+    let mut range_groups = pick
+        .data_chunk_ranges
+        // Test harsher range splits in debug mode.
+        .chunks(if cfg!(debug_assertions) { 1 } else { 100000 })
+        .map(|x| x.to_vec());
+
+    let mut ranges = range_groups.next().unwrap();
+
+    write_packet(w, &Packet::RequestDataRanges(ranges.clone()))?;
 
     // This logic is mirroring the send logic
     // on the server side, only the chunks are coming from the remote.
     // We must also verify all the chunk addresses match what we expect.
 
     let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
-        'recurse: loop {
-            
+        loop {
             if let Some(chunk_addr) = data_addresses.pop_front() {
                 let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
                     Packet::Chunk(chunk) => {
@@ -1120,15 +1131,33 @@ fn receive_partial_htree(
                 return Ok(Some(data));
             }
 
-            let range = match pick.data_chunk_ranges.get(range_idx) {
-                Some(range) => {
-                    if current_data_chunk_idx > range.end_idx.0 {
-                        range_idx += 1;
-                        continue 'recurse;
+            let range = loop {
+                match ranges.get(range_idx) {
+                    Some(range) => {
+                        if current_data_chunk_idx > range.end_idx.0 {
+                            range_idx += 1;
+                            continue;
+                        }
+                        break range;
                     }
-                    range
+                    None => match range_groups.next() {
+                        Some(new_ranges) => {
+                            range_idx = 0;
+                            ranges = new_ranges;
+                            write_packet(
+                                w,
+                                // XXX shouldn't need a clone...
+                                &Packet::RequestDataRanges(ranges.clone()),
+                            )?;
+                            continue;
+                        }
+                        None => {
+                            // Signal end of ranges.
+                            write_packet(w, &Packet::RequestDataRanges(vec![]))?;
+                            return Ok(None);
+                        }
+                    },
                 }
-                None => return Ok(None),
             };
 
             // Fast forward until we are at the correct data chunk boundary.

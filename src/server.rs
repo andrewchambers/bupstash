@@ -1,7 +1,6 @@
 use super::address;
 use super::compression;
 use super::htree;
-use super::index;
 use super::oplog;
 use super::protocol::*;
 use super::repository;
@@ -95,7 +94,7 @@ fn serve_repository(
                 if !cfg.allow_get {
                     anyhow::bail!("server has disabled get for this client")
                 }
-                send(repo, req.id, req.ranges, w)?;
+                send(repo, req.id, req.partial, r, w)?;
             }
             Packet::RequestIndex(req) => {
                 if !cfg.allow_list {
@@ -236,7 +235,8 @@ fn send_metadata(
 fn send(
     repo: &mut repository::Repo,
     id: Xid,
-    ranges: Option<Vec<index::HTreeDataRange>>,
+    partial: bool,
+    r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let metadata = match repo.lookup_item_by_id(&id)? {
@@ -252,8 +252,8 @@ fn send(
         &data_tree.address,
     );
 
-    if let Some(ranges) = ranges {
-        send_partial_htree(repo, &mut tr, ranges, w)?;
+    if partial {
+        send_partial_htree(repo, &mut tr, r, w)?;
     } else {
         send_htree(repo, &mut tr, w)?;
     }
@@ -328,12 +328,17 @@ fn send_htree(
 fn send_partial_htree(
     repo: &mut repository::Repo,
     tr: &mut htree::TreeReader,
-    ranges: Vec<index::HTreeDataRange>,
+    r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     let mut data_addresses = Vec::with_capacity(64);
     let mut range_idx: usize = 0;
     let mut current_data_chunk_idx: u64 = 0;
+
+    let mut ranges = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RequestDataRanges(ranges) if !ranges.is_empty() => ranges,
+        _ => anyhow::bail!("protocol error, expected RequestDataRanges with non empty ranges"),
+    };
 
     let mut on_chunk = |addr: &address::Address, data: &[u8]| -> Result<(), anyhow::Error> {
         write_chunk(w, addr, data)?;
@@ -350,7 +355,17 @@ fn send_partial_htree(
                 }
                 range
             }
-            None => break,
+            None => {
+                range_idx = 0;
+                ranges = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::RequestDataRanges(ranges) => ranges,
+                    _ => anyhow::bail!("protocol error, expected RequestDataRanges"),
+                };
+                if ranges.is_empty() {
+                    return Ok(());
+                }
+                continue;
+            }
         };
 
         // Fast forward until we are at the correct data chunk boundary.
@@ -393,8 +408,6 @@ fn send_partial_htree(
         current_data_chunk_idx += data_addresses.len() as u64;
         data_addresses.clear();
     }
-
-    Ok(())
 }
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
