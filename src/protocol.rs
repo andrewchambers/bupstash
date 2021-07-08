@@ -63,7 +63,7 @@ pub struct RRequestMetadata {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RequestData {
     pub id: Xid,
-    pub ranges: Option<Vec<index::HTreeDataRange>>,
+    pub partial: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -151,6 +151,7 @@ pub enum Packet {
     TRequestMetadata(TRequestMetadata),
     RRequestMetadata(RRequestMetadata),
     RequestData(RequestData),
+    RequestDataRanges(Vec<index::HTreeDataRange>),
     TGc(TGc),
     RGc(RGc),
     TRequestItemSync(TRequestItemSync),
@@ -192,6 +193,7 @@ const PACKET_KIND_R_ADD_ITEM: u8 = 10;
 const PACKET_KIND_T_RM_ITEMS: u8 = 11;
 const PACKET_KIND_R_RM_ITEMS: u8 = 12;
 const PACKET_KIND_REQUEST_DATA: u8 = 13;
+const PACKET_KIND_REQUEST_DATA_RANGES: u8 = 14;
 const PACKET_KIND_T_GC: u8 = 15;
 const PACKET_KIND_R_GC: u8 = 16;
 const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 17;
@@ -332,6 +334,7 @@ pub fn read_packet_raw(
         PACKET_KIND_T_REQUEST_METADATA => Packet::TRequestMetadata(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_METADATA => Packet::RRequestMetadata(serde_bare::from_slice(&buf)?),
         PACKET_KIND_REQUEST_DATA => Packet::RequestData(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_REQUEST_DATA_RANGES => Packet::RequestDataRanges(serde_bare::from_slice(&buf)?),
         PACKET_KIND_REQUEST_INDEX => Packet::RequestIndex(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_GC => Packet::TGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_GC => Packet::RGc(serde_bare::from_slice(&buf)?),
@@ -514,6 +517,11 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::RequestData(ref v) => {
             let b = serde_bare::to_vec(&v)?;
             send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::RequestDataRanges(ref v) => {
+            let b = serde_bare::to_vec(&v)?;
+            send_hdr(w, PACKET_KIND_REQUEST_DATA_RANGES, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RequestIndex(ref v) => {
