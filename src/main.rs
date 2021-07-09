@@ -32,8 +32,10 @@ pub mod sodium;
 pub mod xid;
 pub mod xtar;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{BufRead, Read, Write};
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
 
@@ -1232,7 +1234,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     progress.set_message("fetching item metadata...");
     let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-    let mut content_index = if metadata.index_tree().is_some() {
+    let mut get_index = if metadata.index_tree().is_some() {
         Some(client::request_index(
             client::IndexRequestContext {
                 primary_key_id,
@@ -1249,25 +1251,20 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None
     };
 
-    let pick = if matches.opt_present("pick") {
+    let mut get_data_map = None;
+
+    if matches.opt_present("pick") {
         progress.set_message("picking content...");
 
-        if let Some(ref content_index) = content_index {
-            Some(index::pick(
-                &matches.opt_str("pick").unwrap(),
-                content_index,
-            )?)
+        if let Some(ref index) = get_index {
+            let (pick_index, pick_data_map) =
+                index::pick(&matches.opt_str("pick").unwrap(), index)?;
+            get_index = pick_index;
+            get_data_map = Some(pick_data_map);
         } else {
             anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)")
         }
-    } else {
-        None
     };
-
-    // The pick contains a sub-index, explicitly drop the content index.
-    if pick.is_some() {
-        content_index = None;
-    }
 
     progress.finish_and_clear();
 
@@ -1283,8 +1280,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         id,
         &metadata,
-        pick,
-        content_index,
+        get_data_map,
+        get_index,
         &mut serve_out,
         &mut serve_in,
         &mut stdout_unbuffered,
@@ -1295,6 +1292,377 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
+
+    Ok(())
+}
+
+fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
+    opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
+    /* TODO...
+    opts.optopt(
+        "",
+        "pick",
+        "Pick a single file or sub-directory from a directory snapshot.",
+        "PATH",
+    );
+    */
+    opts.optopt("", "to", "Directory to sync remote files into.", "PATH");
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let key = cli_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
+    let (idx_hash_key_part_1, data_hash_key_part_1, data_dctx, metadata_dctx, idx_dctx) = match key
+    {
+        keys::Key::PrimaryKeyV1(k) => {
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.clone();
+            let data_hash_key_part_1 = k.data_hash_key_part_1.clone();
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
+            (
+                idx_hash_key_part_1,
+                data_hash_key_part_1,
+                data_dctx,
+                metadata_dctx,
+                idx_dctx,
+            )
+        }
+        _ => anyhow::bail!("provided key is not a data decryption key"),
+    };
+
+    let progress = cli_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    if !matches.opt_present("to") {
+        anyhow::bail!("please set --to to the sync target directory.")
+    }
+    let to_dir: PathBuf = matches.opt_str("to").unwrap().into();
+    let to_dir = fsutil::absolute_path(&to_dir)?;
+    let to_dir_index = {
+        progress.set_message(format!("indexing {}...", to_dir.to_string_lossy()));
+        let mut ciw = index::CompressedIndexWriter::new();
+        for indexed_dir in indexer::FsIndexer::new(
+            &[to_dir.clone()],
+            indexer::FsIndexerOptions {
+                exclusions: vec![],
+                want_xattrs: false,
+                want_hash: true,
+                one_file_system: false,
+            },
+        )? {
+            let indexed_dir = indexed_dir?;
+            for index_ent in indexed_dir.index_ents {
+                ciw.add(&index_ent);
+            }
+        }
+        ciw.finish()
+    };
+
+    let (id, query) = cli_to_id_and_query(&matches)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
+
+    let id = match (id, query) {
+        (Some(id), _) => id,
+        (_, query) => {
+            let mut query_cache = cli_to_query_cache(&matches)?;
+
+            // Only sync the client if we have a non id query.
+            client::sync(
+                progress.clone(),
+                &mut query_cache,
+                &mut serve_out,
+                &mut serve_in,
+            )?;
+
+            let mut n_matches: u64 = 0;
+            let mut id = xid::Xid::default();
+
+            let mut on_match =
+                |item_id: xid::Xid,
+                 _tags: &std::collections::BTreeMap<String, String>,
+                 _metadata: &oplog::VersionedItemMetadata,
+                 _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
+                    n_matches += 1;
+                    id = item_id;
+
+                    if n_matches > 1 {
+                        anyhow::bail!(
+                            "the provided query matched {} items, need a single match",
+                            n_matches
+                        );
+                    }
+
+                    Ok(())
+                };
+
+            let mut tx = query_cache.transaction()?;
+            tx.list(
+                querycache::ListOptions {
+                    primary_key_id: Some(primary_key_id),
+                    metadata_dctx: Some(metadata_dctx.clone()),
+                    list_encrypted: matches.opt_present("query-encrypted"),
+                    utc_timestamps: matches.opt_present("utc-timestamps"),
+                    query: Some(query),
+                    now: chrono::Utc::now(),
+                },
+                &mut on_match,
+            )?;
+
+            id
+        }
+    };
+
+    progress.set_message("fetching item metadata...");
+    let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+
+    let remote_content_index = if metadata.index_tree().is_some() {
+        client::request_index(
+            client::IndexRequestContext {
+                primary_key_id,
+                idx_hash_key_part_1,
+                idx_dctx,
+                metadata_dctx: metadata_dctx.clone(),
+            },
+            id,
+            &metadata,
+            &mut serve_out,
+            &mut serve_in,
+        )?
+    } else {
+        anyhow::bail!("sync is only supported for directory snapshots created by bupstash");
+    };
+
+    // Initially reset the permissions and groups on everything
+    // so we don't need to worry about read only files or other access.
+    progress.set_message("reverting target dir to known state...");
+    let uid = nix::unistd::Uid::effective();
+    let gid = nix::unistd::Gid::effective();
+    for entry in walkdir::WalkDir::new(&to_dir) {
+        let entry = entry?;
+        let metadata = entry.path().metadata()?;
+        if metadata.uid() != libc::uid_t::from(uid) || metadata.gid() != libc::uid_t::from(gid) {
+            match nix::unistd::chown(entry.path(), Some(uid), Some(gid)) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to chown {}: {}", entry.path().display(), err),
+            };
+        }
+        let mut perms = metadata.permissions();
+        if metadata.is_dir() {
+            perms.set_mode(0o700);
+        } else {
+            perms.set_mode(0o600);
+        }
+        match std::fs::set_permissions(entry.path(), perms) {
+            Ok(_) => (),
+            Err(err) => anyhow::bail!(
+                "failed to set permissions of {}: {}",
+                entry.path().display(),
+                err
+            ),
+        };
+    }
+
+    progress.set_message("computing diff...");
+    let mut to_remove = Vec::with_capacity(1024);
+    let mut new_dirs = Vec::with_capacity(1024);
+    let mut create_path_set = HashSet::with_capacity(1024);
+    let mut create_index_writer = index::CompressedIndexWriter::new();
+    let mut download_path_set = HashSet::with_capacity(1024);
+    let mut downloads = Vec::with_capacity(1024);
+
+    index::diff(
+        &to_dir_index,
+        &remote_content_index,
+        !(index::INDEX_COMPARE_MASK_TYPE | index::INDEX_COMPARE_MASK_DATA_HASH),
+        &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+            if op == '-' {
+                to_remove.push((PathBuf::from(&e.path), e.kind()));
+            } else if op == '+' {
+                if e.is_dir() {
+                    new_dirs.push(PathBuf::from(&e.path));
+                } else if e.is_file() {
+                    download_path_set.insert(e.path.clone());
+                    downloads.push((e.path.clone(), e.size.0, e.data_hash));
+                } else {
+                    create_path_set.insert(e.path.clone());
+                    create_index_writer.add(e);
+                }
+            }
+            Ok(())
+        },
+    )?;
+
+    progress.set_message("removing extra files...");
+    to_remove.reverse();
+    if !to_remove.is_empty() {
+        for (path, kind) in to_remove.drain(..) {
+            let mut to_delete = to_dir.clone();
+            to_delete.push(path);
+
+            match if kind.is_dir() {
+                std::fs::remove_dir(&to_delete)
+            } else {
+                std::fs::remove_file(&to_delete)
+            } {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to remove {}: {}", to_delete.display(), err),
+            }
+        }
+    }
+    std::mem::drop(to_remove);
+
+    if !new_dirs.is_empty() {
+        progress.set_message("creating new directories...");
+        for dir_path in new_dirs.drain(..) {
+            let mut to_create = to_dir.clone();
+            to_create.push(dir_path);
+            std::fs::create_dir(to_create)?;
+        }
+    }
+    std::mem::drop(new_dirs);
+
+    if !download_path_set.is_empty() {
+        progress.set_message("fetching files from remote...");
+
+        let data_map = index::data_map_for_predicate(&remote_content_index, &|e| {
+            download_path_set.contains(&e.path)
+        })?;
+
+        let (r, w) = nix::unistd::pipe()?;
+        let (r, mut w) = unsafe { (std::fs::File::from_raw_fd(r), std::fs::File::from_raw_fd(w)) };
+
+        let to_dir = to_dir.clone();
+        let worker = std::thread::spawn(move || -> std::io::Result<()> {
+            for (path, size, _hash) in downloads.drain(..) {
+                let mut to_create = to_dir.clone();
+                to_create.push(path);
+                let mut f = std::fs::File::create(to_create)?;
+                // XXX TODO verify file hash...
+                let mut limited_r = (&r).take(size);
+                std::io::copy(&mut limited_r, &mut f)?;
+            }
+            Ok(())
+        });
+        let download_err = client::request_data_stream(
+            client::DataRequestContext {
+                primary_key_id,
+                data_hash_key_part_1,
+                data_dctx,
+                metadata_dctx,
+            },
+            id,
+            &metadata,
+            Some(data_map),
+            None,
+            &mut serve_out,
+            &mut serve_in,
+            &mut w,
+        );
+        let file_err = worker.join().unwrap();
+        match file_err {
+            Ok(()) => {
+                download_err?;
+            }
+            // Copying to the files failed, the error must be a download error.
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                download_err?;
+            }
+            Err(err) => return Err(err.into()),
+        };
+    }
+    std::mem::drop(download_path_set);
+
+    client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
+
+    if !create_path_set.is_empty() {
+        progress.set_message("creating special files and devices...");
+        for ent in create_index_writer.finish().iter() {
+            let ent = ent?;
+            if !create_path_set.contains(&ent.path) {
+                continue;
+            }
+            let mut to_create = to_dir.clone();
+            to_create.push(&ent.path);
+
+            match ent.kind() {
+                index::IndexEntryKind::Symlink => {
+                    if ent.link_target.is_none() {
+                        anyhow::bail!("{} is missing a link target", ent.path);
+                    }
+                    match std::os::unix::fs::symlink(&to_create, &ent.link_target.unwrap()) {
+                        Ok(_) => (),
+                        Err(err) => anyhow::bail!(
+                            "failed to make symlink at {}: {}",
+                            to_create.display(),
+                            err
+                        ),
+                    }
+                }
+                index::IndexEntryKind::Fifo => {
+                    match nix::unistd::mkfifo(&to_create, nix::sys::stat::Mode::S_IRWXU) {
+                        Ok(_) => (),
+                        Err(err) => {
+                            anyhow::bail!("failed to make fifo at {}: {}", to_create.display(), err)
+                        }
+                    }
+                }
+                index::IndexEntryKind::Block => match nix::sys::stat::mknod(
+                    &to_create,
+                    nix::sys::stat::SFlag::S_IFBLK,
+                    nix::sys::stat::Mode::S_IRWXU,
+                    nix::sys::stat::makedev(ent.dev_major.0, ent.dev_minor.0),
+                ) {
+                    Ok(_) => (),
+                    Err(err) => anyhow::bail!(
+                        "failed to make block device at {}: {}",
+                        to_create.display(),
+                        err
+                    ),
+                },
+                index::IndexEntryKind::Char => match nix::sys::stat::mknod(
+                    &to_create,
+                    nix::sys::stat::SFlag::S_IFCHR,
+                    nix::sys::stat::Mode::S_IRWXU,
+                    nix::sys::stat::makedev(ent.dev_major.0, ent.dev_minor.0),
+                ) {
+                    Ok(_) => (),
+                    Err(err) => anyhow::bail!(
+                        "failed to make char device at {}: {}",
+                        to_create.display(),
+                        err
+                    ),
+                },
+                _ => (),
+            }
+        }
+    }
+    std::mem::drop(create_path_set);
+
+    progress.set_message("finalising permissions...");
+    for ent in remote_content_index.iter() {
+        let ent = ent?;
+        let mut to_ch = to_dir.clone();
+        to_ch.push(&ent.path);
+        match std::fs::set_permissions(&to_ch, std::fs::Permissions::from_mode(ent.mode.0 as u32)) {
+            Ok(_) => (),
+            Err(err) => anyhow::bail!("failed to set permissions of {}: {}", to_ch.display(), err),
+        };
+
+        // TODO owner, group, xattrs...
+        // TODO hardlinks...
+    }
+
+    progress.finish_and_clear();
 
     Ok(())
 }
@@ -1442,7 +1810,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     if matches.opt_present("pick") {
         progress.set_message("picking content...");
         content_index =
-            index::pick_dir_without_data_ranges(&matches.opt_str("pick").unwrap(), &content_index)?;
+            index::pick_dir_without_data(&matches.opt_str("pick").unwrap(), &content_index)?;
     }
 
     client::hangup(&mut serve_in)?;
@@ -1740,10 +2108,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     for (i, pick_opt) in ["left-pick", "right-pick"].iter().enumerate() {
         if matches.opt_present(pick_opt) {
             progress.set_message("picking content...");
-            to_diff[i] = index::pick_dir_without_data_ranges(
-                &matches.opt_str(pick_opt).unwrap(),
-                &to_diff[i],
-            )?;
+            to_diff[i] =
+                index::pick_dir_without_data(&matches.opt_str(pick_opt).unwrap(), &to_diff[i])?;
         }
     }
 
@@ -2233,6 +2599,7 @@ fn main() {
         "diff" => diff_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
+        "sync" => sync_main(args),
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),

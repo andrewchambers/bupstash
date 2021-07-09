@@ -508,7 +508,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             idx_tree_meta = Some(idx_tw.finish(&mut self)?);
         }
 
-        self.ctx.progress.set_message("syncing storage...");
+        self.ctx.progress.set_message("flushing storage...");
         self.sync()?;
 
         let stats = SendStats {
@@ -771,16 +771,16 @@ pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,
     metadata: &oplog::VersionedItemMetadata,
-    pick: Option<index::PickMap>,
+    data_map: Option<index::DataMap>,
     index: Option<index::CompressedIndex>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
-    if let Some(ref pick) = pick {
-        if pick.data_chunk_ranges.is_empty() {
-            if let Some(ref index) = pick.index {
+    if let Some(ref data_map) = data_map {
+        if data_map.data_chunk_ranges.is_empty() {
+            if let Some(ref index) = index {
                 return write_indexed_data_as_tarball(&mut || Ok(None), index, out);
             } else {
                 return Ok(());
@@ -806,10 +806,19 @@ pub fn request_data_stream(
         &data_tree.address,
     );
 
-    match pick {
-        Some(pick) => {
+    match data_map {
+        Some(data_map) => {
             write_packet(w, &Packet::RequestData(RequestData { id, partial: true }))?;
-            receive_partial_htree(&mut ctx.data_dctx, &hash_key, r, w, &mut tr, pick, out)?;
+            receive_partial_htree(
+                &mut ctx.data_dctx,
+                &hash_key,
+                r,
+                w,
+                &mut tr,
+                data_map,
+                index,
+                out,
+            )?;
         }
         None => {
             write_packet(w, &Packet::RequestData(RequestData { id, partial: false }))?;
@@ -1066,24 +1075,26 @@ fn receive_indexed_htree_as_tarball(
     write_indexed_data_as_tarball(&mut read_data, index, out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive_partial_htree(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tr: &mut htree::TreeReader,
-    pick: index::PickMap,
+    data_map: index::DataMap,
+    index: Option<index::CompressedIndex>,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     // This is avoided before we make a server request.
-    assert!(!pick.data_chunk_ranges.is_empty());
+    assert!(!data_map.data_chunk_ranges.is_empty());
 
     let mut data_addresses = VecDeque::with_capacity(64);
     let mut current_data_chunk_idx: u64 = 0;
     let mut range_idx: usize = 0;
 
     // We send ranges in groups to keep a bound on server memory usage.
-    let mut range_groups = pick
+    let mut range_groups = data_map
         .data_chunk_ranges
         // Test harsher range splits in debug mode.
         .chunks(if cfg!(debug_assertions) { 1 } else { 100000 });
@@ -1111,7 +1122,7 @@ fn receive_partial_htree(
                 if chunk_addr != crypto::keyed_content_address(&data, &hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }
-                let data = match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
+                let data = match data_map.incomplete_data_chunks.get(&current_data_chunk_idx) {
                     Some(byte_ranges) => {
                         let mut filtered_data = Vec::with_capacity(data.len() / 2);
 
@@ -1187,7 +1198,7 @@ fn receive_partial_htree(
         }
     };
 
-    if let Some(ref index) = pick.index {
+    if let Some(ref index) = index {
         write_indexed_data_as_tarball(&mut read_data, index, out)?;
     } else {
         while let Some(data) = read_data()? {
