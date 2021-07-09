@@ -1,0 +1,7 @@
+bupstash sync [OPTIONS] --to DIR QUERY
+
+Syncronize the contents of a remote snapshot to a local directory.
+
+Examples:
+  $ bupstash sync --to ./dir id="8f7*"
+  $ bupstash sync --ownership --xattrs --to ./dir id="8f7*"

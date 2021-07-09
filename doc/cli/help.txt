@@ -12,6 +12,7 @@ Subcommands:
   list              List items in a repository.
   list-contents     List contents of a directory snapshot.
   get               Get data from a repository.
+  sync              Syncronize directories with snapshot contents.
   rm/remove         Remove items from a repository.
   restore-removed   Restore items pending garbage collection.
   gc                Delete unreferenced data and free space.

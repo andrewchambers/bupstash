@@ -71,6 +71,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
+        "sync" => include_str!("../doc/cli/sync.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
@@ -1531,7 +1532,8 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     std::mem::drop(new_dirs);
 
     if !download_path_set.is_empty() {
-        progress.set_message("fetching files from remote...");
+        // XXX we should show a progress bar.
+        progress.set_message("fetching files...");
 
         let data_map = index::data_map_for_predicate(&remote_content_index, &|e| {
             download_path_set.contains(&e.path)
