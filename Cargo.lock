@@ -100,6 +100,7 @@ dependencies = [
  "nix",
  "once_cell",
  "openat",
+ "openbsd",
  "path-clean",
  "pkg-config",
  "rangemap",
@@ -458,6 +459,12 @@ checksum = "95aa7c05907b3ebde2610d602f4ddd992145cc6a84493647c30396f30ba83abe"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "openbsd"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06629384bac0b25dc9d58513832b4d2ae90ed7435a28ec07e258488f48b4d922"
 
 [[package]]
 name = "parking_lot"
