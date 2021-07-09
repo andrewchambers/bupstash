@@ -1494,7 +1494,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "i",
         "ignore",
-        "Comma separated list of file attributes to ignore in comparisons. Valid values are 'content,dev,devnos,inode,mode,nlink,uid,gid,times,xattrs'.",
+        "Comma separated list of file attributes to ignore in comparisons. Valid values are 'content,dev,devnos,inode,type,perms,nlink,uid,gid,times,xattrs'.",
         "IGNORE",
     );
     opts.optflag(
@@ -1559,7 +1559,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 "gid" => to_toggle |= index::INDEX_COMPARE_MASK_GID,
                 "inode" => to_toggle |= index::INDEX_COMPARE_MASK_INO,
                 "nlink" => to_toggle |= index::INDEX_COMPARE_MASK_NLINK,
-                "mode" => to_toggle |= index::INDEX_COMPARE_MASK_MODE,
+                "type" => to_toggle |= index::INDEX_COMPARE_MASK_TYPE,
+                "perms" => to_toggle |= index::INDEX_COMPARE_MASK_PERMS,
                 "file-content" => {
                     to_toggle |=
                         index::INDEX_COMPARE_MASK_SIZE | index::INDEX_COMPARE_MASK_DATA_HASH

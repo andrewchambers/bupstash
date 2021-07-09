@@ -53,10 +53,10 @@ more information on the query cache.
 
 * -i, --ignore:
   Comma separated list of file attributes to ignore in comparisons.
-  Valid items are ''content,dev,devnos,inode,mode,nlink,uid,gid,times,xattrs''
+  Valid items are 'content,dev,devnos,inode,type,perms,nlink,uid,gid,times,xattrs'
 
 * --relaxed:
-  Shortcut for --ignore dev,inode,nlink,uid,gid,times,xattrs.
+  Shortcut for --ignore 'dev,inode,nlink,uid,gid,times,xattrs'.
   This option is useful for comparing content without being so concerned with machine specific metadata.
 
 * --{left,right}-pick PATH:
