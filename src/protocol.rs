@@ -419,6 +419,17 @@ pub fn write_chunk(
     Ok(())
 }
 
+pub fn write_request_data_ranges(
+    w: &mut dyn std::io::Write,
+    ranges: &[index::HTreeDataRange],
+) -> Result<(), anyhow::Error> {
+    let b = serde_bare::to_vec(ranges)?;
+    send_hdr(w, PACKET_KIND_REQUEST_DATA_RANGES, b.len().try_into()?)?;
+    write_to_remote(w, &b)?;
+    flush_remote(w)?;
+    Ok(())
+}
+
 pub fn write_storage_pipelined_get_chunks(
     w: &mut dyn std::io::Write,
     addresses: &[Address],

@@ -1086,12 +1086,10 @@ fn receive_partial_htree(
     let mut range_groups = pick
         .data_chunk_ranges
         // Test harsher range splits in debug mode.
-        .chunks(if cfg!(debug_assertions) { 1 } else { 100000 })
-        .map(|x| x.to_vec());
+        .chunks(if cfg!(debug_assertions) { 1 } else { 100000 });
 
     let mut ranges = range_groups.next().unwrap();
-
-    write_packet(w, &Packet::RequestDataRanges(ranges.clone()))?;
+    write_request_data_ranges(w, ranges)?;
 
     // This logic is mirroring the send logic
     // on the server side, only the chunks are coming from the remote.
@@ -1144,16 +1142,12 @@ fn receive_partial_htree(
                         Some(new_ranges) => {
                             range_idx = 0;
                             ranges = new_ranges;
-                            write_packet(
-                                w,
-                                // XXX shouldn't need a clone...
-                                &Packet::RequestDataRanges(ranges.clone()),
-                            )?;
+                            write_request_data_ranges(w, ranges)?;
                             continue;
                         }
                         None => {
                             // Signal end of ranges.
-                            write_packet(w, &Packet::RequestDataRanges(vec![]))?;
+                            write_request_data_ranges(w, &[])?;
                             return Ok(None);
                         }
                     },
