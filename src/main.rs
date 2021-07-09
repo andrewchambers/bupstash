@@ -1310,6 +1310,8 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "PATH",
     );
     */
+    opts.optflag("", "ownership", "Synchronize uids and gids.");
+    opts.optflag("", "xattrs", "Synchronize xattrs.");
     opts.optopt("", "to", "Directory to sync remote files into.", "PATH");
 
     let matches = parse_cli_opts(opts, &args[..]);
@@ -1447,13 +1449,13 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     progress.set_message("reverting target dir to known state...");
     let uid = nix::unistd::Uid::effective();
     let gid = nix::unistd::Gid::effective();
-    for entry in walkdir::WalkDir::new(&to_dir) {
-        let entry = entry?;
-        let metadata = entry.path().metadata()?;
+    for dir_ent in walkdir::WalkDir::new(&to_dir) {
+        let dir_ent = dir_ent?;
+        let metadata = dir_ent.path().metadata()?;
         if metadata.uid() != libc::uid_t::from(uid) || metadata.gid() != libc::uid_t::from(gid) {
-            match nix::unistd::chown(entry.path(), Some(uid), Some(gid)) {
+            match nix::unistd::chown(dir_ent.path(), Some(uid), Some(gid)) {
                 Ok(_) => (),
-                Err(err) => anyhow::bail!("failed to chown {}: {}", entry.path().display(), err),
+                Err(err) => anyhow::bail!("failed to chown {}: {}", dir_ent.path().display(), err),
             };
         }
         let mut perms = metadata.permissions();
@@ -1462,23 +1464,23 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         } else {
             perms.set_mode(0o600);
         }
-        match std::fs::set_permissions(entry.path(), perms) {
+        match std::fs::set_permissions(dir_ent.path(), perms) {
             Ok(_) => (),
             Err(err) => anyhow::bail!(
                 "failed to set permissions of {}: {}",
-                entry.path().display(),
+                dir_ent.path().display(),
                 err
             ),
         };
     }
 
     progress.set_message("computing diff...");
-    let mut to_remove = Vec::with_capacity(1024);
-    let mut new_dirs = Vec::with_capacity(1024);
-    let mut create_path_set = HashSet::with_capacity(1024);
+    let mut to_remove = Vec::with_capacity(512);
+    let mut new_dirs = Vec::with_capacity(512);
+    let mut create_path_set = HashSet::with_capacity(512);
     let mut create_index_writer = index::CompressedIndexWriter::new();
-    let mut download_path_set = HashSet::with_capacity(1024);
-    let mut downloads = Vec::with_capacity(1024);
+    let mut download_path_set = HashSet::with_capacity(512);
+    let mut downloads = Vec::with_capacity(512);
 
     index::diff(
         &to_dir_index,
@@ -1532,7 +1534,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     std::mem::drop(new_dirs);
 
     if !download_path_set.is_empty() {
-        // XXX we should show a progress bar.
+        // We could show a progress bar.
         progress.set_message("fetching files...");
 
         let data_map = index::data_map_for_predicate(&remote_content_index, &|e| {
@@ -1650,19 +1652,57 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
     std::mem::drop(create_path_set);
 
-    progress.set_message("finalising permissions...");
-    for ent in remote_content_index.iter() {
-        let ent = ent?;
-        let mut to_ch = to_dir.clone();
-        to_ch.push(&ent.path);
+    let sync_ownership = matches.opt_present("ownership");
+    // let sync_xattrs = matches.opt_present("xattrs");
+
+    progress.set_message("setting attributes...");
+    let mut dirs_to_alter = Vec::with_capacity(512);
+
+    let apply_perms = |to_ch: PathBuf, ent: index::IndexEntry| -> Result<(), anyhow::Error> {
         match std::fs::set_permissions(&to_ch, std::fs::Permissions::from_mode(ent.mode.0 as u32)) {
             Ok(_) => (),
             Err(err) => anyhow::bail!("failed to set permissions of {}: {}", to_ch.display(), err),
         };
 
-        // TODO owner, group, xattrs...
-        // TODO hardlinks...
+        if sync_ownership {
+            match nix::unistd::chown(
+                &to_ch,
+                Some(nix::unistd::Uid::from_raw(libc::uid_t::from(
+                    ent.uid.0 as u32,
+                ))),
+                Some(nix::unistd::Gid::from_raw(libc::uid_t::from(
+                    ent.gid.0 as u32,
+                ))),
+            ) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to chown {}: {}", to_ch.display(), err),
+            };
+        }
+
+        // TODO xattrs...
+
+        Ok(())
+    };
+
+    for ent in remote_content_index.iter() {
+        let ent = ent?;
+        let mut to_ch = to_dir.clone();
+        to_ch.push(&ent.path);
+
+        if ent.is_dir() {
+            dirs_to_alter.push((to_ch, ent));
+        } else {
+            apply_perms(to_ch, ent)?
+        }
     }
+
+    // Process dirs in reverse order to account for read only permissions.
+    while let Some((to_ch, ent)) = dirs_to_alter.pop() {
+        apply_perms(to_ch, ent)?
+    }
+    std::mem::drop(dirs_to_alter);
+
+    // TODO hardlinks...
 
     progress.finish_and_clear();
 

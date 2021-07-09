@@ -3,7 +3,7 @@ bupstash-sync(1)
 
 ## SYNOPSIS
 
-Syncronize the contents of a stored snapshot to a local directory.
+Synchronize the contents of a local directory with a stored snapshot.
 
 `bupstash sync [OPTIONS] --to $PATH QUERY... `
 
