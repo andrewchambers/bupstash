@@ -1,0 +1,62 @@
+on: [push]
+
+jobs:
+  build-release:
+    name: build-release
+    strategy:
+      matrix:
+        include:
+        - build: linux
+          os: ubuntu-18.04
+          rust: stable
+          target: x86_64-unknown-linux-musl
+
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+      with:
+        fetch-depth: 1
+
+    - name: Install packages (Ubuntu)
+      if: matrix.os == 'ubuntu-18.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install musl-tools
+
+    - name: compile libsodium for static linking
+      shell: bash
+      run: |
+        wget --content-disposition https://github.com/jedisct1/libsodium/archive/refs/tags/1.0.18.tar.gz
+        tar -xf libsodium-1.0.18.tar.gz
+        cd libsodium-1.0.18
+        ./autogen.sh
+        mkdir target
+        CC=musl-gcc ./configure --enable-shared=no
+        make -j$(nproc)
+        sudo make install
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        profile: minimal
+        override: true
+        target: ${{ matrix.target }}
+
+    - name: Build release binary
+      env:
+        PKG_CONFIG_ALLOW_CROSS: 1
+        SODIUM_STATIC: 1
+        RUST_BACKTRACE: 1
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Strip release binary (linux and macos)
+      if: matrix.build == 'linux' || matrix.build == 'macos'
+      run: strip "target/${{ matrix.target }}/release/bupstash"
+
+    - name: Save binary
+      uses: actions/upload-artifact@v2
+      with:
+        name: bupstash-${{ matrix.target }}
+        path: "target/${{ matrix.target }}/release/bupstash"
