@@ -424,7 +424,7 @@ impl FsIndexer {
             filler_children,
             work_stack: vec![vec![start_dir]],
             dev_normalizer: DevNormalizer::new(),
-            metadata_fetcher: FsMetadataFetcher::new(8, want_xattrs, want_hash),
+            metadata_fetcher: FsMetadataFetcher::new(4, want_xattrs, want_hash),
         })
     }
 

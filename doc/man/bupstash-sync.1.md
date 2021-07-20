@@ -11,9 +11,8 @@ Synchronize the contents of a local directory with a stored snapshot.
 
 `bupstash sync` performs an efficient set of incremental changes to
 a directory such that it becomes identical to the requested snapshot.
-
-It is efficient to use `bupstash sync` to cycle between snapshots when
-searching for desired files or data.
+The incremental nature of `bupstash sync` makes it well suited for
+cycling between multiple similar snapshots. 
 
 In order to aid file browsing as unprivileged users, `bupstash sync` does
 not attempt to restore users,groups and xattrs by default. To restore

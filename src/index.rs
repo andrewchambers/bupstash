@@ -188,6 +188,10 @@ impl IndexEntry {
         }
     }
 
+    pub fn is_symlink(&self) -> bool {
+        (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFLNK
+    }
+
     pub fn is_file(&self) -> bool {
         (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFREG
     }
@@ -376,11 +380,10 @@ pub fn data_map_for_predicate(
     predicate: &dyn Fn(&IndexEntry) -> bool,
 ) -> Result<DataMap, anyhow::Error> {
     let mut cur_chunk_idx = 0;
-    let mut iter = file_index.iter();
     let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
     let mut incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>> = HashMap::new();
 
-    while let Some(ent) = iter.next() {
+    for ent in file_index.iter() {
         let ent = ent?;
         // Post 1.0 we could perhaps be able to remove this check.
         if ent.data_cursor.chunk_delta.0 == u64::MAX {
@@ -756,11 +759,17 @@ pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
     }
 }
 
+pub enum DiffStat {
+    Unchanged,
+    Removed,
+    Added,
+}
+
 pub fn diff(
     left_index: &CompressedIndex,
     right_index: &CompressedIndex,
     compare_mask: u64,
-    on_diff_ent: &mut dyn FnMut(char, &IndexEntry) -> Result<(), anyhow::Error>,
+    on_diff_ent: &mut dyn FnMut(DiffStat, &IndexEntry) -> Result<(), anyhow::Error>,
 ) -> Result<(), anyhow::Error> {
     let mut liter = left_index.iter();
     let mut riter = right_index.iter();
@@ -778,31 +787,33 @@ pub fn diff(
 
         match path_cmp(&l.path, &r.path) {
             std::cmp::Ordering::Equal => {
-                if !l.masked_compare_eq(compare_mask, r) {
-                    on_diff_ent('-', l)?;
-                    on_diff_ent('+', r)?;
+                if l.masked_compare_eq(compare_mask, r) {
+                    on_diff_ent(DiffStat::Unchanged, l)?;
+                } else {
+                    on_diff_ent(DiffStat::Removed, l)?;
+                    on_diff_ent(DiffStat::Added, r)?;
                 }
                 lent = liter.next();
                 rent = riter.next();
             }
             std::cmp::Ordering::Less => {
-                on_diff_ent('-', l)?;
+                on_diff_ent(DiffStat::Removed, l)?;
                 lent = liter.next();
             }
             std::cmp::Ordering::Greater => {
-                on_diff_ent('+', r)?;
+                on_diff_ent(DiffStat::Added, r)?;
                 rent = riter.next();
             }
         }
     }
     while lent.is_some() {
         let l = lent.unwrap().unwrap();
-        on_diff_ent('-', &l)?;
+        on_diff_ent(DiffStat::Removed, &l)?;
         lent = liter.next();
     }
     while rent.is_some() {
         let r = rent.unwrap().unwrap();
-        on_diff_ent('+', &r)?;
+        on_diff_ent(DiffStat::Added, &r)?;
         rent = riter.next();
     }
     Ok(())
