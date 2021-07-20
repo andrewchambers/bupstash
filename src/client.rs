@@ -8,6 +8,7 @@ use super::fsutil::likely_smear_error;
 use super::htree;
 use super::index;
 use super::indexer;
+use super::ioutil;
 use super::oplog;
 use super::protocol::*;
 use super::querycache;
@@ -385,7 +386,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
                         if index_ent.is_file() {
                             let mut f = match file_opener.next_file().unwrap() {
-                                (_, Ok(f)) => TeeHashFileReader::new(f),
+                                (_, Ok(f)) => ioutil::TeeReader::new(f, blake3::Hasher::new()),
 
                                 (_, Err(err)) if likely_smear_error(&err) => {
                                     // This can happen if the file was deleted,
@@ -408,7 +409,10 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                                 index_ent.size.0 = file_len;
                             }
 
-                            index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
+                            let (_, file_hasher) = f.into_inner();
+
+                            index_ent.data_hash =
+                                index::ContentCryptoHash::Blake3(file_hasher.finalize().into());
                         }
 
                         if i == n_idx_ents - 1 {
@@ -709,37 +713,6 @@ pub fn send(
             Ok((id, stats))
         }
         _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
-    }
-}
-
-// Read a file while also blake3 hashing any data.
-struct TeeHashFileReader {
-    f: std::fs::File,
-    h: blake3::Hasher,
-}
-
-impl TeeHashFileReader {
-    fn new(f: std::fs::File) -> Self {
-        TeeHashFileReader {
-            f,
-            h: blake3::Hasher::new(),
-        }
-    }
-
-    fn finalize(self) -> [u8; 32] {
-        self.h.finalize().into()
-    }
-}
-
-impl std::io::Read for TeeHashFileReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.f.read(buf) {
-            Ok(n) => {
-                self.h.update(&buf[0..n]);
-                Ok(n)
-            }
-            err => err,
-        }
     }
 }
 

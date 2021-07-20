@@ -2647,7 +2647,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             let dev_ino = (ent.norm_dev.0, ent.ino.0);
                             match hardlinks.get(&dev_ino) {
                                 None => {
-                                    hardlinks.insert(dev_ino, to_ch.clone());
+                                    hardlinks.insert(dev_ino, to_ch);
                                 }
                                 Some(first_path) => match std::fs::remove_file(&to_ch) {
                                     Ok(_) => match std::fs::hard_link(first_path, &to_ch) {
