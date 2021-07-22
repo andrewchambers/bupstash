@@ -2236,7 +2236,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     progress.set_message("fetching item index...");
     let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-    let remote_content_index = if metadata.index_tree().is_some() {
+    let content_index = if metadata.index_tree().is_some() {
         client::request_index(
             client::IndexRequestContext {
                 primary_key_id,
@@ -2253,15 +2253,13 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("sync is only supported for directory snapshots created by bupstash");
     };
 
-    let pick_path = matches.opt_str("pick");
-
-    let pick_index = if let Some(ref pick_path) = pick_path {
-        Some(index::pick_dir_without_data(
-            pick_path,
-            &remote_content_index,
-        )?)
+    let (content_index, data_map) = if let Some(ref pick_path) = matches.opt_str("pick") {
+        match index::pick(pick_path, &content_index)? {
+            (Some(content_index), data_map) => (content_index, Some(data_map)),
+            _ => anyhow::bail!("the given pick was not a directory"),
+        }
     } else {
-        None
+        (content_index, None)
     };
 
     // Initially reset the permissions and groups on everything
@@ -2286,12 +2284,12 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
 
         // Make any read only files writable for the later code...
-        if !metadata.file_type().is_symlink() && (metadata.permissions().mode() & 0o400 == 0) {
+        if !metadata.file_type().is_symlink() && (metadata.permissions().mode() & 0o200 == 0) {
             match nix::sys::stat::fchmodat(
                 None,
                 dir_ent.path(),
                 // What we use here doesn't really matter for sync, it gets fixed later...
-                nix::sys::stat::Mode::from_bits_truncate(0o600),
+                nix::sys::stat::Mode::from_bits_truncate(0o700),
                 nix::sys::stat::FchmodatFlags::FollowSymlink,
             ) {
                 Ok(_) => (),
@@ -2333,15 +2331,9 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut downloads = Vec::with_capacity(512);
 
     {
-        let index_to_diff = if let Some(ref pick_index) = pick_index {
-            pick_index
-        } else {
-            &remote_content_index
-        };
-
         index::diff(
             &to_dir_index,
-            &index_to_diff,
+            &content_index,
             !(index::INDEX_COMPARE_MASK_TYPE
                 | index::INDEX_COMPARE_MASK_LINK_TARGET
                 | index::INDEX_COMPARE_MASK_DEVNOS
@@ -2356,13 +2348,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         if e.is_dir() {
                             new_dirs.push(PathBuf::from(&e.path));
                         } else if e.is_file() {
-                            let download_path = if let Some(ref pick_path) = pick_path {
-                                // Map the path in the pick back to the parent index.
-                                pick_path.clone() + "/" + &e.path
-                            } else {
-                                e.path.clone()
-                            };
-                            download_index_path_set.insert(download_path);
+                            download_index_path_set.insert(e.path.clone());
                             downloads.push((e.path.clone(), e.size.0, e.data_hash));
                         } else {
                             create_path_set.insert(e.path.clone());
@@ -2408,13 +2394,15 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     if !download_index_path_set.is_empty() {
         progress.set_message("fetching files...");
 
-        // XXX: We could restructure the code to do fewer passes over the whole content index (which may be huge).
-        // Here for example, we only really need to iterate the pick index instead of the complete index...
-        // So far I have yet to have good inspiration for the API design.
-        // One idea might be for each compressed index to remember it's own start offset.
-        let data_map = index::data_map_for_predicate(&remote_content_index, &|e| {
+        let mut fetch_data_map = index::data_map_for_predicate(&content_index, &|e| {
             download_index_path_set.contains(&e.path)
         })?;
+
+        if let Some(data_map) = data_map {
+            if let Some(start_range) = data_map.data_chunk_ranges.first() {
+                fetch_data_map.add_offset(start_range.start_idx.0);
+            }
+        }
 
         let (mut r, mut w) = ioutil::buffered_pipe(3 * 1024 * 1024); // Sized to cover most packets in one allocation.
 
@@ -2463,7 +2451,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             },
             id,
             &metadata,
-            Some(data_map),
+            Some(fetch_data_map),
             None,
             &mut serve_out,
             &mut serve_in,
@@ -2620,15 +2608,9 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.set_message("syncing file attributes...");
     {
-        let index_to_diff = if let Some(ref pick_index) = pick_index {
-            pick_index
-        } else {
-            &remote_content_index
-        };
-
         index::diff(
             &to_dir_index,
-            &index_to_diff,
+            &content_index,
             !(index::INDEX_COMPARE_MASK_PERMS | index::INDEX_COMPARE_MASK_XATTRS),
             &mut |ds: index::DiffStat, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
                 if matches!(ds, index::DiffStat::Removed) {

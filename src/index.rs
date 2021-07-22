@@ -300,6 +300,20 @@ pub struct DataMap {
     pub incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>>,
 }
 
+impl DataMap {
+    pub fn add_offset(&mut self, offset: u64) {
+        self.incomplete_data_chunks = self
+            .incomplete_data_chunks
+            .drain()
+            .map(|(k, v)| (k + offset, v))
+            .collect();
+        for range in self.data_chunk_ranges.iter_mut() {
+            range.start_idx.0 += offset;
+            range.end_idx.0 += offset;
+        }
+    }
+}
+
 fn add_ent_to_data_map(
     ent: &IndexEntry,
     cur_chunk_idx: u64,
@@ -440,18 +454,23 @@ pub fn pick(
 
                     cur_chunk_idx += ent.data_cursor.chunk_delta.0;
 
+                    let mut found_children = false;
+
                     for ent in iter {
                         let mut ent = ent?;
 
                         // Match the directory and children.
                         if !ent.path.starts_with(&strip_prefix) {
                             cur_chunk_idx += ent.data_cursor.chunk_delta.0;
-                            // We don't assume all children are contiguous in
-                            // memory, instead we just scan the whole index.
-                            // We could potentially change this, but it may
-                            // affect older backups.
-                            continue;
+                            if found_children {
+                                // We have processed all children, exit early.
+                                break;
+                            } else {
+                                // We are still skipping the dir siblings and their children.
+                                continue;
+                            }
                         }
+                        found_children = true;
 
                         ent.path = ent.path[strip_prefix.len()..].to_string();
 
@@ -476,51 +495,21 @@ pub fn pick(
                     ));
                 }
                 IndexEntryKind::Regular => {
-                    let mut incomplete_data_chunks = HashMap::new();
+                    let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
+                    let mut incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>> =
+                        HashMap::new();
 
-                    if ent.size.0 == 0 {
-                        return Ok((
-                            None,
-                            DataMap {
-                                data_chunk_ranges: vec![],
-                                incomplete_data_chunks,
-                            },
-                        ));
-                    }
-
-                    let mut range_adjust = 0;
-                    let mut start_range_set = rangemap::RangeSet::new();
-                    let start_range_start = ent.data_cursor.start_byte_offset.0 as usize;
-                    let start_range_end = if ent.data_cursor.chunk_delta.0 == 0 {
-                        ent.data_cursor.end_byte_offset.0 as usize
-                    } else {
-                        usize::MAX
-                    };
-                    start_range_set.insert(start_range_start..start_range_end);
-                    incomplete_data_chunks.insert(cur_chunk_idx, start_range_set);
-
-                    if ent.data_cursor.chunk_delta.0 != 0 {
-                        if ent.data_cursor.end_byte_offset.0 != 0 {
-                            let mut end_range_set = rangemap::RangeSet::new();
-                            end_range_set.insert(0..ent.data_cursor.end_byte_offset.0 as usize);
-                            incomplete_data_chunks.insert(
-                                cur_chunk_idx + ent.data_cursor.chunk_delta.0,
-                                end_range_set,
-                            );
-                        } else {
-                            range_adjust = 1;
-                        }
-                    }
+                    add_ent_to_data_map(
+                        &ent,
+                        cur_chunk_idx,
+                        &mut data_chunk_ranges,
+                        &mut incomplete_data_chunks,
+                    );
 
                     return Ok((
                         None,
                         DataMap {
-                            data_chunk_ranges: vec![HTreeDataRange {
-                                start_idx: serde_bare::Uint(cur_chunk_idx),
-                                end_idx: serde_bare::Uint(
-                                    cur_chunk_idx + ent.data_cursor.chunk_delta.0 - range_adjust,
-                                ),
-                            }],
+                            data_chunk_ranges,
                             incomplete_data_chunks,
                         },
                     ));
@@ -788,7 +777,7 @@ pub fn diff(
         match path_cmp(&l.path, &r.path) {
             std::cmp::Ordering::Equal => {
                 if l.masked_compare_eq(compare_mask, r) {
-                    on_diff_ent(DiffStat::Unchanged, l)?;
+                    on_diff_ent(DiffStat::Unchanged, r)?;
                 } else {
                     on_diff_ent(DiffStat::Removed, l)?;
                     on_diff_ent(DiffStat::Added, r)?;

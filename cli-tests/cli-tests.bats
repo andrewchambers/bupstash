@@ -47,7 +47,8 @@ setup () {
 }
 
 teardown () {
-  rm -rf $SCRATCH
+  chmod -R 700 "$SCRATCH"
+  rm -rf "$SCRATCH"
 }
 
 @test "simple put/get primary key" {
@@ -692,6 +693,75 @@ _concurrent_modify_worker () {
   bupstash restore-removed
 }
 
+@test "dir sync sanity" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  id=$(bupstash put $SCRATCH/d)
+  bupstash sync --to $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+}
+
+@test "dir sync symlink" {
+  mkdir "$SCRATCH"/{d,restore}
+  ln -s missing.txt "$SCRATCH"/d/l
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash sync --to "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+}
+
+@test "dir sync hardlink" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash sync --to "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  echo -n "xxx" >> "$SCRATCH/restore/a.txt"
+  test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
+}
+
+@test "dir sync hardlink prexisting" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
+
+  # Test b becomes a hard link.
+  echo -n "abc" > "$SCRATCH/restore/a.txt"
+  echo -n "abc" > "$SCRATCH/restore/b.txt"
+  
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash sync --to "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  echo -n "xxx" >> "$SCRATCH/restore/a.txt"
+  test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
+}
+
+@test "dir sync read only" {
+  mkdir "$SCRATCH"/{d,restore}
+
+  mkdir "$SCRATCH"/d/b
+  echo -n "abc" > "$SCRATCH"/d/b/a.txt
+  chmod -w "$SCRATCH"{/d/b,/d/b/a.txt}
+
+  mkdir "$SCRATCH"/restore/{b,c}
+  echo -n "xxx" > "$SCRATCH"/restore/c/x.txt
+  echo -n "yyy" > "$SCRATCH"/restore/b/a.txt
+  chmod -w "$SCRATCH"/restore/b/a.txt
+  chmod -R -w "$SCRATCH"/restore/c
+
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash sync --to $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+}
+
+@test "dir sync pick" {
+  mkdir "$SCRATCH"/{d,d/d,restore}
+  echo -n "abc" > "$SCRATCH/d/d/a.txt"
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash sync --pick d --to $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/d :: $SCRATCH/restore | expr $(wc -l))"
+}
+
 @test "pick fuzz torture" {
   
   rand_dir="$SCRATCH/random_dir"
@@ -739,7 +809,6 @@ _concurrent_modify_worker () {
     bupstash gc
   done
 }
-
 
 @test "repo rollback torture" {
   if ! test -d "$BUPSTASH_REPOSITORY" || \
