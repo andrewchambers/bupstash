@@ -755,11 +755,13 @@ _concurrent_modify_worker () {
 }
 
 @test "dir sync pick" {
-  mkdir "$SCRATCH"/{d,d/d,restore}
-  echo -n "abc" > "$SCRATCH/d/d/a.txt"
+  mkdir "$SCRATCH"/{d,d/a,d/b,d/c,restore}
+  echo -n "abc" > "$SCRATCH/d/a/a.txt"
+  echo -n "def" > "$SCRATCH/d/b/b.txt"
+  echo -n "hij" > "$SCRATCH/d/c/c.txt"
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --pick d --to $SCRATCH/restore id=$id
-  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/d :: $SCRATCH/restore | expr $(wc -l))"
+  bupstash sync --pick b --to $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
 }
 
 @test "pick fuzz torture" {
