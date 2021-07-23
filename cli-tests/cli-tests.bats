@@ -693,34 +693,34 @@ _concurrent_modify_worker () {
   bupstash restore-removed
 }
 
-@test "dir sync sanity" {
+@test "dir checkout sanity" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   id=$(bupstash put $SCRATCH/d)
-  bupstash sync --to $SCRATCH/restore id=$id
+  bupstash checkout --into $SCRATCH/restore id=$id
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
 }
 
-@test "dir sync symlink" {
+@test "dir checkout symlink" {
   mkdir "$SCRATCH"/{d,restore}
   ln -s missing.txt "$SCRATCH"/d/l
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --to "$SCRATCH"/restore id=$id
+  bupstash checkout --into "$SCRATCH"/restore id=$id
   test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
 }
 
-@test "dir sync hardlink" {
+@test "dir checkout hardlink" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --to "$SCRATCH"/restore id=$id
+  bupstash checkout --into "$SCRATCH"/restore id=$id
   test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
   echo -n "xxx" >> "$SCRATCH/restore/a.txt"
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
 
-@test "dir sync hardlink prexisting" {
+@test "dir checkout hardlink prexisting" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
@@ -730,13 +730,13 @@ _concurrent_modify_worker () {
   echo -n "abc" > "$SCRATCH/restore/b.txt"
   
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --to "$SCRATCH"/restore id=$id
+  bupstash checkout --into "$SCRATCH"/restore id=$id
   test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
   echo -n "xxx" >> "$SCRATCH/restore/a.txt"
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
 
-@test "dir sync read only" {
+@test "dir checkout read only" {
   mkdir "$SCRATCH"/{d,restore}
 
   mkdir "$SCRATCH"/d/b
@@ -750,17 +750,17 @@ _concurrent_modify_worker () {
   chmod -R -w "$SCRATCH"/restore/c
 
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --to $SCRATCH/restore id=$id
+  bupstash checkout --into $SCRATCH/restore id=$id
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
 }
 
-@test "dir sync pick" {
+@test "dir checkout pick" {
   mkdir "$SCRATCH"/{d,d/a,d/b,d/c,restore}
   echo -n "abc" > "$SCRATCH/d/a/a.txt"
   echo -n "def" > "$SCRATCH/d/b/b.txt"
   echo -n "hij" > "$SCRATCH/d/c/c.txt"
   id=$(bupstash put "$SCRATCH"/d)
-  bupstash sync --pick b --to $SCRATCH/restore id=$id
+  bupstash checkout --pick b --into $SCRATCH/restore id=$id
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
 }
 

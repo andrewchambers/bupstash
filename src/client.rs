@@ -1287,7 +1287,7 @@ pub fn remove(
     Ok(())
 }
 
-pub struct SyncSnapshotContext {
+pub struct CheckoutContext {
     pub data_ctx: DataRequestContext,
     pub item_id: Xid,
     pub metadata: oplog::VersionedItemMetadata,
@@ -1296,9 +1296,9 @@ pub struct SyncSnapshotContext {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn sync_snapshot_to_local_dir(
+pub fn checkout_to_local_dir(
     progress: &indicatif::ProgressBar,
-    ctx: SyncSnapshotContext,
+    ctx: CheckoutContext,
     content_index: index::CompressedIndex,
     data_map: Option<index::DataMap>,
     serve_out: &mut dyn std::io::Read,
@@ -1641,7 +1641,7 @@ pub fn sync_snapshot_to_local_dir(
     let mut dirs_to_alter = Vec::with_capacity(512);
     let mut hardlinks: HashMap<(u64, u64), PathBuf> = HashMap::new();
 
-    progress.set_message("syncing file attributes...");
+    progress.set_message("setting file attributes...");
     {
         index::diff(
             &to_dir_index,

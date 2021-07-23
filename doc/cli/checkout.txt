@@ -1,0 +1,11 @@
+bupstash checkout [OPTIONS] --into DIR QUERY
+
+Efficiently checkout the contents of a snapshot into a local directory,
+deleting any extra files that already existed in that directory.
+
+N.B. this operation deletes extra files from destination directory.
+
+Examples:
+  $ bupstash checkout --into ./dir id="8f7*"
+  $ bupstash checkout --pick sub-dir --into ./dir id="8f7*"
+  $ bupstash checkout --ownership --into ./dir id="8f7*"

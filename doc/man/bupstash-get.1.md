@@ -107,5 +107,5 @@ $ bupstash get id=$id | tar -C ./restore -xvf -
 
 ## SEE ALSO
 
-bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-rm(1), bupstash-keyfiles(7),
+bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-checkout(1), bupstash-rm(1), bupstash-keyfiles(7),
 bupstash-query-language(7)

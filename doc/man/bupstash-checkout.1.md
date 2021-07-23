@@ -3,22 +3,23 @@ bupstash-sync(1)
 
 ## SYNOPSIS
 
-Synchronize the contents of a local directory with a stored snapshot.
+Efficiently checkout the contents of a snapshot into a local directory.
 
-`bupstash sync [OPTIONS] --to $PATH QUERY... `
+`bupstash checkout [OPTIONS] --into $PATH QUERY... `
 
 ## DESCRIPTION
 
-`bupstash sync` performs an efficient set of incremental changes to
+`bupstash checkout` performs an efficient set of incremental changes to
 a directory such that it becomes identical to the requested snapshot.
-The incremental nature of `bupstash sync` makes it well suited for
-cycling between multiple similar snapshots. 
+The incremental nature of `bupstash checkout` makes it well suited for
+cycling between multiple similar snapshots. Note that this operation is dangerous
+as it deletes extra files already present in the destination directory.
 
 In order to aid file browsing as unprivileged users, `bupstash sync` does
-not attempt to restore users,groups and xattrs by default. To restore
-sync these you must specify the flags --owners and --xattrs respectively.
+not attempt to restore users, groups and xattrs by default. To set
+these you must specify the flags --ownership and --xattrs respectively.
 
-The item that is synchronized is chosen based on a simple query against the 
+The item that is checked out is chosen based on a simple query against the 
 tags specified when saving data with `bupstash put`.
 
 ## QUERY LANGUAGE
@@ -27,10 +28,13 @@ For full documentation on the query language, see bupstash-query-language(7).
 
 ## QUERY CACHING
 
-The get command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The checkout command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
+
+* --into PATH:
+  Directory to checkout files into, defaults to $BUPSTASH_CHECKOUT_DIR.
 
 * -r, --repository REPO:
   The repository to connect to, , may be of the form `ssh://$SERVER/$PATH` for
@@ -41,13 +45,13 @@ more information on the query cache.
   to `BUPSTASH_KEY`.
 
 * --pick PATH:
-  Synchronize only a sub-directory from a snapshot.
+  Pick a sub-directory of the snapshot to checkout..
 
 * --ownership:
-  Synchronize uid's and gid's.
+  Set uid's and gid's.
 
 * --xattrs:
-  Synchronize xattrs.
+  Set xattrs.
 
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
@@ -81,28 +85,29 @@ more information on the query cache.
 * BUPSTASH_QUERY_CACHE:
   Path to the query cache file to use.
 
+* BUPSTASH_CHECKOUT_DIR:
+  Path to checkout into.
 
 ## EXAMPLES
 
-### Synchronize a local dir to a given snapshot
+### Checkout a snapshot into a local directory
 
 ```
-$ bupstash sync --to ./dir id=ad8*
+$ bupstash checkout --into ./dir id=ad8*
 ```
 
-### Synchronize including uid and gid
+### Checkout including users and groups
 
 ```
-$ bupstash sync --ownership --to ./dir id=ad8*
+$ bupstash checkout --ownership --into ./dir id=ad8*
 ```
 
-### Synchronize a snapshot sub directory
+### Checkout a sub directory of the snapshot
 
 ```
-$ bupstash sync --to ./dir --pick sub/dir id=ad8*
+$ bupstash checkout --into ./dir --pick sub/dir id=ad8*
 ```
 
 ## SEE ALSO
 
-bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-rm(1), bupstash-keyfiles(7),
-bupstash-query-language(7)
+bupstash(1), bupstash-get(1), bupstash-list(1), bupstash-keyfiles(7), bupstash-query-language(7)

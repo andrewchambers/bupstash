@@ -70,7 +70,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
-        "sync" => include_str!("../doc/cli/sync.txt"),
+        "checkout" => include_str!("../doc/cli/checkout.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
@@ -2121,7 +2121,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
     query_cli_opts(&mut opts);
@@ -2129,12 +2129,17 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "pick",
-        "Pick a sub-directory of the snapshot for syncing.",
+        "Pick a sub-directory of the snapshot to checkout.",
         "PATH",
     );
-    opts.optflag("", "ownership", "Synchronize uids and gids.");
-    opts.optflag("", "xattrs", "Synchronize xattrs.");
-    opts.optopt("", "to", "Directory to sync remote files into.", "PATH");
+    opts.optflag("", "ownership", "Set uids and gids.");
+    opts.optflag("", "xattrs", "Set xattrs.");
+    opts.optopt(
+        "",
+        "into",
+        "Directory to checkout files into, defaults to BUPSTASH_CHECKOUT_DIR.",
+        "PATH",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -2164,14 +2169,25 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    if !matches.opt_present("to") {
-        anyhow::bail!("please set --to to the sync target directory.")
-    }
-    let to_dir: PathBuf = matches.opt_str("to").unwrap().into();
-    let to_dir = fsutil::absolute_path(&to_dir)?;
+    let into_dir: PathBuf = if let Some(into) = matches.opt_str("into") {
+        into.into()
+    } else if let Some(into) = std::env::var_os("BUPSTASH_CHECKOUT_DIR") {
+        into.into()
+    } else {
+        anyhow::bail!(
+            "please set --into or BUPSTASH_CHECKOUT_DIR to the checkout target directory."
+        )
+    };
 
-    if !to_dir.is_dir() {
-        anyhow::bail!("{} is not a directory", to_dir.display())
+    let into_dir = fsutil::absolute_path(&into_dir)?;
+
+    if !into_dir.exists() {
+        anyhow::bail!("{} does not exist", into_dir.display())
+    }
+
+
+    if !into_dir.is_dir() {
+        anyhow::bail!("{} is not a directory", into_dir.display())
     }
 
     let (id, query) = cli_to_id_and_query(&matches)?;
@@ -2248,7 +2264,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             &mut serve_in,
         )?
     } else {
-        anyhow::bail!("sync is only supported for directory snapshots created by bupstash");
+        anyhow::bail!("checkout is only supported for directory snapshots created by bupstash");
     };
 
     let (content_index, data_map) = if let Some(ref pick_path) = matches.opt_str("pick") {
@@ -2260,9 +2276,9 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         (content_index, None)
     };
 
-    client::sync_snapshot_to_local_dir(
+    client::checkout_to_local_dir(
         &progress,
-        client::SyncSnapshotContext {
+        client::CheckoutContext {
             item_id: id,
             metadata: metadata,
             data_ctx: client::DataRequestContext {
@@ -2278,7 +2294,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         data_map,
         &mut serve_out,
         &mut serve_in,
-        &to_dir,
+        &into_dir,
     )?;
 
     client::hangup(&mut serve_in)?;
@@ -2407,7 +2423,7 @@ fn main() {
         "diff" => diff_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
-        "sync" => sync_main(args),
+        "checkout" => checkout_main(args),
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
