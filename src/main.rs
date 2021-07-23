@@ -2185,19 +2185,18 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("{} does not exist", into_dir.display())
     }
 
-
     if !into_dir.is_dir() {
         anyhow::bail!("{} is not a directory", into_dir.display())
     }
 
-    let (id, query) = cli_to_id_and_query(&matches)?;
+    let (item_id, query) = cli_to_id_and_query(&matches)?;
     let mut serve_proc =
         cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    let id = match (id, query) {
-        (Some(id), _) => id,
+    let item_id = match (item_id, query) {
+        (Some(item_id), _) => item_id,
         (_, query) => {
             let mut query_cache = cli_to_query_cache(&matches)?;
 
@@ -2210,15 +2209,15 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             )?;
 
             let mut n_matches: u64 = 0;
-            let mut id = xid::Xid::default();
+            let mut item_id = xid::Xid::default();
 
             let mut on_match =
-                |item_id: xid::Xid,
+                |id: xid::Xid,
                  _tags: &std::collections::BTreeMap<String, String>,
                  _metadata: &oplog::VersionedItemMetadata,
                  _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
                     n_matches += 1;
-                    id = item_id;
+                    item_id = id;
 
                     if n_matches > 1 {
                         anyhow::bail!(
@@ -2243,12 +2242,12 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &mut on_match,
             )?;
 
-            id
+            item_id
         }
     };
 
     progress.set_message("fetching item index...");
-    let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
+    let metadata = client::request_metadata(item_id, &mut serve_out, &mut serve_in)?;
 
     let content_index = if metadata.index_tree().is_some() {
         client::request_index(
@@ -2258,7 +2257,7 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 idx_dctx,
                 metadata_dctx: metadata_dctx.clone(),
             },
-            id,
+            item_id,
             &metadata,
             &mut serve_out,
             &mut serve_in,
@@ -2279,8 +2278,8 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     client::checkout_to_local_dir(
         &progress,
         client::CheckoutContext {
-            item_id: id,
-            metadata: metadata,
+            item_id,
+            metadata,
             data_ctx: client::DataRequestContext {
                 primary_key_id,
                 data_hash_key_part_1,
