@@ -1186,16 +1186,16 @@ fn receive_partial_htree(
     Ok(())
 }
 
-pub fn restore_removed(
+pub fn recover_removed(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<u64, anyhow::Error> {
-    progress.set_message("restoring items...");
+    progress.set_message("recovering items...");
 
-    write_packet(w, &Packet::TRestoreRemoved)?;
+    write_packet(w, &Packet::TRecoverRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored.0),
+        Packet::RRecoverRemoved(RRecoverRemoved { n_recovered}) => Ok(n_recovered.0),
         _ => anyhow::bail!("protocol error, expected restore packet response or progress packet",),
     }
 }

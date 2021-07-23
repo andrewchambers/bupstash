@@ -123,15 +123,15 @@ fn serve_repository(
                 }
                 write_packet(w, &Packet::RRmItems)?;
             }
-            Packet::TRestoreRemoved => {
+            Packet::TRecoverRemoved => {
                 if !cfg.allow_get || !cfg.allow_put || !cfg.allow_list {
-                    anyhow::bail!("server has disabled restore for this client (restore requires get, put and list permissions).")
+                    anyhow::bail!("server has disabled recover-removed for this client (recover-removed requires get, put and list permissions).")
                 }
-                let n_restored = repo.restore_removed()?;
+                let n_recovered = repo.recover_removed()?;
                 write_packet(
                     w,
-                    &Packet::RRestoreRemoved(RRestoreRemoved {
-                        n_restored: serde_bare::Uint(n_restored),
+                    &Packet::RRecoverRemoved(RRecoverRemoved {
+                        n_recovered: serde_bare::Uint(n_recovered),
                     }),
                 )?;
             }

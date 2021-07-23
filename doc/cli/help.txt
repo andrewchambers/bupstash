@@ -14,7 +14,7 @@ Subcommands:
   get               Get data from a repository.
   restore           Restore a snapshot to a local directory.
   rm/remove         Remove items from a repository.
-  restore-removed   Restore items pending garbage collection.
+  recover-removed   Recover items pending garbage collection.
   gc                Delete unreferenced data and free space.
   version           Print the version and exit.
   help              Print this message.

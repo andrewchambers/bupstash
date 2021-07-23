@@ -117,8 +117,8 @@ pub struct Abort {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RRestoreRemoved {
-    pub n_restored: serde_bare::Uint,
+pub struct RRecoverRemoved {
+    pub n_recovered: serde_bare::Uint,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -161,8 +161,8 @@ pub enum Packet {
     RRequestChunkData(Vec<u8>),
     Progress(Progress),
     Abort(Abort),
-    TRestoreRemoved,
-    RRestoreRemoved(RRestoreRemoved),
+    TRecoverRemoved,
+    RRecoverRemoved(RRecoverRemoved),
     RequestIndex(RequestIndex),
     TStorageWriteBarrier,
     RStorageWriteBarrier(SyncStats),
@@ -203,8 +203,8 @@ const PACKET_KIND_T_REQUEST_CHUNK_DATA: u8 = 20;
 const PACKET_KIND_R_REQUEST_CHUNK_DATA: u8 = 21;
 const PACKET_KIND_PROGRESS: u8 = 22;
 const PACKET_KIND_ABORT: u8 = 23;
-const PACKET_KIND_T_RESTORE_REMOVED: u8 = 24;
-const PACKET_KIND_R_RESTORE_REMOVED: u8 = 25;
+const PACKET_KIND_T_RECOVER_REMOVED: u8 = 24;
+const PACKET_KIND_R_RECOVER_REMOVED: u8 = 25;
 const PACKET_KIND_REQUEST_INDEX: u8 = 26;
 const PACKET_KIND_T_REQUEST_METADATA: u8 = 28;
 const PACKET_KIND_R_REQUEST_METADATA: u8 = 29;
@@ -347,8 +347,8 @@ pub fn read_packet_raw(
         PACKET_KIND_R_REQUEST_CHUNK_DATA => Packet::RRequestChunkData(buf),
         PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_RESTORE_REMOVED => Packet::TRestoreRemoved,
-        PACKET_KIND_R_RESTORE_REMOVED => Packet::RRestoreRemoved(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_RECOVER_REMOVED => Packet::TRecoverRemoved,
+        PACKET_KIND_R_RECOVER_REMOVED => Packet::RRecoverRemoved(serde_bare::from_slice(&buf)?),
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_PREPARE_FOR_SWEEP => {
             Packet::TStoragePrepareForSweep(serde_bare::from_slice(&buf)?)
@@ -584,12 +584,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_ABORT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TRestoreRemoved => {
-            send_hdr(w, PACKET_KIND_T_RESTORE_REMOVED, 0)?;
+        Packet::TRecoverRemoved => {
+            send_hdr(w, PACKET_KIND_T_RECOVER_REMOVED, 0)?;
         }
-        Packet::RRestoreRemoved(ref v) => {
+        Packet::RRecoverRemoved(ref v) => {
             let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_R_RESTORE_REMOVED, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_RECOVER_REMOVED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::StorageConnect(ref v) => {

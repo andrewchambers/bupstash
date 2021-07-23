@@ -72,7 +72,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "get" => include_str!("../doc/cli/get.txt"),
         "restore" => include_str!("../doc/cli/restore.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
-        "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
+        "recover-removed" => include_str!("../doc/cli/recover-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
@@ -1992,7 +1992,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
@@ -2009,13 +2009,13 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
+    let n_recovered = client::recover_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
     progress.finish_and_clear();
 
-    writeln!(std::io::stdout(), "{} item(s) restored", n_restored)?;
+    writeln!(std::io::stdout(), "{} item(s) recovered", n_recovered )?;
 
     Ok(())
 }
@@ -2426,7 +2426,7 @@ fn main() {
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
-        "restore-removed" => restore_removed(args),
+        "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
         "version" | "--version" => {
             args[0] = "version".to_string();

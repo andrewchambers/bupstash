@@ -205,7 +205,7 @@ _concurrent_send_test_worker () {
   fi
 }
 
-@test "rm and restore-removed" {
+@test "rm and recover-removed" {
   test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
@@ -218,7 +218,7 @@ _concurrent_send_test_worker () {
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
-  bupstash restore-removed
+  bupstash recover-removed
   test 2 = "$(bupstash list | expr $(wc -l))"
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -228,7 +228,7 @@ _concurrent_send_test_worker () {
   fi
   bupstash rm id=$id1
   bupstash gc
-  bupstash restore-removed
+  bupstash recover-removed
   test 1 = "$(bupstash list | expr $(wc -l))"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -238,7 +238,7 @@ _concurrent_send_test_worker () {
   fi
   bupstash rm id=$id2
   bupstash gc
-  bupstash restore-removed
+  bupstash recover-removed
   test 0 = "$(bupstash list | expr $(wc -l))"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -645,7 +645,7 @@ _concurrent_modify_worker () {
   if bupstash init ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-put $REPO"
@@ -655,7 +655,7 @@ _concurrent_modify_worker () {
   if bupstash list  ; then exit 1 ; fi
   if bupstash list-contents id=$id  ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-list $REPO"
@@ -665,7 +665,7 @@ _concurrent_modify_worker () {
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-gc $REPO"
@@ -675,7 +675,7 @@ _concurrent_modify_worker () {
   if bupstash list  ; then exit 1 ; fi
   if bupstash list-contents id=$id  ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   bupstash gc
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-remove $REPO"
@@ -684,13 +684,13 @@ _concurrent_modify_worker () {
   if bupstash init ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
   # delete as the last test
   bupstash rm id=$id
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-get --allow-put $REPO"
-  bupstash restore-removed
+  bupstash recover-removed
 }
 
 @test "dir restore sanity" {
@@ -834,7 +834,7 @@ _concurrent_modify_worker () {
     bupstash rm --allow-many "id=f*" || true
     if test "$(($RANDOM % 2))" = 0
     then
-      bupstash restore-removed || true
+      bupstash recover-removed || true
     fi
   done
 

@@ -513,7 +513,7 @@ impl Repo {
         Ok(())
     }
 
-    pub fn restore_removed(&mut self) -> Result<u64, anyhow::Error> {
+    pub fn recover_removed(&mut self) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
         let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
@@ -539,7 +539,7 @@ impl Repo {
         }
 
         if n_restored != 0 {
-            let op = oplog::LogOp::RestoreRemoved;
+            let op = oplog::LogOp::RecoverRemoved;
             let serialized_op = serde_bare::to_vec(&op)?;
             txn.add_append("repo.oplog", serialized_op)?;
         }

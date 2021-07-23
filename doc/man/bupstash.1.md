@@ -17,7 +17,7 @@ Run one of the following `bupstash` subcommands.
 `bupstash get ...`<br>
 `bupstash restore ...`<br>
 `bupstash rm ...`<br>
-`bupstash restore-removed ...`<br>
+`bupstash recover-removed ...`<br>
 `bupstash gc ...`<br>
 `bupstash serve ...`<br>
 `bupstash help ...`<br>
@@ -64,8 +64,8 @@ that each have their own documentation.
   Diff snapshot contents.
 * bupstash-rm(1):
   Remove repository items matching a given query.
-* bupstash-restore-removed(1):
-  Restore accidentally removed items.
+* bupstash-recover-removed(1):
+  Recover removed items that are pending garbage collection.
 * bupstash-gc(1):
   Reclaim diskspace in a repository.
 * bupstash-serve(1):
