@@ -15,7 +15,7 @@ Run one of the following `bupstash` subcommands.
 `bupstash list-contents ...`<br>
 `bupstash diff ...`<br>
 `bupstash get ...`<br>
-`bupstash checkout ...`<br>
+`bupstash restore ...`<br>
 `bupstash rm ...`<br>
 `bupstash restore-removed ...`<br>
 `bupstash gc ...`<br>
@@ -54,8 +54,8 @@ that each have their own documentation.
   Add data to a bupstash repository.
 * bupstash-get(1):
   Fetch data from the bupstash repository matching a query.
-* bupstash-checkout(1):
-  Checkout a snapshot into a local directory.
+* bupstash-restore(1):
+  Restore a snapshot into a local directory.
 * bupstash-list(1):
   List repository items matching a given query.
 * bupstash-list-contents(1):
@@ -134,7 +134,7 @@ some data.
 ### Restore a directory to a previous snapshot
 
 ```
-$ bupstash sync --to ./dir name=dir.tar
+$ bupstash restore --to ./dir name=dir.tar
 ```
 
 ### Remove items matching a query.

@@ -1,21 +1,21 @@
-bupstash-sync(1) 
+bupstash-restore(1) 
 ================
 
 ## SYNOPSIS
 
-Efficiently checkout the contents of a snapshot into a local directory.
+Efficiently restore the contents of a snapshot into a local directory.
 
-`bupstash checkout [OPTIONS] --into $PATH QUERY... `
+`bupstash restore [OPTIONS] --into $PATH QUERY... `
 
 ## DESCRIPTION
 
-`bupstash checkout` performs an efficient set of incremental changes to
+`bupstash restore` performs an efficient set of incremental changes to
 a directory such that it becomes identical to the requested snapshot.
-The incremental nature of `bupstash checkout` makes it well suited for
+The incremental nature of `bupstash restore` makes it well suited for
 cycling between multiple similar snapshots. Note that this operation is dangerous
 as it deletes extra files already present in the destination directory.
 
-In order to aid file browsing as unprivileged users, `bupstash sync` does
+In order to aid file browsing as unprivileged users, `bupstash restore` does
 not attempt to restore users, groups and xattrs by default. To set
 these you must specify the flags --ownership and --xattrs respectively.
 
@@ -28,13 +28,13 @@ For full documentation on the query language, see bupstash-query-language(7).
 
 ## QUERY CACHING
 
-The checkout command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The restore command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
 
 * --into PATH:
-  Directory to checkout files into, defaults to $BUPSTASH_CHECKOUT_DIR.
+  Directory to restore files into, defaults to $BUPSTASH_CHECKOUT_DIR.
 
 * -r, --repository REPO:
   The repository to connect to, , may be of the form `ssh://$SERVER/$PATH` for
@@ -45,7 +45,7 @@ more information on the query cache.
   to `BUPSTASH_KEY`.
 
 * --pick PATH:
-  Pick a sub-directory of the snapshot to checkout..
+  Pick a sub-directory of the snapshot to restore.
 
 * --ownership:
   Set uid's and gid's.
@@ -85,27 +85,27 @@ more information on the query cache.
 * BUPSTASH_QUERY_CACHE:
   Path to the query cache file to use.
 
-* BUPSTASH_CHECKOUT_DIR:
-  Path to checkout into.
+* BUPSTASH_RESTORE_DIR:
+  Path to restore into.
 
 ## EXAMPLES
 
-### Checkout a snapshot into a local directory
+### Restore a snapshot into a local directory
 
 ```
-$ bupstash checkout --into ./dir id=ad8*
+$ bupstash restore --into ./dir id=ad8*
 ```
 
-### Checkout including users and groups
+### Restore including users and groups
 
 ```
-$ bupstash checkout --ownership --into ./dir id=ad8*
+$ bupstash restore --ownership --into ./dir id=ad8*
 ```
 
-### Checkout a sub directory of the snapshot
+### Restore a sub directory of the snapshot
 
 ```
-$ bupstash checkout --into ./dir --pick sub/dir id=ad8*
+$ bupstash restore --into ./dir --pick sub/dir id=ad8*
 ```
 
 ## SEE ALSO

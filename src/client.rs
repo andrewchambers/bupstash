@@ -1287,18 +1287,18 @@ pub fn remove(
     Ok(())
 }
 
-pub struct CheckoutContext {
+pub struct RestoreContext {
     pub data_ctx: DataRequestContext,
     pub item_id: Xid,
     pub metadata: oplog::VersionedItemMetadata,
-    pub sync_xattrs: bool,
-    pub sync_ownership: bool,
+    pub restore_xattrs: bool,
+    pub restore_ownership: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn checkout_to_local_dir(
+pub fn restore_to_local_dir(
     progress: &indicatif::ProgressBar,
-    ctx: CheckoutContext,
+    ctx: RestoreContext,
     content_index: index::CompressedIndex,
     data_map: Option<index::DataMap>,
     serve_out: &mut dyn std::io::Read,
@@ -1573,11 +1573,11 @@ pub fn checkout_to_local_dir(
     }
     std::mem::drop(create_path_set);
 
-    let sync_ownership = ctx.sync_ownership;
-    let sync_xattrs = ctx.sync_xattrs;
+    let restore_ownership = ctx.restore_ownership;
+    let restore_xattrs = ctx.restore_xattrs;
 
     let apply_ent_attrs = |to_ch: &Path, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
-        if sync_xattrs && (ent.is_file() || ent.is_dir()) {
+        if restore_xattrs && (ent.is_file() || ent.is_dir()) {
             match xattr::list(&to_ch) {
                 Ok(attrs) => {
                     for attr in attrs {
@@ -1608,7 +1608,7 @@ pub fn checkout_to_local_dir(
             }
         }
 
-        if sync_ownership {
+        if restore_ownership {
             match nix::unistd::fchownat(
                 None,
                 to_ch,

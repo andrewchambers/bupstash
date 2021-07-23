@@ -70,7 +70,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
-        "checkout" => include_str!("../doc/cli/checkout.txt"),
+        "restore" => include_str!("../doc/cli/restore.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
         "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
@@ -2121,7 +2121,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
     query_cli_opts(&mut opts);
@@ -2129,7 +2129,7 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "pick",
-        "Pick a sub-directory of the snapshot to checkout.",
+        "Pick a sub-directory of the snapshot to restore.",
         "PATH",
     );
     opts.optflag("", "ownership", "Set uids and gids.");
@@ -2137,7 +2137,7 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "into",
-        "Directory to checkout files into, defaults to BUPSTASH_CHECKOUT_DIR.",
+        "Directory to restore files into, defaults to BUPSTASH_CHECKOUT_DIR.",
         "PATH",
     );
 
@@ -2175,7 +2175,7 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         into.into()
     } else {
         anyhow::bail!(
-            "please set --into or BUPSTASH_CHECKOUT_DIR to the checkout target directory."
+            "please set --into or BUPSTASH_CHECKOUT_DIR to the restore target directory."
         )
     };
 
@@ -2263,7 +2263,7 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             &mut serve_in,
         )?
     } else {
-        anyhow::bail!("checkout is only supported for directory snapshots created by bupstash");
+        anyhow::bail!("restore is only supported for directory snapshots created by bupstash");
     };
 
     let (content_index, data_map) = if let Some(ref pick_path) = matches.opt_str("pick") {
@@ -2275,9 +2275,9 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         (content_index, None)
     };
 
-    client::checkout_to_local_dir(
+    client::restore_to_local_dir(
         &progress,
-        client::CheckoutContext {
+        client::RestoreContext {
             item_id,
             metadata,
             data_ctx: client::DataRequestContext {
@@ -2286,8 +2286,8 @@ fn checkout_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 data_dctx,
                 metadata_dctx,
             },
-            sync_ownership: matches.opt_present("ownership"),
-            sync_xattrs: matches.opt_present("xattrs"),
+            restore_ownership: matches.opt_present("ownership"),
+            restore_xattrs: matches.opt_present("xattrs"),
         },
         content_index,
         data_map,
@@ -2422,7 +2422,7 @@ fn main() {
         "diff" => diff_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
-        "checkout" => checkout_main(args),
+        "restore" => restore_main(args),
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
