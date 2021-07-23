@@ -2015,7 +2015,7 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    writeln!(std::io::stdout(), "{} item(s) recovered", n_recovered )?;
+    writeln!(std::io::stdout(), "{} item(s) recovered", n_recovered)?;
 
     Ok(())
 }
@@ -2174,9 +2174,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else if let Some(into) = std::env::var_os("BUPSTASH_CHECKOUT_DIR") {
         into.into()
     } else {
-        anyhow::bail!(
-            "please set --into or BUPSTASH_CHECKOUT_DIR to the restore target directory."
-        )
+        anyhow::bail!("please set --into or BUPSTASH_CHECKOUT_DIR to the restore target directory.")
     };
 
     let into_dir = fsutil::absolute_path(&into_dir)?;

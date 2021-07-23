@@ -1195,7 +1195,7 @@ pub fn recover_removed(
 
     write_packet(w, &Packet::TRecoverRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRecoverRemoved(RRecoverRemoved { n_recovered}) => Ok(n_recovered.0),
+        Packet::RRecoverRemoved(RRecoverRemoved { n_recovered }) => Ok(n_recovered.0),
         _ => anyhow::bail!("protocol error, expected restore packet response or progress packet",),
     }
 }
