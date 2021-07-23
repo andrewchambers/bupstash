@@ -138,42 +138,6 @@ impl FsMetadataFetcher {
     }
 }
 
-cfg_if::cfg_if! {
-    if #[cfg(target_os = "linux")] {
-
-        fn dev_major(dev: u64) -> u32 {
-            (((dev >> 32) & 0xffff_f000) |
-             ((dev >>  8) & 0x0000_0fff)) as u32
-        }
-
-        fn dev_minor(dev: u64) -> u32 {
-            (((dev >> 12) & 0xffff_ff00) |
-             ((dev      ) & 0x0000_00ff)) as u32
-        }
-
-    } else if #[cfg(target_os = "openbsd")] {
-
-        fn dev_major(dev: u64) -> u32 {
-            ((dev >> 8) & 0x0000_00ff) as u32
-        }
-
-        fn dev_minor(dev: u64) -> u32 {
-            ((dev & 0x0000_00ff) | ((dev & 0xffff_0000) >> 8)) as u32
-        }
-
-    } else {
-
-        fn dev_major(_dev: u64) -> u32 {
-            panic!("unable to get device major number on this platform (file a bug report)");
-        }
-
-        fn dev_minor(_dev: u64) -> u32 {
-            panic!("unable to get device minor number on this platform (file a bug report)");
-        }
-
-    }
-}
-
 #[derive(Default)]
 pub struct DevNormalizer {
     count: u64,
@@ -215,7 +179,10 @@ pub fn metadata_to_index_ent(
     let t = metadata.file_type();
 
     let (dev_major, dev_minor) = if t.is_block_device() || t.is_char_device() {
-        (dev_major(metadata.rdev()), dev_minor(metadata.rdev()))
+        (
+            fsutil::dev_major(metadata.rdev()),
+            fsutil::dev_minor(metadata.rdev()),
+        )
     } else {
         (0, 0)
     };
@@ -424,7 +391,7 @@ impl FsIndexer {
             filler_children,
             work_stack: vec![vec![start_dir]],
             dev_normalizer: DevNormalizer::new(),
-            metadata_fetcher: FsMetadataFetcher::new(8, want_xattrs, want_hash),
+            metadata_fetcher: FsMetadataFetcher::new(4, want_xattrs, want_hash),
         })
     }
 

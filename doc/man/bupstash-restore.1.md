@@ -1,18 +1,25 @@
-bupstash-get(1) 
-===============
+bupstash-restore(1) 
+================
 
 ## SYNOPSIS
 
-Get data from a bupstash repository.
+Efficiently restore the contents of a snapshot into a local directory.
 
-`bupstash get [OPTIONS] QUERY... `
+`bupstash restore [OPTIONS] --into $PATH QUERY... `
 
 ## DESCRIPTION
 
-`bupstash get` fetches and decrypts data stored in a bupstash repository, sending
-it to stdout.
+`bupstash restore` performs an efficient set of incremental changes to
+a directory such that it becomes identical to the requested snapshot.
+The incremental nature of `bupstash restore` makes it well suited for
+cycling between multiple similar snapshots. Note that this operation is dangerous
+as it deletes extra files already present in the destination directory.
 
-The item that is fetched is chosen based on a simple query against the 
+In order to aid file browsing as unprivileged users, `bupstash restore` does
+not attempt to restore users, groups and xattrs by default. To set
+these you must specify the flags --ownership and --xattrs respectively.
+
+The item that is checked out is chosen based on a simple query against the 
 tags specified when saving data with `bupstash put`.
 
 ## QUERY LANGUAGE
@@ -21,10 +28,13 @@ For full documentation on the query language, see bupstash-query-language(7).
 
 ## QUERY CACHING
 
-The get command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The restore command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
+
+* --into PATH:
+  Directory to restore files into, defaults to $BUPSTASH_CHECKOUT_DIR.
 
 * -r, --repository REPO:
   The repository to connect to, , may be of the form `ssh://$SERVER/$PATH` for
@@ -35,7 +45,13 @@ more information on the query cache.
   to `BUPSTASH_KEY`.
 
 * --pick PATH:
-  Fetch an individual file or sub-directory from a snapshot.
+  Pick a sub-directory of the snapshot to restore.
+
+* --ownership:
+  Set uid's and gid's.
+
+* --xattrs:
+  Set xattrs.
 
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
@@ -69,43 +85,29 @@ more information on the query cache.
 * BUPSTASH_QUERY_CACHE:
   Path to the query cache file to use.
 
+* BUPSTASH_RESTORE_DIR:
+  Path to restore into.
 
 ## EXAMPLES
 
-### Get an item with a specific id 
+### Restore a snapshot into a local directory
 
 ```
-$ bupstash get id=14ebd2073b258b1f55c5bbc889c49db4 > ./data.file
+$ bupstash restore --into ./dir id=ad8*
 ```
 
-### Get an item by name and timestamp
+### Restore including users and groups
 
 ```
-$ bupstash get name=backup.tar and timestamp=2020/19/* > ./restore.tar
+$ bupstash restore --ownership --into ./dir id=ad8*
 ```
 
-### Get a file or sub-tar from a directory snapshot
+### Restore a sub directory of the snapshot
 
 ```
-$ bupstash get --pick=path/to/file.txt id=$id
-$ bupstash get --pick=path/to/dir id=$id | tar ...
-```
-
-### Get a tarball
-
-The builtin directory put creates a tarball from a directory, so to extract 
-it we use tar.
-
-```
-# Snapshot a directory.
-$ id=$(bupstash put ./data)
-
-# Fetch the contents of a snapshot and extract the contents with tar
-$ mkdir restore
-$ bupstash get id=$id | tar -C ./restore -xvf -
+$ bupstash restore --into ./dir --pick sub/dir id=ad8*
 ```
 
 ## SEE ALSO
 
-bupstash(1), bupstash-put(1), bupstash-list(1), bupstash-restore(1), bupstash-rm(1), bupstash-keyfiles(7),
-bupstash-query-language(7)
+bupstash(1), bupstash-get(1), bupstash-list(1), bupstash-keyfiles(7), bupstash-query-language(7)

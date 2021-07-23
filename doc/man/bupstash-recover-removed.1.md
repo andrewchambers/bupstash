@@ -1,21 +1,21 @@
-bupstash-restore-removed(1) 
+bupstash-recover-removed(1) 
 ==============
 
 ## SYNOPSIS
 
-Restore repository items that were removed, but that have not
+Recover repository items that were removed, but that have not
 yet been deleted via garbage collection.
 
-`bupstash restore-removed [OPTIONS]`
+`bupstash recover-removed [OPTIONS]`
 
 ## DESCRIPTION
 
-`bupstash restore-removed` allows a user to undo all 'rm' operations that
+`bupstash recover-removed` allows a user to undo all 'rm' operations that
 have taken place since the last invocation of bupstash-gc(1).
 In other words, this command provides a way to correct errors and accidental
 invocations of bupstash-rm(1).
 
-`bupstash restore-removed` requires 'put' and 'get' permissions for the repository being operated on.
+`bupstash recover-removed` requires 'put' and 'get' permissions for the repository being operated on.
 
 ## OPTIONS
 

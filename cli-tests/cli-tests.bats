@@ -47,7 +47,8 @@ setup () {
 }
 
 teardown () {
-  rm -rf $SCRATCH
+  chmod -R 700 "$SCRATCH"
+  rm -rf "$SCRATCH"
 }
 
 @test "simple put/get primary key" {
@@ -204,7 +205,7 @@ _concurrent_send_test_worker () {
   fi
 }
 
-@test "rm and restore-removed" {
+@test "rm and recover-removed" {
   test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   id1="$(bupstash put -e :: echo hello1)"
@@ -217,7 +218,7 @@ _concurrent_send_test_worker () {
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
-  bupstash restore-removed
+  bupstash recover-removed
   test 2 = "$(bupstash list | expr $(wc -l))"
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -227,7 +228,7 @@ _concurrent_send_test_worker () {
   fi
   bupstash rm id=$id1
   bupstash gc
-  bupstash restore-removed
+  bupstash recover-removed
   test 1 = "$(bupstash list | expr $(wc -l))"
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -237,7 +238,7 @@ _concurrent_send_test_worker () {
   fi
   bupstash rm id=$id2
   bupstash gc
-  bupstash restore-removed
+  bupstash recover-removed
   test 0 = "$(bupstash list | expr $(wc -l))"
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -644,7 +645,7 @@ _concurrent_modify_worker () {
   if bupstash init ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-put $REPO"
@@ -654,7 +655,7 @@ _concurrent_modify_worker () {
   if bupstash list  ; then exit 1 ; fi
   if bupstash list-contents id=$id  ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-list $REPO"
@@ -664,7 +665,7 @@ _concurrent_modify_worker () {
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-gc $REPO"
@@ -674,7 +675,7 @@ _concurrent_modify_worker () {
   if bupstash list  ; then exit 1 ; fi
   if bupstash list-contents id=$id  ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   bupstash gc
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-remove $REPO"
@@ -683,13 +684,84 @@ _concurrent_modify_worker () {
   if bupstash init ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash put -e echo hi ; then exit 1 ; fi
-  if bupstash restore-removed ; then exit 1 ; fi
+  if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
   # delete as the last test
   bupstash rm id=$id
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-get --allow-put $REPO"
-  bupstash restore-removed
+  bupstash recover-removed
+}
+
+@test "dir restore sanity" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  id=$(bupstash put $SCRATCH/d)
+  bupstash restore --into $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+}
+
+@test "dir restore symlink" {
+  mkdir "$SCRATCH"/{d,restore}
+  ln -s missing.txt "$SCRATCH"/d/l
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash restore --into "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+}
+
+@test "dir restore hardlink" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash restore --into "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  echo -n "xxx" >> "$SCRATCH/restore/a.txt"
+  test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
+}
+
+@test "dir restore hardlink prexisting" {
+  mkdir "$SCRATCH"/{d,restore}
+  echo -n "abc" > "$SCRATCH/d/a.txt"
+  ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
+
+  # Test b becomes a hard link.
+  echo -n "abc" > "$SCRATCH/restore/a.txt"
+  echo -n "abc" > "$SCRATCH/restore/b.txt"
+  
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash restore --into "$SCRATCH"/restore id=$id
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  echo -n "xxx" >> "$SCRATCH/restore/a.txt"
+  test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
+}
+
+@test "dir restore read only" {
+  mkdir "$SCRATCH"/{d,restore}
+
+  mkdir "$SCRATCH"/d/b
+  echo -n "abc" > "$SCRATCH"/d/b/a.txt
+  chmod -w "$SCRATCH"{/d/b,/d/b/a.txt}
+
+  mkdir "$SCRATCH"/restore/{b,c}
+  echo -n "xxx" > "$SCRATCH"/restore/c/x.txt
+  echo -n "yyy" > "$SCRATCH"/restore/b/a.txt
+  chmod -w "$SCRATCH"/restore/b/a.txt
+  chmod -R -w "$SCRATCH"/restore/c
+
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash restore --into $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+}
+
+@test "dir restore pick" {
+  mkdir "$SCRATCH"/{d,d/a,d/b,d/c,restore}
+  echo -n "abc" > "$SCRATCH/d/a/a.txt"
+  echo -n "def" > "$SCRATCH/d/b/b.txt"
+  echo -n "hij" > "$SCRATCH/d/c/c.txt"
+  id=$(bupstash put "$SCRATCH"/d)
+  bupstash restore --pick b --into $SCRATCH/restore id=$id
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
 }
 
 @test "pick fuzz torture" {
@@ -740,7 +812,6 @@ _concurrent_modify_worker () {
   done
 }
 
-
 @test "repo rollback torture" {
   if ! test -d "$BUPSTASH_REPOSITORY" || \
        test -n "$BUPSTASH_REPOSITORY_COMMAND"
@@ -763,7 +834,7 @@ _concurrent_modify_worker () {
     bupstash rm --allow-many "id=f*" || true
     if test "$(($RANDOM % 2))" = 0
     then
-      bupstash restore-removed || true
+      bupstash recover-removed || true
     fi
   done
 

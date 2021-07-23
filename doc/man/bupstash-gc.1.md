@@ -13,8 +13,8 @@ unreferenced data and freeing disk space.
 `bupstash gc` walks the repository contents attempting to find
 unreachable data chunks and removing them, potentially reclaiming disk space.
 
-For periods of time during garbage collection operations that modify
-the repository (such as bupstash-put(1)) may temporarily be blocked.
+It is safe to run `bupstash gc` at any time, but some operations (such as bupstash-put(1))
+may temporarily be delayed.
 
 The garbage collector only relies on unencrypted metadata, so does not need
 access to decryption keys to operate.

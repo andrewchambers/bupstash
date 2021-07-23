@@ -15,8 +15,9 @@ Run one of the following `bupstash` subcommands.
 `bupstash list-contents ...`<br>
 `bupstash diff ...`<br>
 `bupstash get ...`<br>
+`bupstash restore ...`<br>
 `bupstash rm ...`<br>
-`bupstash restore-removed ...`<br>
+`bupstash recover-removed ...`<br>
 `bupstash gc ...`<br>
 `bupstash serve ...`<br>
 `bupstash help ...`<br>
@@ -53,6 +54,8 @@ that each have their own documentation.
   Add data to a bupstash repository.
 * bupstash-get(1):
   Fetch data from the bupstash repository matching a query.
+* bupstash-restore(1):
+  Restore a snapshot into a local directory.
 * bupstash-list(1):
   List repository items matching a given query.
 * bupstash-list-contents(1):
@@ -61,8 +64,8 @@ that each have their own documentation.
   Diff snapshot contents.
 * bupstash-rm(1):
   Remove repository items matching a given query.
-* bupstash-restore-removed(1):
-  Restore accidentally removed items.
+* bupstash-recover-removed(1):
+  Recover removed items that are pending garbage collection.
 * bupstash-gc(1):
   Reclaim diskspace in a repository.
 * bupstash-serve(1):
@@ -91,8 +94,8 @@ $ bupstash put ./some-data
 ebb66f3baa5d432e9f9a28934888a23d
 
 $ bupstash list-contents id=ebb66f3baa5d432e9f9a28934888a23d
-drwxr-xr-x 0      2020/11/05 10:42:48 .
--rw-r--r-- 1778   2020/07/12 17:13:42 data.txt
+drwxr-xr-x 0    2020/11/05 10:42:48 .
+-rw-r--r-- 177B 2020/07/12 17:13:42 data.txt
 ```
 
 ### List items matching a query
@@ -126,6 +129,12 @@ $ bupstash put --exec name=database.sql pgdump mydatabase
 ```
 $ bupstash get id=bcb8684e6bf5cb453e77486decf61685
 some data.
+```
+
+### Restore a directory to a previous snapshot
+
+```
+$ bupstash restore --to ./dir name=dir.tar
 ```
 
 ### Remove items matching a query.

@@ -1,0 +1,9 @@
+bupstash restore [OPTIONS] --into DIR QUERY
+
+Efficiently restore the contents of a snapshot into a local directory,
+deleting any extra files that already existed in that directory.
+
+Examples:
+  $ bupstash restore --into ./dir id="8f7*"
+  $ bupstash restore --pick sub-dir --into ./dir id="8f7*"
+  $ bupstash restore --ownership --into ./dir id="8f7*"

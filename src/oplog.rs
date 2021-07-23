@@ -190,7 +190,7 @@ pub enum LogOp {
     // This is because batch deleting is possible, but batch add makes less sense.
     RemoveItems(Vec<Xid>),
 
-    RestoreRemoved,
+    RecoverRemoved,
 }
 
 pub fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, anyhow::Error> {

@@ -17,6 +17,7 @@ pub mod hex;
 pub mod htree;
 pub mod index;
 pub mod indexer;
+pub mod ioutil;
 pub mod keys;
 pub mod migrate;
 pub mod oplog;
@@ -69,8 +70,9 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "list-contents" => include_str!("../doc/cli/list-contents.txt"),
         "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
+        "restore" => include_str!("../doc/cli/restore.txt"),
         "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
-        "restore-removed" => include_str!("../doc/cli/restore-removed.txt"),
+        "recover-removed" => include_str!("../doc/cli/recover-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
@@ -626,7 +628,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    client::sync(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
+    client::sync_query_cache(progress, &mut query_cache, &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -1184,7 +1186,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut query_cache = cli_to_query_cache(&matches)?;
 
             // Only sync the client if we have a non id query.
-            client::sync(
+            client::sync_query_cache(
                 progress.clone(),
                 &mut query_cache,
                 &mut serve_out,
@@ -1232,7 +1234,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     progress.set_message("fetching item metadata...");
     let metadata = client::request_metadata(id, &mut serve_out, &mut serve_in)?;
 
-    let mut content_index = if metadata.index_tree().is_some() {
+    let mut get_index = if metadata.index_tree().is_some() {
         Some(client::request_index(
             client::IndexRequestContext {
                 primary_key_id,
@@ -1249,25 +1251,20 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         None
     };
 
-    let pick = if matches.opt_present("pick") {
+    let mut get_data_map = None;
+
+    if matches.opt_present("pick") {
         progress.set_message("picking content...");
 
-        if let Some(ref content_index) = content_index {
-            Some(index::pick(
-                &matches.opt_str("pick").unwrap(),
-                content_index,
-            )?)
+        if let Some(ref index) = get_index {
+            let (pick_index, pick_data_map) =
+                index::pick(&matches.opt_str("pick").unwrap(), index)?;
+            get_index = pick_index;
+            get_data_map = Some(pick_data_map);
         } else {
             anyhow::bail!("requested item does not have a content index (tarball was not created by bupstash)")
         }
-    } else {
-        None
     };
-
-    // The pick contains a sub-index, explicitly drop the content index.
-    if pick.is_some() {
-        content_index = None;
-    }
 
     progress.finish_and_clear();
 
@@ -1283,8 +1280,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         id,
         &metadata,
-        pick,
-        content_index,
+        get_data_map,
+        get_index,
         &mut serve_out,
         &mut serve_in,
         &mut stdout_unbuffered,
@@ -1371,7 +1368,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let mut query_cache = cli_to_query_cache(&matches)?;
 
             // Only sync the client if we have a non id query.
-            client::sync(
+            client::sync_query_cache(
                 progress.clone(),
                 &mut query_cache,
                 &mut serve_out,
@@ -1442,7 +1439,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     if matches.opt_present("pick") {
         progress.set_message("picking content...");
         content_index =
-            index::pick_dir_without_data_ranges(&matches.opt_str("pick").unwrap(), &content_index)?;
+            index::pick_dir_without_data(&matches.opt_str("pick").unwrap(), &content_index)?;
     }
 
     client::hangup(&mut serve_in)?;
@@ -1662,7 +1659,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     let mut query_cache = cli_to_query_cache(&matches)?;
 
                     if !already_synced {
-                        client::sync(
+                        client::sync_query_cache(
                             progress.clone(),
                             &mut query_cache,
                             &mut serve_out,
@@ -1740,10 +1737,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     for (i, pick_opt) in ["left-pick", "right-pick"].iter().enumerate() {
         if matches.opt_present(pick_opt) {
             progress.set_message("picking content...");
-            to_diff[i] = index::pick_dir_without_data_ranges(
-                &matches.opt_str(pick_opt).unwrap(),
-                &to_diff[i],
-            )?;
+            to_diff[i] =
+                index::pick_dir_without_data(&matches.opt_str(pick_opt).unwrap(), &to_diff[i])?;
         }
     }
 
@@ -1766,7 +1761,13 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &to_diff[0],
                 &to_diff[1],
                 diff_mask,
-                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                &mut |st: index::DiffStat, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    let op = match st {
+                        index::DiffStat::Unchanged => return Ok(()),
+                        index::DiffStat::Added => '+',
+                        index::DiffStat::Removed => '-',
+                    };
+
                     writeln!(
                         std::io::stdout(),
                         "{} {}",
@@ -1782,7 +1783,13 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &to_diff[0],
                 &to_diff[1],
                 diff_mask,
-                &mut |op: char, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                &mut |st: index::DiffStat, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                    let op = match st {
+                        index::DiffStat::Unchanged => return Ok(()),
+                        index::DiffStat::Added => '+',
+                        index::DiffStat::Removed => '-',
+                    };
+
                     writeln!(
                         std::io::stdout(),
                         "{} {}",
@@ -1863,7 +1870,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 let mut query_cache = cli_to_query_cache(&matches)?;
 
                 // Only sync the client if we have a non id query.
-                client::sync(
+                client::sync_query_cache(
                     progress.clone(),
                     &mut query_cache,
                     &mut serve_out,
@@ -1985,7 +1992,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("q", "quiet", "Suppress progress indicators.");
 
@@ -2002,13 +2009,13 @@ fn restore_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    let n_restored = client::restore_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
+    let n_recovered = client::recover_removed(progress.clone(), &mut serve_out, &mut serve_in)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
     progress.finish_and_clear();
 
-    writeln!(std::io::stdout(), "{} item(s) restored", n_restored)?;
+    writeln!(std::io::stdout(), "{} item(s) recovered", n_recovered)?;
 
     Ok(())
 }
@@ -2110,6 +2117,186 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     outf.flush()?;
+
+    Ok(())
+}
+
+fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
+    opts.optopt("k", "key", "Key to decrypt data with.", "PATH");
+    opts.optopt(
+        "",
+        "pick",
+        "Pick a sub-directory of the snapshot to restore.",
+        "PATH",
+    );
+    opts.optflag("", "ownership", "Set uids and gids.");
+    opts.optflag("", "xattrs", "Set xattrs.");
+    opts.optopt(
+        "",
+        "into",
+        "Directory to restore files into, defaults to BUPSTASH_CHECKOUT_DIR.",
+        "PATH",
+    );
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let key = cli_to_key(&matches)?;
+    let primary_key_id = key.primary_key_id();
+    let (idx_hash_key_part_1, data_hash_key_part_1, data_dctx, metadata_dctx, idx_dctx) = match key
+    {
+        keys::Key::PrimaryKeyV1(k) => {
+            let idx_hash_key_part_1 = k.idx_hash_key_part_1.clone();
+            let data_hash_key_part_1 = k.data_hash_key_part_1.clone();
+            let data_dctx = crypto::DecryptionContext::new(k.data_sk, k.data_psk.clone());
+            let metadata_dctx = crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk);
+            let idx_dctx = crypto::DecryptionContext::new(k.idx_sk, k.idx_psk);
+            (
+                idx_hash_key_part_1,
+                data_hash_key_part_1,
+                data_dctx,
+                metadata_dctx,
+                idx_dctx,
+            )
+        }
+        _ => anyhow::bail!("provided key is not a data decryption key"),
+    };
+
+    let progress = cli_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    let into_dir: PathBuf = if let Some(into) = matches.opt_str("into") {
+        into.into()
+    } else if let Some(into) = std::env::var_os("BUPSTASH_CHECKOUT_DIR") {
+        into.into()
+    } else {
+        anyhow::bail!("please set --into or BUPSTASH_CHECKOUT_DIR to the restore target directory.")
+    };
+
+    let into_dir = fsutil::absolute_path(&into_dir)?;
+
+    if !into_dir.exists() {
+        anyhow::bail!("{} does not exist", into_dir.display())
+    }
+
+    if !into_dir.is_dir() {
+        anyhow::bail!("{} is not a directory", into_dir.display())
+    }
+
+    let (item_id, query) = cli_to_id_and_query(&matches)?;
+    let mut serve_proc =
+        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
+    let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
+
+    let item_id = match (item_id, query) {
+        (Some(item_id), _) => item_id,
+        (_, query) => {
+            let mut query_cache = cli_to_query_cache(&matches)?;
+
+            // Only sync the client if we have a non id query.
+            client::sync_query_cache(
+                progress.clone(),
+                &mut query_cache,
+                &mut serve_out,
+                &mut serve_in,
+            )?;
+
+            let mut n_matches: u64 = 0;
+            let mut item_id = xid::Xid::default();
+
+            let mut on_match =
+                |id: xid::Xid,
+                 _tags: &std::collections::BTreeMap<String, String>,
+                 _metadata: &oplog::VersionedItemMetadata,
+                 _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
+                    n_matches += 1;
+                    item_id = id;
+
+                    if n_matches > 1 {
+                        anyhow::bail!(
+                            "the provided query matched {} items, need a single match",
+                            n_matches
+                        );
+                    }
+
+                    Ok(())
+                };
+
+            let mut tx = query_cache.transaction()?;
+            tx.list(
+                querycache::ListOptions {
+                    primary_key_id: Some(primary_key_id),
+                    metadata_dctx: Some(metadata_dctx.clone()),
+                    list_encrypted: matches.opt_present("query-encrypted"),
+                    utc_timestamps: matches.opt_present("utc-timestamps"),
+                    query: Some(query),
+                    now: chrono::Utc::now(),
+                },
+                &mut on_match,
+            )?;
+
+            item_id
+        }
+    };
+
+    progress.set_message("fetching item index...");
+    let metadata = client::request_metadata(item_id, &mut serve_out, &mut serve_in)?;
+
+    let content_index = if metadata.index_tree().is_some() {
+        client::request_index(
+            client::IndexRequestContext {
+                primary_key_id,
+                idx_hash_key_part_1,
+                idx_dctx,
+                metadata_dctx: metadata_dctx.clone(),
+            },
+            item_id,
+            &metadata,
+            &mut serve_out,
+            &mut serve_in,
+        )?
+    } else {
+        anyhow::bail!("restore is only supported for directory snapshots created by bupstash");
+    };
+
+    let (content_index, data_map) = if let Some(ref pick_path) = matches.opt_str("pick") {
+        match index::pick(pick_path, &content_index)? {
+            (Some(content_index), data_map) => (content_index, Some(data_map)),
+            _ => anyhow::bail!("the given pick was not a directory"),
+        }
+    } else {
+        (content_index, None)
+    };
+
+    client::restore_to_local_dir(
+        &progress,
+        client::RestoreContext {
+            item_id,
+            metadata,
+            data_ctx: client::DataRequestContext {
+                primary_key_id,
+                data_hash_key_part_1,
+                data_dctx,
+                metadata_dctx,
+            },
+            restore_ownership: matches.opt_present("ownership"),
+            restore_xattrs: matches.opt_present("xattrs"),
+        },
+        content_index,
+        data_map,
+        &mut serve_out,
+        &mut serve_in,
+        &into_dir,
+    )?;
+
+    client::hangup(&mut serve_in)?;
+    serve_proc.wait()?;
+    progress.finish_and_clear();
 
     Ok(())
 }
@@ -2233,10 +2420,11 @@ fn main() {
         "diff" => diff_main(args),
         "put" => put_main(args),
         "get" => get_main(args),
+        "restore" => restore_main(args),
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
-        "restore-removed" => restore_removed(args),
+        "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
         "version" | "--version" => {
             args[0] = "version".to_string();

@@ -4,10 +4,12 @@ use super::chunker;
 use super::compression;
 use super::crypto;
 use super::fprefetch;
+use super::fsutil;
 use super::fsutil::likely_smear_error;
 use super::htree;
 use super::index;
 use super::indexer;
+use super::ioutil;
 use super::oplog;
 use super::protocol::*;
 use super::querycache;
@@ -17,9 +19,13 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 // These chunk parameters could be investigated and tuned.
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
@@ -385,7 +391,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
                         if index_ent.is_file() {
                             let mut f = match file_opener.next_file().unwrap() {
-                                (_, Ok(f)) => TeeHashFileReader::new(f),
+                                (_, Ok(f)) => ioutil::TeeReader::new(f, blake3::Hasher::new()),
 
                                 (_, Err(err)) if likely_smear_error(&err) => {
                                     // This can happen if the file was deleted,
@@ -408,7 +414,10 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                                 index_ent.size.0 = file_len;
                             }
 
-                            index_ent.data_hash = index::ContentCryptoHash::Blake3(f.finalize());
+                            let (_, file_hasher) = f.into_inner();
+
+                            index_ent.data_hash =
+                                index::ContentCryptoHash::Blake3(file_hasher.finalize().into());
                         }
 
                         if i == n_idx_ents - 1 {
@@ -508,7 +517,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             idx_tree_meta = Some(idx_tw.finish(&mut self)?);
         }
 
-        self.ctx.progress.set_message("syncing storage...");
+        self.ctx.progress.set_message("flushing storage...");
         self.sync()?;
 
         let stats = SendStats {
@@ -712,37 +721,6 @@ pub fn send(
     }
 }
 
-// Read a file while also blake3 hashing any data.
-struct TeeHashFileReader {
-    f: std::fs::File,
-    h: blake3::Hasher,
-}
-
-impl TeeHashFileReader {
-    fn new(f: std::fs::File) -> Self {
-        TeeHashFileReader {
-            f,
-            h: blake3::Hasher::new(),
-        }
-    }
-
-    fn finalize(self) -> [u8; 32] {
-        self.h.finalize().into()
-    }
-}
-
-impl std::io::Read for TeeHashFileReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self.f.read(buf) {
-            Ok(n) => {
-                self.h.update(&buf[0..n]);
-                Ok(n)
-            }
-            err => err,
-        }
-    }
-}
-
 pub fn request_metadata(
     id: Xid,
     r: &mut dyn std::io::Read,
@@ -771,16 +749,16 @@ pub fn request_data_stream(
     mut ctx: DataRequestContext,
     id: Xid,
     metadata: &oplog::VersionedItemMetadata,
-    pick: Option<index::PickMap>,
+    data_map: Option<index::DataMap>,
     index: Option<index::CompressedIndex>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
-    if let Some(ref pick) = pick {
-        if pick.data_chunk_ranges.is_empty() {
-            if let Some(ref index) = pick.index {
+    if let Some(ref data_map) = data_map {
+        if data_map.data_chunk_ranges.is_empty() {
+            if let Some(ref index) = index {
                 return write_indexed_data_as_tarball(&mut || Ok(None), index, out);
             } else {
                 return Ok(());
@@ -806,10 +784,19 @@ pub fn request_data_stream(
         &data_tree.address,
     );
 
-    match pick {
-        Some(pick) => {
+    match data_map {
+        Some(data_map) => {
             write_packet(w, &Packet::RequestData(RequestData { id, partial: true }))?;
-            receive_partial_htree(&mut ctx.data_dctx, &hash_key, r, w, &mut tr, pick, out)?;
+            receive_partial_htree(
+                &mut ctx.data_dctx,
+                &hash_key,
+                r,
+                w,
+                &mut tr,
+                data_map,
+                index,
+                out,
+            )?;
         }
         None => {
             write_packet(w, &Packet::RequestData(RequestData { id, partial: false }))?;
@@ -1066,24 +1053,26 @@ fn receive_indexed_htree_as_tarball(
     write_indexed_data_as_tarball(&mut read_data, index, out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn receive_partial_htree(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
     tr: &mut htree::TreeReader,
-    pick: index::PickMap,
+    data_map: index::DataMap,
+    index: Option<index::CompressedIndex>,
     out: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
     // This is avoided before we make a server request.
-    assert!(!pick.data_chunk_ranges.is_empty());
+    assert!(!data_map.data_chunk_ranges.is_empty());
 
     let mut data_addresses = VecDeque::with_capacity(64);
     let mut current_data_chunk_idx: u64 = 0;
     let mut range_idx: usize = 0;
 
     // We send ranges in groups to keep a bound on server memory usage.
-    let mut range_groups = pick
+    let mut range_groups = data_map
         .data_chunk_ranges
         // Test harsher range splits in debug mode.
         .chunks(if cfg!(debug_assertions) { 1 } else { 100000 });
@@ -1111,7 +1100,7 @@ fn receive_partial_htree(
                 if chunk_addr != crypto::keyed_content_address(&data, &hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }
-                let data = match pick.incomplete_data_chunks.get(&current_data_chunk_idx) {
+                let data = match data_map.incomplete_data_chunks.get(&current_data_chunk_idx) {
                     Some(byte_ranges) => {
                         let mut filtered_data = Vec::with_capacity(data.len() / 2);
 
@@ -1187,7 +1176,7 @@ fn receive_partial_htree(
         }
     };
 
-    if let Some(ref index) = pick.index {
+    if let Some(ref index) = index {
         write_indexed_data_as_tarball(&mut read_data, index, out)?;
     } else {
         while let Some(data) = read_data()? {
@@ -1198,16 +1187,16 @@ fn receive_partial_htree(
     Ok(())
 }
 
-pub fn restore_removed(
+pub fn recover_removed(
     progress: indicatif::ProgressBar,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
 ) -> Result<u64, anyhow::Error> {
-    progress.set_message("restoring items...");
+    progress.set_message("recovering items...");
 
-    write_packet(w, &Packet::TRestoreRemoved)?;
+    write_packet(w, &Packet::TRecoverRemoved)?;
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRestoreRemoved(RRestoreRemoved { n_restored }) => Ok(n_restored.0),
+        Packet::RRecoverRemoved(RRecoverRemoved { n_recovered }) => Ok(n_recovered.0),
         _ => anyhow::bail!("protocol error, expected restore packet response or progress packet",),
     }
 }
@@ -1234,7 +1223,7 @@ pub fn gc(
     }
 }
 
-pub fn sync(
+pub fn sync_query_cache(
     progress: indicatif::ProgressBar,
     query_cache: &mut querycache::QueryCache,
     r: &mut dyn std::io::Read,
@@ -1296,6 +1285,434 @@ pub fn remove(
             _ => anyhow::bail!("protocol error, expected RRmItems"),
         }
     }
+    Ok(())
+}
+
+pub struct RestoreContext {
+    pub data_ctx: DataRequestContext,
+    pub item_id: Xid,
+    pub metadata: oplog::VersionedItemMetadata,
+    pub restore_xattrs: bool,
+    pub restore_ownership: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn restore_to_local_dir(
+    progress: &indicatif::ProgressBar,
+    ctx: RestoreContext,
+    content_index: index::CompressedIndex,
+    data_map: Option<index::DataMap>,
+    serve_out: &mut dyn std::io::Read,
+    serve_in: &mut dyn std::io::Write,
+    to_dir: &Path,
+) -> Result<(), anyhow::Error> {
+    // Initially reset the permissions and groups on everything
+    // so we don't need to worry about read only files or other access.
+    progress.set_message("preparing directory...");
+    let uid = nix::unistd::Uid::effective();
+    let gid = nix::unistd::Gid::effective();
+    for dir_ent in walkdir::WalkDir::new(&to_dir) {
+        let dir_ent = dir_ent?;
+        let metadata = dir_ent.path().symlink_metadata()?;
+        if metadata.uid() != libc::uid_t::from(uid) || metadata.gid() != libc::uid_t::from(gid) {
+            match nix::unistd::fchownat(
+                None,
+                dir_ent.path(),
+                Some(uid),
+                Some(gid),
+                nix::unistd::FchownatFlags::NoFollowSymlink,
+            ) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to chown {}: {}", dir_ent.path().display(), err),
+            };
+        }
+
+        // Make any read only files writable for the later code...
+        if !metadata.file_type().is_symlink() && (metadata.permissions().mode() & 0o200 == 0) {
+            match nix::sys::stat::fchmodat(
+                None,
+                dir_ent.path(),
+                // What we use here doesn't really matter for sync, it gets fixed later...
+                nix::sys::stat::Mode::from_bits_truncate(0o700),
+                nix::sys::stat::FchmodatFlags::FollowSymlink,
+            ) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!(
+                    "failed to set permissions of {}: {}",
+                    dir_ent.path().display(),
+                    err
+                ),
+            };
+        }
+    }
+
+    let to_dir_index = {
+        progress.set_message(format!("indexing {}...", to_dir.to_string_lossy()));
+        let mut ciw = index::CompressedIndexWriter::new();
+        for indexed_dir in indexer::FsIndexer::new(
+            &[to_dir.to_owned()],
+            indexer::FsIndexerOptions {
+                exclusions: vec![],
+                want_xattrs: false,
+                want_hash: true,
+                one_file_system: false,
+            },
+        )? {
+            let indexed_dir = indexed_dir?;
+            for index_ent in indexed_dir.index_ents {
+                ciw.add(&index_ent);
+            }
+        }
+        ciw.finish()
+    };
+
+    progress.set_message("computing content diff...");
+    let mut to_remove = Vec::with_capacity(512);
+    let mut new_dirs = Vec::with_capacity(512);
+    let mut create_path_set = HashSet::with_capacity(512);
+    let mut create_index_writer = index::CompressedIndexWriter::new();
+    let mut download_index_path_set = HashSet::with_capacity(512);
+    let mut downloads = Vec::with_capacity(512);
+
+    {
+        index::diff(
+            &to_dir_index,
+            &content_index,
+            !(index::INDEX_COMPARE_MASK_TYPE
+                | index::INDEX_COMPARE_MASK_LINK_TARGET
+                | index::INDEX_COMPARE_MASK_DEVNOS
+                | index::INDEX_COMPARE_MASK_DATA_HASH),
+            &mut |ds: index::DiffStat, e: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                match ds {
+                    index::DiffStat::Unchanged => (),
+                    index::DiffStat::Removed => {
+                        to_remove.push((PathBuf::from(&e.path), e.kind()));
+                    }
+                    index::DiffStat::Added => {
+                        if e.is_dir() {
+                            new_dirs.push(PathBuf::from(&e.path));
+                        } else if e.is_file() {
+                            download_index_path_set.insert(e.path.clone());
+                            downloads.push((e.path.clone(), e.size.0, e.data_hash));
+                        } else {
+                            create_path_set.insert(e.path.clone());
+                            create_index_writer.add(e);
+                        }
+                    }
+                }
+
+                Ok(())
+            },
+        )?;
+    }
+
+    progress.set_message("removing extra files...");
+    to_remove.reverse();
+    if !to_remove.is_empty() {
+        for (path, kind) in to_remove.drain(..) {
+            let mut to_delete = to_dir.to_owned();
+            to_delete.push(path);
+
+            match if kind.is_dir() {
+                std::fs::remove_dir(&to_delete)
+            } else {
+                std::fs::remove_file(&to_delete)
+            } {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to remove {}: {}", to_delete.display(), err),
+            }
+        }
+    }
+    std::mem::drop(to_remove);
+
+    if !new_dirs.is_empty() {
+        progress.set_message("creating new directories...");
+        for dir_path in new_dirs.drain(..) {
+            let mut to_create = to_dir.to_owned();
+            to_create.push(dir_path);
+            std::fs::create_dir(to_create)?;
+        }
+    }
+    std::mem::drop(new_dirs);
+
+    if !download_index_path_set.is_empty() {
+        progress.set_message("fetching files...");
+
+        let mut fetch_data_map = index::data_map_for_predicate(&content_index, &|e| {
+            download_index_path_set.contains(&e.path)
+        })?;
+
+        if let Some(data_map) = data_map {
+            if let Some(start_range) = data_map.data_chunk_ranges.first() {
+                fetch_data_map.add_offset(start_range.start_idx.0);
+            }
+        }
+
+        let (mut r, mut w) = ioutil::buffered_pipe(3 * 1024 * 1024); // Sized to cover most packets in one allocation.
+
+        let to_dir = to_dir.to_owned();
+        let worker = std::thread::spawn(move || -> std::io::Result<()> {
+            let r = &mut r;
+            for (path, size, hash) in downloads.drain(..) {
+                let mut to_create = to_dir.to_owned();
+                to_create.push(&path);
+                let mut f = std::fs::File::create(to_create)?;
+                match hash {
+                    index::ContentCryptoHash::None => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("{} in content index missing hash", &path),
+                        ))
+                    }
+                    index::ContentCryptoHash::Blake3(expected_hash) => {
+                        let mut tee = ioutil::TeeReader::new(r.take(size), blake3::Hasher::new());
+                        let n = std::io::copy(&mut tee, &mut f)?;
+                        if n != size {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("content of {} is smaller than expected", &path),
+                            ));
+                        }
+                        let (_, hasher) = tee.into_inner();
+                        let actual_hash: [u8; 32] = hasher.finalize().into();
+                        if expected_hash != actual_hash {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("content of {} did not match expected hash", &path),
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        });
+        let download_err = request_data_stream(
+            ctx.data_ctx,
+            ctx.item_id,
+            &ctx.metadata,
+            Some(fetch_data_map),
+            None,
+            serve_out,
+            serve_in,
+            &mut w,
+        );
+        let file_err = worker.join().unwrap();
+        match file_err {
+            Ok(()) => {
+                download_err?;
+            }
+            // Copying to the files failed, the error must be a download error.
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {
+                download_err?;
+            }
+            Err(err) => return Err(err.into()),
+        };
+    }
+    std::mem::drop(download_index_path_set);
+
+    if !create_path_set.is_empty() {
+        progress.set_message("creating special files and devices...");
+        for ent in create_index_writer.finish().iter() {
+            let ent = ent?;
+            if !create_path_set.contains(&ent.path) {
+                continue;
+            }
+            let mut to_create = to_dir.to_owned();
+            to_create.push(&ent.path);
+
+            match ent.kind() {
+                index::IndexEntryKind::Symlink => {
+                    if ent.link_target.is_none() {
+                        anyhow::bail!("{} is missing a link target", ent.path);
+                    }
+                    match std::os::unix::fs::symlink(&ent.link_target.unwrap(), &to_create) {
+                        Ok(_) => (),
+                        Err(err) => anyhow::bail!(
+                            "failed to make symlink at {}: {}",
+                            to_create.display(),
+                            err
+                        ),
+                    }
+                }
+                index::IndexEntryKind::Fifo => {
+                    match nix::unistd::mkfifo(&to_create, nix::sys::stat::Mode::S_IRWXU) {
+                        Ok(_) => (),
+                        Err(err) => {
+                            anyhow::bail!("failed to make fifo at {}: {}", to_create.display(), err)
+                        }
+                    }
+                }
+                index::IndexEntryKind::Block => match nix::sys::stat::mknod(
+                    &to_create,
+                    nix::sys::stat::SFlag::S_IFBLK,
+                    nix::sys::stat::Mode::S_IRWXU,
+                    fsutil::makedev(ent.dev_major.0, ent.dev_minor.0),
+                ) {
+                    Ok(_) => (),
+                    Err(err) => anyhow::bail!(
+                        "failed to make block device at {}: {}",
+                        to_create.display(),
+                        err
+                    ),
+                },
+                index::IndexEntryKind::Char => match nix::sys::stat::mknod(
+                    &to_create,
+                    nix::sys::stat::SFlag::S_IFCHR,
+                    nix::sys::stat::Mode::S_IRWXU,
+                    fsutil::makedev(ent.dev_major.0, ent.dev_minor.0),
+                ) {
+                    Ok(_) => (),
+                    Err(err) => anyhow::bail!(
+                        "failed to make char device at {}: {}",
+                        to_create.display(),
+                        err
+                    ),
+                },
+                _ => (),
+            }
+        }
+    }
+    std::mem::drop(create_path_set);
+
+    let restore_ownership = ctx.restore_ownership;
+    let restore_xattrs = ctx.restore_xattrs;
+
+    let apply_ent_attrs = |to_ch: &Path, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
+        if restore_xattrs && (ent.is_file() || ent.is_dir()) {
+            match xattr::list(&to_ch) {
+                Ok(attrs) => {
+                    for attr in attrs {
+                        match xattr::remove(to_ch, attr) {
+                            Ok(()) => (),
+                            Err(err) => anyhow::bail!(
+                                "failed to list remove xattr from {}: {}",
+                                to_ch.display(),
+                                err
+                            ),
+                        }
+                    }
+                }
+                Err(err) => anyhow::bail!("failed to list xattrs for {}: {}", to_ch.display(), err),
+            }
+            if let Some(ref xattrs) = ent.xattrs {
+                for (attr, value) in xattrs.iter() {
+                    match xattr::set(to_ch, attr, value) {
+                        Ok(()) => (),
+                        Err(err) => anyhow::bail!(
+                            "failed to list remove xattr {} from {}: {}",
+                            attr,
+                            to_ch.display(),
+                            err
+                        ),
+                    }
+                }
+            }
+        }
+
+        if restore_ownership {
+            match nix::unistd::fchownat(
+                None,
+                to_ch,
+                Some(nix::unistd::Uid::from_raw(ent.uid.0 as u32)),
+                Some(nix::unistd::Gid::from_raw(ent.gid.0 as u32)),
+                nix::unistd::FchownatFlags::NoFollowSymlink,
+            ) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to chown {}: {}", to_ch.display(), err),
+            };
+        }
+
+        if !ent.is_symlink() {
+            match nix::sys::stat::fchmodat(
+                None,
+                to_ch,
+                nix::sys::stat::Mode::from_bits_truncate(ent.mode.0 as libc::mode_t),
+                nix::sys::stat::FchmodatFlags::FollowSymlink,
+            ) {
+                Ok(_) => (),
+                Err(err) => {
+                    anyhow::bail!("failed to set permissions of {}: {}", to_ch.display(), err)
+                }
+            };
+        }
+
+        Ok(())
+    };
+
+    let mut dirs_to_alter = Vec::with_capacity(512);
+    let mut hardlinks: HashMap<(u64, u64), PathBuf> = HashMap::new();
+
+    progress.set_message("setting file attributes...");
+    {
+        index::diff(
+            &to_dir_index,
+            &content_index,
+            !(index::INDEX_COMPARE_MASK_PERMS | index::INDEX_COMPARE_MASK_XATTRS),
+            &mut |ds: index::DiffStat, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
+                if matches!(ds, index::DiffStat::Removed) {
+                    // Nothing to do, removals already processed.
+                    return Ok(());
+                }
+
+                match ds {
+                    index::DiffStat::Unchanged | index::DiffStat::Added => {
+                        // Handle any hard links, we are a little dumb and just
+                        // recreate them each time even if they are unchanged,
+                        // but hard links are relatively rare we can improve this later if needed.
+                        if !ent.is_dir() && ent.nlink.0 > 1 {
+                            let mut to_ch = to_dir.to_owned();
+                            to_ch.push(&ent.path);
+                            let dev_ino = (ent.norm_dev.0, ent.ino.0);
+                            match hardlinks.get(&dev_ino) {
+                                None => {
+                                    hardlinks.insert(dev_ino, to_ch);
+                                }
+                                Some(first_path) => match std::fs::remove_file(&to_ch) {
+                                    Ok(_) => match std::fs::hard_link(first_path, &to_ch) {
+                                        Ok(_) => (),
+                                        Err(err) => anyhow::bail!(
+                                            "failed to hard link {} as {}: {}",
+                                            to_ch.display(),
+                                            first_path.display(),
+                                            err
+                                        ),
+                                    },
+                                    Err(err) => {
+                                        anyhow::bail!(
+                                            "failed to remove {}: {}",
+                                            to_ch.display(),
+                                            err
+                                        )
+                                    }
+                                },
+                            }
+                        }
+
+                        if matches!(ds, index::DiffStat::Added) {
+                            // Set the perms and xattrs of anything that changed.
+                            let mut to_ch = to_dir.to_owned();
+                            to_ch.push(&ent.path);
+                            if ent.is_dir() {
+                                dirs_to_alter.push((to_ch, ent.clone()));
+                            } else {
+                                apply_ent_attrs(&to_ch, ent)?;
+                            }
+                        }
+                    }
+                    index::DiffStat::Removed => (),
+                }
+
+                Ok(())
+            },
+        )?;
+    }
+
+    // Process dirs in reverse order to account for read only permissions.
+    while let Some((to_ch, ent)) = dirs_to_alter.pop() {
+        apply_ent_attrs(&to_ch, &ent)?
+    }
+    std::mem::drop(dirs_to_alter);
+
     Ok(())
 }
 

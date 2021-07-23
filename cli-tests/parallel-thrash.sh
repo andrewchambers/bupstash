@@ -56,12 +56,12 @@ thrash_worker () {
       inc_result "put-fail"
     fi
 
-    bupstash restore-removed -q >&2
+    bupstash recover-removed -q >&2
     if test "$?" = 0
     then
-      inc_result "restore-removed-ok"
+      inc_result "recover-removed-ok"
     else
-      inc_result "restore-removed-fail"
+      inc_result "recover-removed-fail"
     fi
 
     bupstash gc -q >&2

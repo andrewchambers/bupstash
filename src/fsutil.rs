@@ -336,3 +336,36 @@ pub fn likely_smear_error(err: &std::io::Error) -> bool {
         std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidInput
     )
 }
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "macos")] {
+        // XXX These functions need testing...
+        pub fn makedev(major: u64, minor: u64) -> libc::dev_t
+        {
+            ((major << 24) | minor) as libc::dev_t
+        }
+
+        pub fn dev_major(dev: u64) -> u64 {
+            return (dev >> 24) & 0xff
+        }
+
+        pub fn dev_minor(dev :u64) -> u64 {
+            dev & 0xffffff
+        }
+
+    } else {
+
+        pub fn makedev(major: u64, minor: u64) -> libc::dev_t {
+            unsafe { libc::makedev(major as libc::c_uint, minor as libc::c_uint) }
+        }
+
+        pub fn dev_major(dev: u64) -> u64 {
+            unsafe { libc::major(dev as libc::dev_t) as u64 }
+        }
+
+        pub fn dev_minor(dev: u64) -> u64 {
+            unsafe { libc::minor(dev as libc::dev_t) as u64 }
+        }
+
+    }
+}
