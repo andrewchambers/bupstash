@@ -25,6 +25,15 @@ pub enum IndexEntryKind {
     Fifo,
 }
 
+impl IndexEntryKind {
+    pub fn is_file(&self) -> bool {
+        matches!(self, IndexEntryKind::Regular)
+    }
+    pub fn is_dir(&self) -> bool {
+        matches!(self, IndexEntryKind::Directory)
+    }
+}
+
 // Deprecated format kept for backwards compatibility.
 // Was deprecated to add support for adding checksums
 // for individual files. This is an important feature
@@ -179,6 +188,10 @@ impl IndexEntry {
         }
     }
 
+    pub fn is_symlink(&self) -> bool {
+        (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFLNK
+    }
+
     pub fn is_file(&self) -> bool {
         (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFREG
     }
@@ -282,29 +295,45 @@ pub struct HTreeDataRange {
     pub end_idx: serde_bare::Uint,
 }
 
-pub struct PickMap {
+pub struct DataMap {
     pub data_chunk_ranges: Vec<HTreeDataRange>,
     pub incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>>,
-    pub index: Option<CompressedIndex>,
 }
 
-fn add_ent_to_pick(
+impl DataMap {
+    pub fn add_offset(&mut self, offset: u64) {
+        self.incomplete_data_chunks = self
+            .incomplete_data_chunks
+            .drain()
+            .map(|(k, v)| (k + offset, v))
+            .collect();
+        for range in self.data_chunk_ranges.iter_mut() {
+            range.start_idx.0 += offset;
+            range.end_idx.0 += offset;
+        }
+    }
+}
+
+fn add_ent_to_data_map(
     ent: &IndexEntry,
-    cur_chunk_idx: &mut u64,
+    cur_chunk_idx: u64,
     data_chunk_ranges: &mut Vec<HTreeDataRange>,
     incomplete_data_chunks: &mut HashMap<u64, rangemap::RangeSet<usize>>,
 ) {
+    if ent.size.0 == 0 {
+        return;
+    }
     // Either coalesce the existing range or insert a new range.
     if !data_chunk_ranges.is_empty()
-        && ((data_chunk_ranges.last().unwrap().end_idx.0 == *cur_chunk_idx)
-            || (data_chunk_ranges.last().unwrap().end_idx.0 + 1 == *cur_chunk_idx))
+        && ((data_chunk_ranges.last().unwrap().end_idx.0 == cur_chunk_idx)
+            || (data_chunk_ranges.last().unwrap().end_idx.0 + 1 == cur_chunk_idx))
     {
         data_chunk_ranges.last_mut().unwrap().end_idx.0 =
-            *cur_chunk_idx + ent.data_cursor.chunk_delta.0
+            cur_chunk_idx + ent.data_cursor.chunk_delta.0
     } else {
         data_chunk_ranges.push(HTreeDataRange {
-            start_idx: serde_bare::Uint(*cur_chunk_idx),
-            end_idx: serde_bare::Uint(*cur_chunk_idx + ent.data_cursor.chunk_delta.0),
+            start_idx: serde_bare::Uint(cur_chunk_idx),
+            end_idx: serde_bare::Uint(cur_chunk_idx + ent.data_cursor.chunk_delta.0),
         })
     }
 
@@ -319,21 +348,21 @@ fn add_ent_to_pick(
             None => {
                 let mut range_set = rangemap::RangeSet::new();
                 range_set.insert(range);
-                incomplete_data_chunks.insert(*cur_chunk_idx, range_set);
+                incomplete_data_chunks.insert(cur_chunk_idx, range_set);
             }
         }
     } else {
         let start_range = ent.data_cursor.start_byte_offset.0 as usize..usize::MAX;
         let end_range = 0..ent.data_cursor.end_byte_offset.0 as usize;
 
-        match incomplete_data_chunks.get_mut(cur_chunk_idx) {
+        match incomplete_data_chunks.get_mut(&cur_chunk_idx) {
             Some(range_set) => {
                 range_set.insert(start_range);
             }
             None => {
                 let mut range_set = rangemap::RangeSet::new();
                 range_set.insert(start_range);
-                incomplete_data_chunks.insert(*cur_chunk_idx, range_set);
+                incomplete_data_chunks.insert(cur_chunk_idx, range_set);
             }
         }
 
@@ -341,7 +370,7 @@ fn add_ent_to_pick(
             let mut range_set = rangemap::RangeSet::new();
             range_set.insert(end_range);
             let old = incomplete_data_chunks
-                .insert(*cur_chunk_idx + ent.data_cursor.chunk_delta.0, range_set);
+                .insert(cur_chunk_idx + ent.data_cursor.chunk_delta.0, range_set);
             // Because our end chunk is a never before seen index, this
             // range set must be none.
             assert!(old.is_none());
@@ -354,15 +383,46 @@ fn add_ent_to_pick(
         if let Some(range) = range_set.get(&(usize::MAX - 1)) {
             if range.start == 0 {
                 // The range completely covers the chunk, it is no longer incomplete.
-                incomplete_data_chunks.remove(cur_chunk_idx);
+                incomplete_data_chunks.remove(&cur_chunk_idx);
             }
         }
     }
-
-    *cur_chunk_idx += ent.data_cursor.chunk_delta.0
 }
 
-pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow::Error> {
+pub fn data_map_for_predicate(
+    file_index: &CompressedIndex,
+    predicate: &dyn Fn(&IndexEntry) -> bool,
+) -> Result<DataMap, anyhow::Error> {
+    let mut cur_chunk_idx = 0;
+    let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
+    let mut incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>> = HashMap::new();
+
+    for ent in file_index.iter() {
+        let ent = ent?;
+        // Post 1.0 we could perhaps be able to remove this check.
+        if ent.data_cursor.chunk_delta.0 == u64::MAX {
+            anyhow::bail!("this index was created by an older version of bupstash and we longer supports pick operations on it due to an unfortunate bug");
+        }
+        if predicate(&ent) {
+            add_ent_to_data_map(
+                &ent,
+                cur_chunk_idx,
+                &mut data_chunk_ranges,
+                &mut incomplete_data_chunks,
+            );
+        }
+        cur_chunk_idx += ent.data_cursor.chunk_delta.0;
+    }
+    Ok(DataMap {
+        data_chunk_ranges,
+        incomplete_data_chunks,
+    })
+}
+
+pub fn pick(
+    path: &str,
+    file_index: &CompressedIndex,
+) -> Result<(Option<CompressedIndex>, DataMap), anyhow::Error> {
     let mut cur_chunk_idx = 0;
     let mut iter = file_index.iter();
 
@@ -394,87 +454,65 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
 
                     cur_chunk_idx += ent.data_cursor.chunk_delta.0;
 
+                    let mut found_children = false;
+
                     for ent in iter {
                         let mut ent = ent?;
 
                         // Match the directory and children.
                         if !ent.path.starts_with(&strip_prefix) {
                             cur_chunk_idx += ent.data_cursor.chunk_delta.0;
-                            // We don't assume all children are contiguous in
-                            // memory, instead we just scan the whole index.
-                            // We could potentially change this, but it may
-                            // affect older backups.
-                            continue;
+                            if found_children {
+                                // We have processed all children, exit early.
+                                break;
+                            } else {
+                                // We are still skipping the dir siblings and their children.
+                                continue;
+                            }
                         }
+                        found_children = true;
 
                         ent.path = ent.path[strip_prefix.len()..].to_string();
 
                         sub_index_writer.add(&ent);
 
-                        if ent.size.0 == 0 {
-                            cur_chunk_idx += ent.data_cursor.chunk_delta.0;
-                            continue;
-                        }
-
-                        add_ent_to_pick(
+                        add_ent_to_data_map(
                             &ent,
-                            &mut cur_chunk_idx,
+                            cur_chunk_idx,
                             &mut data_chunk_ranges,
                             &mut incomplete_data_chunks,
                         );
+
+                        cur_chunk_idx += ent.data_cursor.chunk_delta.0;
                     }
 
-                    return Ok(PickMap {
-                        data_chunk_ranges,
-                        incomplete_data_chunks,
-                        index: Some(sub_index_writer.finish()),
-                    });
+                    return Ok((
+                        Some(sub_index_writer.finish()),
+                        DataMap {
+                            data_chunk_ranges,
+                            incomplete_data_chunks,
+                        },
+                    ));
                 }
                 IndexEntryKind::Regular => {
-                    let mut incomplete_data_chunks = HashMap::new();
+                    let mut data_chunk_ranges: Vec<HTreeDataRange> = Vec::new();
+                    let mut incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>> =
+                        HashMap::new();
 
-                    if ent.size.0 == 0 {
-                        return Ok(PickMap {
-                            data_chunk_ranges: vec![],
+                    add_ent_to_data_map(
+                        &ent,
+                        cur_chunk_idx,
+                        &mut data_chunk_ranges,
+                        &mut incomplete_data_chunks,
+                    );
+
+                    return Ok((
+                        None,
+                        DataMap {
+                            data_chunk_ranges,
                             incomplete_data_chunks,
-                            index: None,
-                        });
-                    }
-
-                    let mut range_adjust = 0;
-                    let mut start_range_set = rangemap::RangeSet::new();
-                    let start_range_start = ent.data_cursor.start_byte_offset.0 as usize;
-                    let start_range_end = if ent.data_cursor.chunk_delta.0 == 0 {
-                        ent.data_cursor.end_byte_offset.0 as usize
-                    } else {
-                        usize::MAX
-                    };
-                    start_range_set.insert(start_range_start..start_range_end);
-                    incomplete_data_chunks.insert(cur_chunk_idx, start_range_set);
-
-                    if ent.data_cursor.chunk_delta.0 != 0 {
-                        if ent.data_cursor.end_byte_offset.0 != 0 {
-                            let mut end_range_set = rangemap::RangeSet::new();
-                            end_range_set.insert(0..ent.data_cursor.end_byte_offset.0 as usize);
-                            incomplete_data_chunks.insert(
-                                cur_chunk_idx + ent.data_cursor.chunk_delta.0,
-                                end_range_set,
-                            );
-                        } else {
-                            range_adjust = 1;
-                        }
-                    }
-
-                    return Ok(PickMap {
-                        data_chunk_ranges: vec![HTreeDataRange {
-                            start_idx: serde_bare::Uint(cur_chunk_idx),
-                            end_idx: serde_bare::Uint(
-                                cur_chunk_idx + ent.data_cursor.chunk_delta.0 - range_adjust,
-                            ),
-                        }],
-                        incomplete_data_chunks,
-                        index: None,
-                    });
+                        },
+                    ));
                 }
                 kind => anyhow::bail!(
                     "unable to pick {} - unsupported directory entry type: {:?}",
@@ -489,7 +527,7 @@ pub fn pick(path: &str, file_index: &CompressedIndex) -> Result<PickMap, anyhow:
     anyhow::bail!("{} not found in content index", path)
 }
 
-pub fn pick_dir_without_data_ranges(
+pub fn pick_dir_without_data(
     path: &str,
     file_index: &CompressedIndex,
 ) -> Result<CompressedIndex, anyhow::Error> {
@@ -710,11 +748,17 @@ pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
     }
 }
 
+pub enum DiffStat {
+    Unchanged,
+    Removed,
+    Added,
+}
+
 pub fn diff(
     left_index: &CompressedIndex,
     right_index: &CompressedIndex,
     compare_mask: u64,
-    on_diff_ent: &mut dyn FnMut(char, &IndexEntry) -> Result<(), anyhow::Error>,
+    on_diff_ent: &mut dyn FnMut(DiffStat, &IndexEntry) -> Result<(), anyhow::Error>,
 ) -> Result<(), anyhow::Error> {
     let mut liter = left_index.iter();
     let mut riter = right_index.iter();
@@ -732,31 +776,33 @@ pub fn diff(
 
         match path_cmp(&l.path, &r.path) {
             std::cmp::Ordering::Equal => {
-                if !l.masked_compare_eq(compare_mask, r) {
-                    on_diff_ent('-', l)?;
-                    on_diff_ent('+', r)?;
+                if l.masked_compare_eq(compare_mask, r) {
+                    on_diff_ent(DiffStat::Unchanged, r)?;
+                } else {
+                    on_diff_ent(DiffStat::Removed, l)?;
+                    on_diff_ent(DiffStat::Added, r)?;
                 }
                 lent = liter.next();
                 rent = riter.next();
             }
             std::cmp::Ordering::Less => {
-                on_diff_ent('-', l)?;
+                on_diff_ent(DiffStat::Removed, l)?;
                 lent = liter.next();
             }
             std::cmp::Ordering::Greater => {
-                on_diff_ent('+', r)?;
+                on_diff_ent(DiffStat::Added, r)?;
                 rent = riter.next();
             }
         }
     }
     while lent.is_some() {
         let l = lent.unwrap().unwrap();
-        on_diff_ent('-', &l)?;
+        on_diff_ent(DiffStat::Removed, &l)?;
         lent = liter.next();
     }
     while rent.is_some() {
         let r = rent.unwrap().unwrap();
-        on_diff_ent('+', &r)?;
+        on_diff_ent(DiffStat::Added, &r)?;
         rent = riter.next();
     }
     Ok(())

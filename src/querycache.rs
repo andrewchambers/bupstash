@@ -246,7 +246,7 @@ impl<'a> QueryCacheTx<'a> {
                         .execute("delete from Items where ItemId = ?;", [item_id])?;
                 }
             }
-            oplog::LogOp::RestoreRemoved => {
+            oplog::LogOp::RecoverRemoved => {
                 self.tx.execute(
                     "insert into ItemOpLog(LogOffset, OpData) values(?, ?);",
                     rusqlite::params![op_offset as i64, serialized_op],

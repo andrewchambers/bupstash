@@ -47,6 +47,7 @@ rangemap = "0.1.11"
 xattr = "0.2"
 openat = "0.1"
 lazy_static = "1.4"
+walkdir = "2"
 
 [dev-dependencies]
 

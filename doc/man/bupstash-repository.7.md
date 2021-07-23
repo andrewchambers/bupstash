@@ -45,7 +45,7 @@ This file is an append only ledger where each entry is a [bare](https://baremess
 type Xid data<16>;
 type Address data<32>;
 
-type LogOp  (AddItem | RemoveItems);
+type LogOp  (AddItem | RemoveItems | RecoverRemoved);
   
 type AddItem {
   id: Xid
@@ -55,6 +55,8 @@ type AddItem {
 type RemoveItems {
   items: []Xid
 }
+
+type RemoveRemoved {}
 
 type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata)
 
@@ -213,18 +215,20 @@ Valid compression flags are:
 
 ### Hash tree node chunk
 
-These chunks form non leaf nodes in our hash tree, and consist of an array of addresses.
+These chunks form non leaf nodes in our hash tree, they consist of an array of addresses prefixed
+with the total number of data chunks that are beneath them in the tree.
 
 ```
-ADDRESS[ADDRESS_SZ]
-ADDRESS[ADDRESS_SZ]
-ADDRESS[ADDRESS_SZ]
-ADDRESS[ADDRESS_SZ]
+NUM_DATA_CHUNKS[8] ADDRESS[ADDRESS_SZ]
+NUM_DATA_CHUNKS[8] ADDRESS[ADDRESS_SZ]
+NUM_DATA_CHUNKS[8] ADDRESS[ADDRESS_SZ]
+NUM_DATA_CHUNKS[8] ADDRESS[ADDRESS_SZ]
 ...
 ```
 
 These addresses must be recursively followed to read our data chunks, these addresses correspond
-to data chunks when the tree height is 0.
+to data chunks when the tree height is 0. The chunk counts can be used to efficiently seek to address offsets
+in the tree.
 
 ### Format of key exchange bytes
 

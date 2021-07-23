@@ -1,0 +1,7 @@
+bupstash recover-removed [OPTIONS]
+
+Recover repository items that were removed, but that have not
+yet been deleted via garbage collection.
+
+Examples:
+  $ bupstash recover-removed -r ./backups

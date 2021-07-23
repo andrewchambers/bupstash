@@ -161,7 +161,13 @@ drwxr-xr-x 0 2020/10/30 13:32:04 .
 ...
 ```
 
-We can also extract individual directories, subdirectories, or the whole snapshot.
+We can efficiently restore a snapshot to a local directory only downloading the files that are missing:
+```
+$ mkdir restore-dir
+$ bupstash restore --into ./restore-dir id=$id
+```
+
+We can also export individual files or directories as a tarballs:
 
 ```
 $ bupstash get --pick data.txt id=$id
