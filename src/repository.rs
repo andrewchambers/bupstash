@@ -308,7 +308,7 @@ impl Repo {
                 // Consider the following case:
                 //
                 // 1. We are deleting a set of objects in an external storage engine.
-                // 2. A delete object message is set to the backing store (s3/gcs/w.e.)
+                // 2. A delete object message is sent to the backing store (s3/gcs/w.e.)
                 // 3. The repository process crashes.
                 // 4. A new put starts.
                 // 5. The new process resends the same object that is in the process of deletion.
@@ -316,8 +316,8 @@ impl Repo {
                 //
                 // To solve this we:
                 // - explicitly start a sweep hold with an id in the storage engine.
-                // - We then mark the repository as gc-dirty=id.
-                // - We finally signal to the storage engine it is safe to begin sweeping deletions.
+                // - we then mark the repository as gc-dirty=id.
+                // - we finally signal to the storage engine it is safe to begin sweeping deletions.
                 // - when deletions finish successfully, we set can delete the gc-dirty metadata.
                 //
                 // If during this process, bupstash terminates, gc-dirty will be set.
