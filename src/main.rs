@@ -2137,7 +2137,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optopt(
         "",
         "into",
-        "Directory to restore files into, defaults to BUPSTASH_CHECKOUT_DIR.",
+        "Directory to restore files into, defaults to BUPSTASH_RESTORE_DIR.",
         "PATH",
     );
 
@@ -2171,10 +2171,10 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let into_dir: PathBuf = if let Some(into) = matches.opt_str("into") {
         into.into()
-    } else if let Some(into) = std::env::var_os("BUPSTASH_CHECKOUT_DIR") {
+    } else if let Some(into) = std::env::var_os("BUPSTASH_RESTORE_DIR") {
         into.into()
     } else {
-        anyhow::bail!("please set --into or BUPSTASH_CHECKOUT_DIR to the restore target directory.")
+        anyhow::bail!("please set --into or BUPSTASH_RESTORE_DIR to the restore target directory.")
     };
 
     let into_dir = fsutil::absolute_path(&into_dir)?;
