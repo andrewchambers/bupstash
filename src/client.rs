@@ -21,7 +21,7 @@ use super::xtar;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
@@ -934,38 +934,44 @@ fn write_indexed_data_as_tarball(
 ) -> Result<(), anyhow::Error> {
     let mut buffered = vec![];
     let mut buffer_index: usize = 0;
-    let mut copy_n = |out: &mut dyn std::io::Write, mut n: u64| -> Result<(), anyhow::Error> {
-        'read: while n != 0 {
-            let mut remaining;
-            loop {
-                remaining = buffered.len() - buffer_index;
-                if remaining != 0 {
-                    break;
-                }
+    let mut copy_out_and_hash =
+        |out: &mut dyn std::io::Write, mut n: u64| -> Result<blake3::Hash, anyhow::Error> {
+            let mut hasher = blake3::Hasher::new();
 
-                match read_data()? {
-                    Some(b) => {
-                        buffer_index = 0;
-                        buffered = b;
+            'read: while n != 0 {
+                let mut remaining;
+                loop {
+                    remaining = buffered.len() - buffer_index;
+                    if remaining != 0 {
+                        break;
                     }
-                    None => {
-                        break 'read;
+
+                    match read_data()? {
+                        Some(b) => {
+                            buffer_index = 0;
+                            buffered = b;
+                        }
+                        None => {
+                            break 'read;
+                        }
                     }
                 }
+                let write_range =
+                    buffer_index..buffer_index + std::cmp::min(remaining as u64, n) as usize;
+                let to_write = &buffered[write_range];
+                out.write_all(to_write)?;
+                hasher.write_all(to_write)?;
+                let n_written = to_write.len();
+                buffer_index += n_written;
+                n -= n_written as u64;
             }
-            let write_range =
-                buffer_index..buffer_index + std::cmp::min(remaining as u64, n) as usize;
-            let n_written = out.write(&buffered[write_range])?;
-            buffer_index += n_written;
-            n -= n_written as u64;
-        }
 
-        if n != 0 {
-            anyhow::bail!("data stream corrupt, unexpected end of data");
-        }
+            if n != 0 {
+                anyhow::bail!("data stream corrupt, unexpected end of data");
+            }
 
-        Ok(())
-    };
+            Ok(hasher.finalize())
+        };
 
     let mut hardlinks: std::collections::HashMap<(u64, u64), String> =
         std::collections::HashMap::new();
@@ -975,7 +981,7 @@ fn write_indexed_data_as_tarball(
         if matches!(ent.kind(), index::IndexEntryKind::Other) {
             // We can't convert this to a tar header, so just discard the
             // data and skip it.
-            copy_n(&mut std::io::sink(), ent.size.0)?;
+            copy_out_and_hash(&mut std::io::sink(), ent.size.0)?;
             continue;
         }
 
@@ -995,7 +1001,17 @@ fn write_indexed_data_as_tarball(
         out.write_all(&xtar::index_entry_to_tarheader(&ent, hardlink)?)?;
 
         if hardlink.is_none() {
-            copy_n(out, ent.size.0)?;
+            let hash = copy_out_and_hash(out, ent.size.0)?;
+            let hash_bytes: [u8; 32] = hash.into();
+
+            match ent.data_hash {
+                index::ContentCryptoHash::None => (), // XXX we don't currently require this, but we should for 1.0.
+                index::ContentCryptoHash::Blake3(expected_hash) => {
+                    if hash_bytes != expected_hash {
+                        anyhow::bail!("entry {} content hash differs from index hash, possible corruption detected.", ent.path);
+                    }
+                }
+            }
             /* Tar entries are rounded to 512 bytes */
             let remaining = 512 - (ent.size.0 % 512);
             if remaining < 512 {
@@ -1004,7 +1020,7 @@ fn write_indexed_data_as_tarball(
             }
         } else {
             /* Hardlinks are uploaded as normal files, so we just skip the data. */
-            copy_n(&mut std::io::sink(), ent.size.0)?;
+            copy_out_and_hash(&mut std::io::sink(), ent.size.0)?;
         }
     }
 
