@@ -62,7 +62,7 @@ impl RepoLock {
 }
 
 pub struct Repo {
-    repo_path: PathBuf,
+    repo_dirf: openat::Dir,
     storage_engine: Box<dyn chunk_storage::Engine>,
     repo_lock: RepoLock,
 }
@@ -79,12 +79,6 @@ const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 1024 * 1024 * 1024;
 
 impl Repo {
-    fn repo_lock_path(repo_path: &Path) -> PathBuf {
-        let mut lock_path = repo_path.to_path_buf();
-        lock_path.push("repo.lock");
-        lock_path
-    }
-
     pub fn init(
         repo_path: &Path,
         storage_engine: Option<StorageEngineSpec>,
@@ -168,14 +162,18 @@ impl Repo {
     }
 
     pub fn open(repo_path: &Path, initial_lock_mode: RepoLockMode) -> Result<Repo, anyhow::Error> {
-        if !repo_path.exists() {
-            anyhow::bail!("no repository at {}", repo_path.to_string_lossy());
-        }
-
         let mut repo_path = fsutil::absolute_path(&repo_path)?;
-        repo_path.push("tx.lock");
-        let tx_file_exists = repo_path.exists();
-        repo_path.pop();
+
+        let repo_dirf = match openat::Dir::open(&repo_path) {
+            Ok(dirf) => dirf,
+            Err(err) => anyhow::bail!(
+                "unable to open repository at {}: {}",
+                repo_path.display(),
+                err
+            ),
+        };
+
+        let tx_file_exists = repo_dirf.metadata("tx.lock").is_ok();
 
         if !tx_file_exists {
             // Handle upgrade from the old sqlite3 repository format.
@@ -197,13 +195,13 @@ impl Repo {
 
         let mut repo_lock = match initial_lock_mode {
             RepoLockMode::None => RepoLock::None,
-            RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+            RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::shared_on_file(
                 REPO_LOCK_CTX_TAG,
-                &Repo::repo_lock_path(&repo_path),
+                repo_dirf.update_file("repo.lock", 0o600)?,
             )?),
-            RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
+            RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::exclusive_on_file(
                 REPO_LOCK_CTX_TAG,
-                &Repo::repo_lock_path(&repo_path),
+                repo_dirf.update_file("repo.lock", 0o600)?,
             )?),
         };
 
@@ -218,7 +216,7 @@ impl Repo {
                 migrate::repo_upgrade_to_5_to_6(&repo_path)?;
             }
             // restart read transaction we cancelled...
-            txn = fstx::ReadTxn::begin(&repo_path)?;
+            txn = fstx::ReadTxn::begin_at(repo_dirf.try_clone()?)?;
             schema_version = txn.read_string("meta/schema_version")?;
             if schema_version != CURRENT_SCHEMA_VERSION {
                 anyhow::bail!(
@@ -236,7 +234,7 @@ impl Repo {
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let mut data_dir = repo_path.clone();
+                    let mut data_dir = repo_path;
                     data_dir.push("data");
                     Box::new(dir_chunk_storage::DirStorage::new(&data_dir)?)
                 }
@@ -255,7 +253,7 @@ impl Repo {
         txn.end();
 
         Ok(Repo {
-            repo_path,
+            repo_dirf,
             storage_engine,
             repo_lock,
         })
@@ -288,14 +286,16 @@ impl Repo {
             self.repo_lock = RepoLock::None;
             self.repo_lock = match lock_mode {
                 RepoLockMode::None => RepoLock::None,
-                RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::get_shared(
+                RepoLockMode::Shared => RepoLock::Shared(fsutil::FileLock::shared_on_file(
                     REPO_LOCK_CTX_TAG,
-                    &Repo::repo_lock_path(&self.repo_path),
+                    self.repo_dirf.update_file("repo.lock", 0o600)?,
                 )?),
-                RepoLockMode::Exclusive => RepoLock::Exclusive(fsutil::FileLock::get_exclusive(
-                    REPO_LOCK_CTX_TAG,
-                    &Repo::repo_lock_path(&self.repo_path),
-                )?),
+                RepoLockMode::Exclusive => {
+                    RepoLock::Exclusive(fsutil::FileLock::exclusive_on_file(
+                        REPO_LOCK_CTX_TAG,
+                        self.repo_dirf.update_file("repo.lock", 0o600)?,
+                    )?)
+                }
             };
 
             if matches!(
@@ -332,7 +332,7 @@ impl Repo {
                 //    backend to tell us our sweep operation is complete.
                 //  - We can finally remove the gc-dirty marker.
 
-                let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+                let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
                 {
                     let gc_dirty: Option<Xid> = match txn.read_opt_string("meta/gc_dirty")? {
                         Some(s) => Some(Xid::parse(&s)?),
@@ -377,7 +377,7 @@ impl Repo {
         }
 
         let id = Xid::new();
-        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+        let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
         {
             let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
             if gc_generation != current_gc_generation {
@@ -396,7 +396,7 @@ impl Repo {
     pub fn remove_items(&mut self, mut items: Vec<Xid>) -> Result<(), anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+        let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
         let mut deleted_items = Vec::with_capacity(items.len());
 
@@ -426,7 +426,7 @@ impl Repo {
         &mut self,
         id: &Xid,
     ) -> Result<Option<oplog::VersionedItemMetadata>, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
         let r = match txn.open(&format!("items/{:x}", id)) {
             Ok(mut f) => {
                 let mut buf = Vec::with_capacity(1024);
@@ -441,7 +441,7 @@ impl Repo {
     }
 
     pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
         let r = match txn.metadata(&format!("items/{:x}", id)) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -457,7 +457,7 @@ impl Repo {
         start_gc_generation: Option<Xid>,
         on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
         let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
         let after = match start_gc_generation {
@@ -516,7 +516,7 @@ impl Repo {
     pub fn recover_removed(&mut self) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+        let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
         let mut n_restored = 0;
         let log_file = txn.open("repo.oplog")?;
@@ -550,7 +550,7 @@ impl Repo {
     }
 
     pub fn gc_generation(&mut self) -> Result<Xid, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin(&self.repo_path)?;
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
         let gc_generation = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
         txn.end();
         Ok(gc_generation)
@@ -618,11 +618,11 @@ impl Repo {
         };
 
         let mut walk_items =
-            |repo_path: &Path,
+            |repo_dirf: openat::Dir,
              update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
              storage_engine: &mut dyn chunk_storage::Engine|
              -> Result<(), anyhow::Error> {
-                let txn = fstx::ReadTxn::begin(repo_path)?;
+                let txn = fstx::ReadTxn::begin_at(repo_dirf)?;
 
                 let mut items_dir_ents: Vec<_> = txn.read_dir("items")?.collect();
                 let mut reachable_items = HashSet::with_capacity(items_dir_ents.len());
@@ -686,7 +686,7 @@ impl Repo {
         // that arrives between the end of this walk and us locking
         // the repository.
         walk_items(
-            &self.repo_path,
+            self.repo_dirf.try_clone()?,
             update_progress_msg,
             &mut *self.storage_engine,
         )?;
@@ -705,7 +705,7 @@ impl Repo {
 
         update_progress_msg("compacting repository log...".to_string())?;
         {
-            let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+            let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
             // We cycle the gc generation here to invalidate client caches.
             txn.add_write(
@@ -757,7 +757,7 @@ impl Repo {
         // engine, we walk all the items again, this will be fast for items we already walked, and
         // lets us pick up any new items that arrived between the old walk and before we marked gc_dirty.
         walk_items(
-            &self.repo_path,
+            self.repo_dirf.try_clone()?,
             update_progress_msg,
             &mut *self.storage_engine,
         )?;
@@ -796,7 +796,7 @@ impl Repo {
 
         // We are now done and can stop, mark the gc as complete.
         {
-            let mut txn = fstx::WriteTxn::begin(&self.repo_path)?;
+            let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
             let gc_dirty: Option<Xid> = match txn.read_opt_string(&"meta/gc_dirty")? {
                 Some(s) => Some(Xid::parse(&s)?),
