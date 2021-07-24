@@ -190,6 +190,10 @@ pub struct ReadTxn {
 impl ReadTxn {
     pub fn begin(dir: &Path) -> Result<Self, std::io::Error> {
         let dirf = openat::Dir::open(dir)?;
+        ReadTxn::begin_at(dirf)
+    }
+
+    pub fn begin_at(dirf: openat::Dir) -> Result<Self, std::io::Error> {
         'try_again: loop {
             let lock =
                 fsutil::FileLock::shared_on_file(FSTX_LOCK_CTX_TAG, dirf.open_file(LOCK_NAME)?)?;
@@ -262,11 +266,15 @@ pub struct WriteTxn {
 }
 
 impl WriteTxn {
-    pub fn begin(dir: &Path) -> Result<WriteTxn, std::io::Error> {
+    pub fn begin(dir: &Path) -> Result<Self, std::io::Error> {
         let dirf = openat::Dir::open(dir)?;
+        WriteTxn::begin_at(dirf)
+    }
+
+    pub fn begin_at(dirf: openat::Dir) -> Result<WriteTxn, std::io::Error> {
         let lock = fsutil::FileLock::exclusive_on_file(
             FSTX_LOCK_CTX_TAG,
-            dirf.update_file(LOCK_NAME, 0o666)?,
+            dirf.update_file(LOCK_NAME, 0o600)?,
         )?;
         match dirf.metadata(RJ_NAME) {
             Ok(_) => {
