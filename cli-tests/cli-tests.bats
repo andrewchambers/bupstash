@@ -693,7 +693,7 @@ _concurrent_modify_worker () {
   bupstash recover-removed
 }
 
-@test "dir restore sanity" {
+@test "restore sanity" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   id=$(bupstash put $SCRATCH/d)
@@ -701,7 +701,7 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
 }
 
-@test "dir restore symlink" {
+@test "restore symlink" {
   mkdir "$SCRATCH"/{d,restore}
   ln -s missing.txt "$SCRATCH"/d/l
   id=$(bupstash put "$SCRATCH"/d)
@@ -709,7 +709,7 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
 }
 
-@test "dir restore hardlink" {
+@test "restore hardlink" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
@@ -720,7 +720,7 @@ _concurrent_modify_worker () {
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
 
-@test "dir restore hardlink prexisting" {
+@test "restore hardlink prexisting" {
   mkdir "$SCRATCH"/{d,restore}
   echo -n "abc" > "$SCRATCH/d/a.txt"
   ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
@@ -736,7 +736,7 @@ _concurrent_modify_worker () {
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
 
-@test "dir restore read only" {
+@test "restore read only" {
   mkdir "$SCRATCH"/{d,restore}
 
   mkdir "$SCRATCH"/d/b
@@ -754,7 +754,7 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
 }
 
-@test "dir restore pick" {
+@test "restore pick" {
   mkdir "$SCRATCH"/{d,d/a,d/b,d/c,restore}
   echo -n "abc" > "$SCRATCH/d/a/a.txt"
   echo -n "def" > "$SCRATCH/d/b/b.txt"
