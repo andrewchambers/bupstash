@@ -72,6 +72,16 @@ teardown () {
   test "$data" = "$(bupstash get id=$id )"
 }
 
+@test "put name override" {
+  mkdir "$SCRATCH/d"
+  echo foo > "$SCRATCH/d/foo.txt"
+
+  id="$(bupstash put name=x.tar "$SCRATCH/d")"
+  id="$(bupstash put name=foo "$SCRATCH/d/foo.txt")"
+  bupstash get name=x.tar > /dev/null
+  bupstash get name=foo > /dev/null
+}
+
 @test "random data" {
   for i in $(echo 0 1024 4096 1000000 100000000)
   do

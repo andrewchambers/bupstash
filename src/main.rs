@@ -981,7 +981,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
 
             if md.is_dir() {
-                if default_tags {
+                if default_tags && !tags.contains_key("name") {
                     tags.insert("name".to_string(), name + ".tar");
                 }
 
@@ -990,7 +990,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     exclusions,
                 };
             } else if md.is_file() {
-                if default_tags {
+                if default_tags && !tags.contains_key("name") {
                     tags.insert("name".to_string(), name);
                 }
 
