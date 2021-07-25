@@ -810,7 +810,13 @@ pub fn request_data_stream(
                     &index,
                     out,
                 )?,
-                None => receive_htree(&mut ctx.data_dctx, &hash_key, r, &mut tr, out)?,
+                None => {
+                    let bytes_received =
+                        receive_htree(&mut ctx.data_dctx, &hash_key, r, &mut tr, out)?;
+                    if bytes_received != decrypted_metadata.data_size.0 {
+                        anyhow::bail!("expected data size does not match actual data size, possible corruption detected");
+                    };
+                }
             }
         }
     }
@@ -865,7 +871,12 @@ pub fn request_index(
         )))?;
 
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
-    receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
+    let bytes_received = receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
+    if bytes_received != decrypted_metadata.index_size.0 {
+        anyhow::bail!(
+            "expected index size does not match actual index size, possible corruption detected"
+        );
+    }
 
     let (index_cursor, compress_result) = index_data.finish();
     compress_result?;
@@ -899,7 +910,8 @@ fn receive_htree(
     r: &mut dyn std::io::Read,
     tr: &mut htree::TreeReader,
     out: &mut dyn std::io::Write,
-) -> Result<(), anyhow::Error> {
+) -> Result<u64, anyhow::Error> {
+    let mut n_copied: u64 = 0;
     while let Some((height, addr)) = tr.next_addr() {
         if height == 0 {
             let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -917,6 +929,7 @@ fn receive_htree(
                 return Err(ClientError::CorruptOrTamperedData.into());
             }
             out.write_all(&data)?;
+            n_copied += data.len() as u64;
         } else {
             let data = receive_and_authenticate_htree_chunk(r, addr)?;
             tr.push_level(height - 1, data)?;
@@ -924,7 +937,7 @@ fn receive_htree(
     }
 
     out.flush()?;
-    Ok(())
+    Ok(n_copied)
 }
 
 fn write_indexed_data_as_tarball(
