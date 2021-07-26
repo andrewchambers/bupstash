@@ -10,18 +10,21 @@ use std::path::PathBuf;
 cfg_if::cfg_if! {
     if #[cfg(target_os = "linux")] {
         use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-    } else if #[cfg(target_os = "macos")] {
+    }
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "macos")] {
       // Nothing is needed.
     } else if #[cfg(target_os = "openbsd")] {
       // Nothing is needed.
     } else {
       use std::os::unix::io::AsRawFd;
+      const NUM_PREFETCHED_BYTES: i64 = 128 * 1024 * 1024;
     }
 }
 
 const NUM_PREOPENED_FILES: usize = 3;
-const NUM_PREFETCHED_BYTES: i64 = 128 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct ReadaheadFileOpener {
