@@ -20,7 +20,7 @@ pub fn register_cksumvfs() {
     )
 }
 
-pub fn enable_sqlite_page_checksums(db: &rusqlite::Connection) -> Result<(), anyhow::Error> {
+pub fn reserve_sqlite_checksum_bytes(db: &rusqlite::Connection) -> Result<(), anyhow::Error> {
     let mut n = 8;
     if unsafe {
         rusqlite::ffi::sqlite3_file_control(
@@ -32,6 +32,9 @@ pub fn enable_sqlite_page_checksums(db: &rusqlite::Connection) -> Result<(), any
     } != rusqlite::ffi::SQLITE_OK
     {
         anyhow::bail!("unable to reserve bytes for sqlite3 page checksums");
+    }
+    if n != 0 && n != 8 {
+        anyhow::bail!("database has incorrect reserve bytes for checksums");
     }
     Ok(())
 }
@@ -48,7 +51,7 @@ mod tests {
         {
             register_cksumvfs();
             let db = rusqlite::Connection::open(&path).unwrap();
-            enable_sqlite_page_checksums(&db).unwrap();
+            reserve_sqlite_checksum_bytes(&db).unwrap();
             db.execute("vacuum;", []).unwrap();
             let enabled: String = db
                 .query_row("PRAGMA checksum_verification;", [], |r| {

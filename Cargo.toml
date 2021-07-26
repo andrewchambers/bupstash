@@ -19,7 +19,7 @@ incremental = false
 # More trusted dependencies
 crossbeam-channel = "*"
 blake3 = "*"
-rusqlite = { version = "*", features = ["bundled", "backup"] }
+rusqlite = { version = "*", features = ["bundled"] }
 
 lz4 = "1.2"
 anyhow = "1"

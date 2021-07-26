@@ -29,22 +29,22 @@ const SCHEMA_VERSION: i64 = 5;
 impl SendLog {
     pub fn open(p: &Path) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
-        cksumvfs::enable_sqlite_page_checksums(&db_conn)?;
+        cksumvfs::reserve_sqlite_checksum_bytes(&db_conn)?;
 
-        // Only one put per send log at a time.
-        db_conn.query_row("PRAGMA locking_mode = EXCLUSIVE;", [], |_r| Ok(()))?;
+        // On 64 bit platforms use sqlite3 memory mapped io.
+        if std::mem::size_of::<usize>() == 8 {
+            // 64GiB mmap size, just an estimate of the largest sendlog we are likely to see.
+            db_conn.query_row("pragma mmap_size=68719476736;", [], |_r| Ok(()))?;
+        }
+        // We want a rather large page cache for the send log.
+        // default is -2000 which is 2000 * 1024 bytes.
+        db_conn.execute("pragma cache_size = -20000;", [])?;
 
+        // Only one put per send log at a time, this simplifies checkpoints
+        db_conn.query_row("pragma locking_mode = EXCLUSIVE;", [], |_r| Ok(()))?;
         db_conn.busy_timeout(std::time::Duration::new(7 * 24 * 60 * 60, 0))?;
 
-        // Immediate lock with exclusive mode immediately blocks all other writers for the life
-        // of this open connection.
-        let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        tx.execute(
-            "create table if not exists LogMeta(Key primary key, Value) without rowid;",
-            [],
-        )?;
-
-        let needs_init = match tx.query_row(
+        let needs_init = match db_conn.query_row(
             "select Value from LogMeta where Key = 'schema-version';",
             [],
             |r| {
@@ -53,10 +53,56 @@ impl SendLog {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
-            Err(rusqlite::Error::QueryReturnedNoRows) => true,
-            Err(err) => return Err(err.into()),
+            Err(_) => true,
         };
 
+        if needs_init {
+            db_conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
+            // The initial vacuum ensures we have up to date page checksums even
+            // when first enabling them. we will delete all data anyway after this
+            // point so validating corrupt checksums is not a problem.
+            db_conn.execute("vacuum;", [])?;
+            db_conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
+
+            let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+            tx.execute("drop table if exists LogMeta;", [])?;
+            tx.execute("drop table if exists Sent;", [])?;
+            tx.execute("drop table if exists StatCache;", [])?;
+            tx.execute(
+                "create table LogMeta(Key primary key, Value) without rowid;",
+                [],
+            )?;
+            tx.execute(
+                "insert into LogMeta(Key, Value) values('schema-version', ?);",
+                &[&SCHEMA_VERSION],
+            )?;
+            tx.execute(
+                "insert into LogMeta(Key, Value) values('sequence-number', 1);",
+                [],
+            )?;
+            tx.execute(
+                "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid;",
+                [],
+            )?;
+            tx.execute(
+                "create table StatCache(Hash primary key, Cached, GCGeneration, LatestSessionId, ItemId) without rowid; ",
+                [],
+            )?;
+
+            tx.commit()?;
+
+            // Final sanity check after (re)initialization.
+            let integrity_check = db_conn.query_row("pragma integrity_check;", [], |r| {
+                let v: String = r.get(0)?;
+                Ok(v)
+            })?;
+            if integrity_check != "ok" {
+                anyhow::bail!("send log integrity check failed")
+            };
+        }
+
+        let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let sequence_number = match tx.query_row(
             "select Value from LogMeta where Key = 'sequence-number';",
             [],
@@ -78,66 +124,12 @@ impl SendLog {
             }
             Err(err) => return Err(err.into()),
         };
-
         tx.commit()?;
 
         /* Simple policy to decide when to defragment our send log. */
-        if cfg!(debug_assertions) || sequence_number % 10 == 0 {
+        if sequence_number % 10 == 0 {
             db_conn.execute("vacuum;", [])?;
         }
-
-        if needs_init {
-            let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
-            cksumvfs::enable_sqlite_page_checksums(&tmp_conn)?;
-
-            let tx = tmp_conn.transaction()?;
-
-            tx.execute(
-                "create table LogMeta(Key primary key, Value) without rowid;",
-                [],
-            )?;
-
-            tx.execute(
-                "insert into LogMeta(Key, Value) values('schema-version', ?);",
-                &[&SCHEMA_VERSION],
-            )?;
-
-            tx.execute(
-                "insert into LogMeta(Key, Value) values('sequence-number', 1);",
-                [],
-            )?;
-
-            tx.execute(
-                "create table Sent(Address primary key, GCGeneration, LatestSessionId, ItemId) without rowid;",
-                [],
-            )?;
-
-            tx.execute(
-                "create table StatCache(Hash primary key, Cached, GCGeneration, LatestSessionId, ItemId) without rowid; ",
-                [],
-            )?;
-
-            tx.commit()?;
-
-            {
-                let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut db_conn)?;
-                if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                    anyhow::bail!("unable to start send log transaction");
-                }
-            }
-
-            db_conn.execute("vacuum;", [])?;
-        }
-
-        // On 64 bit platforms use sqlite3 memory mapped io.
-        if std::mem::size_of::<usize>() == 8 {
-            // 64GiB mmap size, just an estimate of the largest sendlog we are likely to see.
-            db_conn.query_row("PRAGMA mmap_size=68719476736;", [], |_r| Ok(()))?;
-        }
-
-        // We want a rather large page cache for the send log.
-        // default is -2000 which is 2000 * 1024 bytes.
-        db_conn.execute("PRAGMA cache_size = -20000;", [])?;
 
         Ok(SendLog { db_conn })
     }
