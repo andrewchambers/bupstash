@@ -1,3 +1,4 @@
+use super::cksumvfs;
 use super::crypto;
 use super::fmtutil;
 use super::oplog;
@@ -33,11 +34,12 @@ pub struct ListOptions {
     pub query: Option<query::Query>,
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 impl QueryCache {
     pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
+        cksumvfs::enable_sqlite_page_checksums(&conn)?;
         conn.query_row("pragma journal_mode=WAL;", [], |_r| Ok(()))?;
 
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -64,6 +66,7 @@ impl QueryCache {
 
         if needs_init {
             let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
+            cksumvfs::enable_sqlite_page_checksums(&tmp_conn)?;
 
             let tx = tmp_conn.transaction()?;
 
@@ -88,10 +91,14 @@ impl QueryCache {
 
             tx.commit()?;
 
-            let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut conn)?;
-            if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                anyhow::bail!("unable to start send log transaction");
+            {
+                let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut conn)?;
+                if backup.step(-1)? != rusqlite::backup::StepResult::Done {
+                    anyhow::bail!("unable to start send log transaction");
+                }
             }
+
+            conn.execute("vacuum;", [])?;
         }
 
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

@@ -4,6 +4,7 @@ pub mod address;
 pub mod base64;
 pub mod chunk_storage;
 pub mod chunker;
+pub mod cksumvfs;
 pub mod client;
 pub mod compression;
 pub mod crypto;
@@ -2399,6 +2400,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn main() {
     crypto::init();
+    cksumvfs::register_cksumvfs();
 
     let mut args: Vec<String> = std::env::args().collect();
     let program = args[0].clone();
