@@ -39,17 +39,10 @@ const SCHEMA_VERSION: i64 = 3;
 impl QueryCache {
     pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
-        cksumvfs::enable_sqlite_page_checksums(&conn)?;
-        conn.query_row("pragma journal_mode=WAL;", [], |_r| Ok(()))?;
+        cksumvfs::reserve_sqlite_checksum_bytes(&conn)?;
+        conn.busy_timeout(std::time::Duration::new(6 * 60 * 60, 0))?;
 
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        tx.execute(
-            "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
-            [],
-        )?;
-
-        let needs_init = match tx.query_row(
+        let needs_init = match conn.query_row(
             "select Value from QueryCacheMeta where Key = 'schema-version';",
             [],
             |r| {
@@ -58,26 +51,33 @@ impl QueryCache {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
-            Err(rusqlite::Error::QueryReturnedNoRows) => true,
-            Err(err) => return Err(err.into()),
+            Err(_) => true,
         };
 
-        tx.commit()?;
-
         if needs_init {
-            let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
-            cksumvfs::enable_sqlite_page_checksums(&tmp_conn)?;
+            conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
+            conn.query_row("pragma journal_mode=WAL;", [], |_r| Ok(()))?;
+            // The initial vacuum ensures we have up to date page checksums even
+            // when first enabling them. we will delete all data anyway after this
+            // point so validating corrupt checksums is not a problem.
+            conn.execute("vacuum;", [])?;
+            conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
 
-            let tx = tmp_conn.transaction()?;
-
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute("drop table if exists QueryCacheMeta;", [])?;
+            tx.execute("drop table if exists ItemOpLog;", [])?;
+            tx.execute("drop table if exists Items;", [])?;
             tx.execute(
                 "create table if not exists QueryCacheMeta(Key primary key, Value) without rowid;",
                 [],
             )?;
-
             tx.execute(
                 "insert into QueryCacheMeta(Key, Value) values('schema-version', ?);",
                 [SCHEMA_VERSION],
+            )?;
+            tx.execute(
+                "insert into QueryCacheMeta(Key, Value) values('want-vacuum', 0);",
+                [],
             )?;
             tx.execute(
                 "create table if not exists ItemOpLog(LogOffset INTEGER PRIMARY KEY AUTOINCREMENT, ItemId, OpData);",
@@ -88,45 +88,31 @@ impl QueryCache {
                 "create table if not exists Items(ItemId PRIMARY KEY, LogOffset INTEGER NOT NULL, Metadata NOT NULL, UNIQUE(LogOffset)) WITHOUT ROWID;",
                 [],
             )?;
-
             tx.commit()?;
 
-            {
-                let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut conn)?;
-                if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                    anyhow::bail!("unable to start send log transaction");
-                }
-            }
-
-            conn.execute("vacuum;", [])?;
+            // Final sanity check after (re)initialization.
+            let integrity_check = conn.query_row("pragma integrity_check;", [], |r| {
+                let v: String = r.get(0)?;
+                Ok(v)
+            })?;
+            if integrity_check != "ok" {
+                anyhow::bail!("query cache integrity check failed")
+            };
         }
 
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-
-        let recently_cleared = match tx.query_row(
-            "select Value from QueryCacheMeta where Key = 'recently-cleared';",
+        // Trigger a vacuum for a cache that was recently invalidated.
+        let want_vacuum = conn.query_row(
+            "select Value from QueryCacheMeta where Key = 'want-vacuum';",
             [],
-            |r| {
-                let v: bool = r.get(0)?;
-                Ok(v)
-            },
-        ) {
-            Ok(v) => v,
-            Err(rusqlite::Error::QueryReturnedNoRows) => false,
-            Err(err) => return Err(err.into()),
-        };
+            |r| r.get(0),
+        )?;
 
-        if recently_cleared {
-            tx.execute(
-                "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 0);",
+        if want_vacuum {
+            conn.execute("vacuum;", [])?;
+            conn.execute(
+                "insert or replace into QueryCacheMeta(Key, Value) values('want-vacuum', 0);",
                 [],
             )?;
-        }
-
-        tx.commit()?;
-
-        if recently_cleared {
-            conn.execute("vacuum;", [])?;
         }
 
         Ok(QueryCache { conn })
@@ -136,6 +122,17 @@ impl QueryCache {
         let tx = self
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let schema_version = tx.query_row(
+            "select Value from QueryCacheMeta where Key = 'schema-version';",
+            [],
+            |r| {
+                let v: i64 = r.get(0)?;
+                Ok(v)
+            },
+        )?;
+        if schema_version != SCHEMA_VERSION {
+            anyhow::bail!("query cache schema modified by concurrent invocation");
+        }
         Ok(QueryCacheTx { tx, sync_offset: 0 })
     }
 }
@@ -145,7 +142,7 @@ impl<'a> QueryCacheTx<'a> {
         self.tx.execute("delete from Items;", [])?;
         self.tx.execute("delete from ItemOpLog;", [])?;
         self.tx.execute(
-            "insert or replace into QueryCacheMeta(Key, Value) values('recently-cleared', 1);",
+            "insert or replace into QueryCacheMeta(Key, Value) values('want-vacuum', 1);",
             [],
         )?;
         Ok(())
