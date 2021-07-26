@@ -20,7 +20,7 @@ pub fn register_cksumvfs() {
     )
 }
 
-pub fn reserve_sqlite_checksum_bytes(db: &rusqlite::Connection) -> Result<(), anyhow::Error> {
+pub fn enable_sqlite_checksums(db: &rusqlite::Connection) -> Result<(), anyhow::Error> {
     let mut n = 8;
     if unsafe {
         rusqlite::ffi::sqlite3_file_control(
@@ -35,6 +35,9 @@ pub fn reserve_sqlite_checksum_bytes(db: &rusqlite::Connection) -> Result<(), an
     }
     if n != 0 && n != 8 {
         anyhow::bail!("database has incorrect reserve bytes for checksums");
+    }
+    if n == 0 {
+        db.execute("vacuum;", [])?;
     }
     Ok(())
 }

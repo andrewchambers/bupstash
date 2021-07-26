@@ -39,7 +39,7 @@ const SCHEMA_VERSION: i64 = 3;
 impl QueryCache {
     pub fn open(p: &Path) -> Result<QueryCache, anyhow::Error> {
         let mut conn = rusqlite::Connection::open(p)?;
-        cksumvfs::reserve_sqlite_checksum_bytes(&conn)?;
+        cksumvfs::enable_sqlite_checksums(&conn)?;
         conn.busy_timeout(std::time::Duration::new(6 * 60 * 60, 0))?;
 
         let needs_init = match conn.query_row(

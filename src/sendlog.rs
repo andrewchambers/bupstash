@@ -29,7 +29,7 @@ const SCHEMA_VERSION: i64 = 5;
 impl SendLog {
     pub fn open(p: &Path) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
-        cksumvfs::reserve_sqlite_checksum_bytes(&db_conn)?;
+        cksumvfs::enable_sqlite_checksums(&db_conn)?;
 
         // On 64 bit platforms use sqlite3 memory mapped io.
         if std::mem::size_of::<usize>() == 8 {
