@@ -1,4 +1,5 @@
 use super::address::*;
+use super::cksumvfs;
 use super::index;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,12 @@ pub struct StatCacheEntry {
     pub hashes: Vec<index::ContentCryptoHash>,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 impl SendLog {
     pub fn open(p: &Path) -> Result<SendLog, anyhow::Error> {
         let mut db_conn = rusqlite::Connection::open(p)?;
+        cksumvfs::enable_sqlite_page_checksums(&db_conn)?;
 
         // Only one put per send log at a time.
         db_conn.query_row("PRAGMA locking_mode = EXCLUSIVE;", [], |_r| Ok(()))?;
@@ -86,6 +88,7 @@ impl SendLog {
 
         if needs_init {
             let mut tmp_conn = rusqlite::Connection::open(":memory:")?;
+            cksumvfs::enable_sqlite_page_checksums(&tmp_conn)?;
 
             let tx = tmp_conn.transaction()?;
 
@@ -116,10 +119,14 @@ impl SendLog {
 
             tx.commit()?;
 
-            let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut db_conn)?;
-            if backup.step(-1)? != rusqlite::backup::StepResult::Done {
-                anyhow::bail!("unable to start send log transaction");
+            {
+                let backup = rusqlite::backup::Backup::new(&tmp_conn, &mut db_conn)?;
+                if backup.step(-1)? != rusqlite::backup::StepResult::Done {
+                    anyhow::bail!("unable to start send log transaction");
+                }
             }
+
+            db_conn.execute("vacuum;", [])?;
         }
 
         // On 64 bit platforms use sqlite3 memory mapped io.
