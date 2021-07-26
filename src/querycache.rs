@@ -51,6 +51,12 @@ impl QueryCache {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::DatabaseBusy
+                    || err.code == rusqlite::ErrorCode::DatabaseLocked =>
+            {
+                anyhow::bail!("query cache is busy")
+            }
             Err(_) => true,
         };
 

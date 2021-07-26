@@ -53,7 +53,13 @@ impl SendLog {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
-            Err(_) => true,
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::DatabaseBusy
+                    || err.code == rusqlite::ErrorCode::DatabaseLocked =>
+            {
+                anyhow::bail!("send log is busy")
+            }
+            Err(_) => true, // Try reinit the database.
         };
 
         if needs_init {
