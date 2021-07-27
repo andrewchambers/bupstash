@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use thiserror::Error;
 
-pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "10";
+pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "11";
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -99,6 +99,7 @@ pub struct StorageConnect {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
     pub gc_generation: Xid,
+    pub id: Xid,
     pub item: oplog::VersionedItemMetadata,
 }
 
@@ -145,7 +146,7 @@ pub enum Packet {
     TSendSync,
     RSendSync(SyncStats),
     TAddItem(AddItem),
-    RAddItem(Xid),
+    RAddItem,
     TRmItems(Vec<Xid>),
     RRmItems,
     TRequestMetadata(TRequestMetadata),
@@ -328,7 +329,7 @@ pub fn read_packet_raw(
         PACKET_KIND_T_SEND_SYNC => Packet::TSendSync,
         PACKET_KIND_R_SEND_SYNC => Packet::RSendSync(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_ADD_ITEM => Packet::RAddItem(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_ADD_ITEM => Packet::RAddItem,
         PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
         PACKET_KIND_T_REQUEST_METADATA => Packet::TRequestMetadata(serde_bare::from_slice(&buf)?),
@@ -502,10 +503,8 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_ADD_ITEM, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RAddItem(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
-            send_hdr(w, PACKET_KIND_R_ADD_ITEM, b.len().try_into()?)?;
-            write_to_remote(w, &b)?;
+        Packet::RAddItem => {
+            send_hdr(w, PACKET_KIND_R_ADD_ITEM, 0)?;
         }
         Packet::TRmItems(ref v) => {
             let b = serde_bare::to_vec(&v)?;

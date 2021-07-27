@@ -361,6 +361,7 @@ impl Repo {
     pub fn add_item(
         &mut self,
         gc_generation: Xid,
+        id: Xid,
         item: oplog::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
@@ -376,7 +377,6 @@ impl Repo {
             }
         }
 
-        let id = Xid::new();
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
         {
             let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
@@ -384,7 +384,11 @@ impl Repo {
                 anyhow::bail!("garbage collection invalidated upload, try again");
             }
             let serialized_md = oplog::checked_serialize_metadata(&item)?;
-            txn.add_write(&format!("items/{:x}", id), serialized_md);
+            let item_path = format!("items/{:x}", id);
+            if txn.file_exists(&item_path)? {
+                anyhow::bail!("item id already exists in repository");
+            }
+            txn.add_write(&item_path, serialized_md);
             let op = oplog::LogOp::AddItem((id, item));
             let serialized_op = serde_bare::to_vec(&op)?;
             txn.add_append("repo.oplog", serialized_op)?;

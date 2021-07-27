@@ -453,6 +453,14 @@ impl WriteTxn {
         self.dirf.metadata(p)
     }
 
+    pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
+        match self.dirf.metadata(p) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
     pub fn read_dir(&self, p: &str) -> Result<openat::DirIter, std::io::Error> {
         self.dirf.list_dir(p)
     }

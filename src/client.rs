@@ -678,15 +678,17 @@ pub fn send(
 
     let (data_tree, index_tree, stats) = session.finish()?;
 
-    let plain_text_metadata = oplog::V2PlainTextItemMetadata {
+    let item_id = Xid::new();
+
+    let plain_text_metadata = oplog::V3PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
         unix_timestamp_millis: chrono::Utc::now().timestamp_millis().try_into()?,
         data_tree,
         index_tree,
     };
 
-    let e_metadata = oplog::V2SecretItemMetadata {
-        plain_text_hash: plain_text_metadata.hash(),
+    let e_metadata = oplog::V3SecretItemMetadata {
+        plain_text_hash: plain_text_metadata.hash(&item_id),
         send_key_id: ctx.send_key_id,
         index_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
@@ -695,7 +697,7 @@ pub fn send(
         tags,
     };
 
-    let versioned_metadata = oplog::VersionedItemMetadata::V2(oplog::V2ItemMetadata {
+    let versioned_metadata = oplog::VersionedItemMetadata::V3(oplog::V3ItemMetadata {
         plain_text_metadata,
         encrypted_metadata: ctx
             .metadata_ectx
@@ -706,16 +708,17 @@ pub fn send(
         w,
         &Packet::TAddItem(AddItem {
             gc_generation: ack.gc_generation,
+            id: item_id,
             item: versioned_metadata,
         }),
     )?;
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RAddItem(id) => {
+        Packet::RAddItem => {
             if let Some(send_log_session) = send_log_session {
-                send_log_session.into_inner().commit(&id)?;
+                send_log_session.into_inner().commit(&item_id)?;
             }
-            Ok((id, stats))
+            Ok((item_id, stats))
         }
         _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
     }
@@ -770,7 +773,7 @@ pub fn request_data_stream(
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
-    let decrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let decrypted_metadata = metadata.decrypt_metadata(&id, &mut ctx.metadata_dctx)?;
     let data_tree = metadata.data_tree();
 
     let hash_key = crypto::derive_hash_key(
@@ -843,7 +846,7 @@ pub fn request_index(
         anyhow::bail!("decryption key does not match key used for encryption");
     }
 
-    let decrypted_metadata = metadata.decrypt_metadata(&mut ctx.metadata_dctx)?;
+    let decrypted_metadata = metadata.decrypt_metadata(&id, &mut ctx.metadata_dctx)?;
 
     let hash_key = crypto::derive_hash_key(
         &ctx.idx_hash_key_part_1,

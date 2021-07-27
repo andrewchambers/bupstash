@@ -181,7 +181,7 @@ fn recv(
                 }
 
                 match add_item.item {
-                    oplog::VersionedItemMetadata::V2(ref md) => {
+                    oplog::VersionedItemMetadata::V3(ref md) => {
                         let item_skew = (md.plain_text_metadata.unix_timestamp_millis as i64)
                             - chrono::Utc::now().timestamp_millis();
                         const MAX_SKEW_MINS: i64 = 15;
@@ -193,11 +193,11 @@ fn recv(
                         }
                     }
 
-                    _ => anyhow::bail!("server refusing item with incorrect metadata version"),
+                    _ => anyhow::bail!("server refusing new item with outdated metadata version"),
                 }
 
-                let item_id = repo.add_item(add_item.gc_generation, add_item.item)?;
-                write_packet(w, &Packet::RAddItem(item_id))?;
+                repo.add_item(add_item.gc_generation, add_item.id, add_item.item)?;
+                write_packet(w, &Packet::RAddItem)?;
                 break;
             }
             _ => anyhow::bail!("protocol error, unexpected packet"),
