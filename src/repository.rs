@@ -397,7 +397,7 @@ impl Repo {
         Ok(id)
     }
 
-    pub fn remove_items(&mut self, mut items: Vec<Xid>) -> Result<(), anyhow::Error> {
+    pub fn remove_items(&mut self, mut items: Vec<Xid>) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
@@ -416,6 +416,8 @@ impl Repo {
             };
         }
 
+        let n_deleted = deleted_items.len() as u64;
+
         if !deleted_items.is_empty() {
             let op = oplog::LogOp::RemoveItems(deleted_items);
             let serialized_op = serde_bare::to_vec(&op)?;
@@ -423,7 +425,7 @@ impl Repo {
         }
         txn.commit()?;
 
-        Ok(())
+        Ok(n_deleted)
     }
 
     pub fn lookup_item_by_id(

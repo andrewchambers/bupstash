@@ -1306,18 +1306,20 @@ pub fn remove(
     ids: Vec<Xid>,
     r: &mut dyn std::io::Read,
     w: &mut dyn std::io::Write,
-) -> Result<(), anyhow::Error> {
+) -> Result<u64, anyhow::Error> {
     progress.set_message("removing items...");
+
+    let mut n_removed = 0;
 
     for chunked_ids in ids.chunks(4096) {
         let ids = chunked_ids.to_vec();
         write_packet(w, &Packet::TRmItems(ids))?;
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::RRmItems => {}
+            Packet::RRmItems(n) => n_removed += n.0,
             _ => anyhow::bail!("protocol error, expected RRmItems"),
         }
     }
-    Ok(())
+    Ok(n_removed)
 }
 
 pub struct RestoreContext {
