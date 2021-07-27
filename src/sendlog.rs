@@ -56,12 +56,13 @@ impl SendLog {
               Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.code == rusqlite::ErrorCode::SystemIoFailure =>
             {
-                // The failure may be due to checksumvfs, so attempt a vacuum and try again
+                // The failure may be due to checksumvfs being enabled
+                // for the first time, so attempt a vacuum and try again
                 // to rebuild checksums.
                 db_conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
                 db_conn.execute("vacuum;", [])?;
                 db_conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
-                // Force a reinit since we just don't know if our checksums were really bad.
+                // Force a reinit since we don't know if our checksums were really bad.
                 true
             }
             Err(rusqlite::Error::SqliteFailure(err, _))
