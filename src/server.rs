@@ -118,10 +118,8 @@ fn serve_repository(
                 if !cfg.allow_remove {
                     anyhow::bail!("server has disabled remove for this client")
                 }
-                if !items.is_empty() {
-                    repo.remove_items(items)?;
-                }
-                write_packet(w, &Packet::RRmItems)?;
+                let n_removed = repo.remove_items(items)?;
+                write_packet(w, &Packet::RRmItems(serde_bare::Uint(n_removed)))?;
             }
             Packet::TRecoverRemoved => {
                 if !cfg.allow_get || !cfg.allow_put || !cfg.allow_list {

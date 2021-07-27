@@ -148,7 +148,7 @@ pub enum Packet {
     TAddItem(AddItem),
     RAddItem,
     TRmItems(Vec<Xid>),
-    RRmItems,
+    RRmItems(serde_bare::Uint),
     TRequestMetadata(TRequestMetadata),
     RRequestMetadata(RRequestMetadata),
     RequestData(RequestData),
@@ -331,7 +331,7 @@ pub fn read_packet_raw(
         PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_ADD_ITEM => Packet::RAddItem,
         PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_RM_ITEMS => Packet::RRmItems,
+        PACKET_KIND_R_RM_ITEMS => Packet::RRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_METADATA => Packet::TRequestMetadata(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_METADATA => Packet::RRequestMetadata(serde_bare::from_slice(&buf)?),
         PACKET_KIND_REQUEST_DATA => Packet::RequestData(serde_bare::from_slice(&buf)?),
@@ -463,17 +463,17 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             return write_chunk(w, &v.address, &v.data);
         }
         Packet::TOpenRepository(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_OPEN_REPOSITORY, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::ROpenRepository(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_OPEN_REPOSITORY, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TInitRepository(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_INIT_REPOSITORY, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -481,12 +481,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_INIT_REPOSITORY, 0)?;
         }
         Packet::TBeginSend(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_BEGIN_SEND, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RBeginSend(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -494,12 +494,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_SEND_SYNC, 0)?;
         }
         Packet::RSendSync(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_SEND_SYNC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TAddItem(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_ADD_ITEM, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -507,65 +507,67 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_ADD_ITEM, 0)?;
         }
         Packet::TRmItems(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_RM_ITEMS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRmItems => {
-            send_hdr(w, PACKET_KIND_R_RM_ITEMS, 0)?;
+        Packet::RRmItems(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(w, PACKET_KIND_R_RM_ITEMS, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
         }
         Packet::TRequestMetadata(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_METADATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RRequestMetadata(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_METADATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RequestData(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_REQUEST_DATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RequestDataRanges(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_REQUEST_DATA_RANGES, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RequestIndex(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_REQUEST_INDEX, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TGc(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_GC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RGc(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_GC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TRequestItemSync(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::RRequestItemSync(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::SyncLogOps(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TRequestChunkData(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK_DATA, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -574,12 +576,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             write_to_remote(w, &v)?;
         }
         Packet::Progress(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_PROGRESS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::Abort(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_ABORT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -587,17 +589,17 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_RECOVER_REMOVED, 0)?;
         }
         Packet::RRecoverRemoved(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_RECOVER_REMOVED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::StorageConnect(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_STORAGE_CONNECT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TStoragePrepareForSweep(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(
                 w,
                 PACKET_KIND_T_STORAGE_PREPARE_FOR_SWEEP,
@@ -612,7 +614,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_STORAGE_ESTIMATE_COUNT, 0)?;
         }
         Packet::RStorageEstimateCount(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_STORAGE_ESTIMATE_COUNT, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
@@ -620,12 +622,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             return write_begin_sweep(w, &v);
         }
         Packet::StorageSweepComplete(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_STORAGE_SWEEP_COMPLETE, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TStorageQuerySweepCompleted(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(
                 w,
                 PACKET_KIND_T_STORAGE_QUERY_SWEEP_COMPLETED,
@@ -634,7 +636,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             write_to_remote(w, &b)?;
         }
         Packet::RStorageQuerySweepCompleted(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(
                 w,
                 PACKET_KIND_R_STORAGE_QUERY_SWEEP_COMPLETED,
@@ -646,7 +648,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
         }
         Packet::RStorageWriteBarrier(ref v) => {
-            let b = serde_bare::to_vec(&v)?;
+            let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }

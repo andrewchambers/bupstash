@@ -1852,14 +1852,12 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         }
 
-        n_removed = ids.len();
-
         let mut serve_proc =
             cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-        client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
+        n_removed = client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     } else {
@@ -1942,8 +1940,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 ids
             }
         };
-        n_removed = ids.len();
-        client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
+        n_removed = client::remove(progress.clone(), ids, &mut serve_out, &mut serve_in)?;
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     };
