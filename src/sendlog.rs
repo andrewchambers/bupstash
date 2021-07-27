@@ -53,7 +53,7 @@ impl SendLog {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
-              Err(rusqlite::Error::SqliteFailure(err, _))
+            Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.code == rusqlite::ErrorCode::SystemIoFailure =>
             {
                 // The failure may be due to checksumvfs being enabled
@@ -64,12 +64,6 @@ impl SendLog {
                 db_conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
                 // Force a reinit since we don't know if our checksums were really bad.
                 true
-            }
-            Err(rusqlite::Error::SqliteFailure(err, _))
-                if err.code == rusqlite::ErrorCode::DatabaseBusy
-                    || err.code == rusqlite::ErrorCode::DatabaseLocked =>
-            {
-                anyhow::bail!("send log is busy")
             }
             Err(err) => anyhow::bail!("unable to open send log: {}", err),
         };
