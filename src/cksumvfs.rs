@@ -54,8 +54,7 @@ mod tests {
         {
             register_cksumvfs();
             let db = rusqlite::Connection::open(&path).unwrap();
-            reserve_sqlite_checksum_bytes(&db).unwrap();
-            db.execute("vacuum;", []).unwrap();
+            enable_sqlite_checksums(&db).unwrap();
             let enabled: String = db
                 .query_row("PRAGMA checksum_verification;", [], |r| {
                     Ok(r.get(0).unwrap())

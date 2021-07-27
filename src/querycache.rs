@@ -63,7 +63,13 @@ impl QueryCache {
                 // Force a reinit since we don't know if our checksums were really bad.
                 true
             }
-            Err(err) => anyhow::bail!("unable to open query cache: {}", err),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::DatabaseBusy
+                    || err.code == rusqlite::ErrorCode::DatabaseLocked =>
+            {
+                anyhow::bail!("query cache is busy")
+            }
+            Err(_) => true,
         };
 
         if needs_init {
