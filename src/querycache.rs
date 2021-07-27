@@ -52,23 +52,27 @@ impl QueryCache {
         ) {
             Ok(v) => v != SCHEMA_VERSION,
             Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::SystemIoFailure =>
+            {
+                // The failure may be due to checksumvfs, so attempt a vacuum and try again
+                // to rebuild checksums.
+                conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
+                conn.execute("vacuum;", [])?;
+                conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
+                // Force a reinit since we just don't know if our checksums were really bad.
+                true
+            }
+            Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.code == rusqlite::ErrorCode::DatabaseBusy
                     || err.code == rusqlite::ErrorCode::DatabaseLocked =>
             {
                 anyhow::bail!("query cache is busy")
             }
-            Err(_) => true,
+            Err(err) => anyhow::bail!("unable to open query cache: {}", err),
         };
 
         if needs_init {
-            conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
             conn.query_row("pragma journal_mode=WAL;", [], |_r| Ok(()))?;
-            // The initial vacuum ensures we have up to date page checksums even
-            // when first enabling them. we will delete all data anyway after this
-            // point so validating corrupt checksums is not a problem.
-            conn.execute("vacuum;", [])?;
-            conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
-
             let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute("drop table if exists QueryCacheMeta;", [])?;
             tx.execute("drop table if exists ItemOpLog;", [])?;
@@ -95,6 +99,8 @@ impl QueryCache {
                 [],
             )?;
             tx.commit()?;
+
+            conn.execute("vacuum;", [])?;
 
             // Final sanity check after (re)initialization.
             let integrity_check = conn.query_row("pragma integrity_check;", [], |r| {

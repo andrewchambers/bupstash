@@ -53,23 +53,27 @@ impl SendLog {
             },
         ) {
             Ok(v) => v != SCHEMA_VERSION,
+              Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::SystemIoFailure =>
+            {
+                // The failure may be due to checksumvfs, so attempt a vacuum and try again
+                // to rebuild checksums.
+                db_conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
+                db_conn.execute("vacuum;", [])?;
+                db_conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
+                // Force a reinit since we just don't know if our checksums were really bad.
+                true
+            }
             Err(rusqlite::Error::SqliteFailure(err, _))
                 if err.code == rusqlite::ErrorCode::DatabaseBusy
                     || err.code == rusqlite::ErrorCode::DatabaseLocked =>
             {
                 anyhow::bail!("send log is busy")
             }
-            Err(_) => true, // Try reinit the database.
+            Err(err) => anyhow::bail!("unable to open send log: {}", err),
         };
 
         if needs_init {
-            db_conn.query_row("pragma checksum_verification=OFF;", [], |_r| Ok(()))?;
-            // The initial vacuum ensures we have up to date page checksums even
-            // when first enabling them. we will delete all data anyway after this
-            // point so validating corrupt checksums is not a problem.
-            db_conn.execute("vacuum;", [])?;
-            db_conn.query_row("pragma checksum_verification=ON;", [], |_r| Ok(()))?;
-
             let tx = db_conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
             tx.execute("drop table if exists LogMeta;", [])?;
@@ -97,6 +101,8 @@ impl SendLog {
             )?;
 
             tx.commit()?;
+
+            db_conn.execute("vacuum;", [])?;
 
             // Final sanity check after (re)initialization.
             let integrity_check = db_conn.query_row("pragma integrity_check;", [], |r| {
