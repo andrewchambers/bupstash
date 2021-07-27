@@ -58,13 +58,17 @@ type RemoveItems {
 
 type RemoveRemoved {}
 
-type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata)
+type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata | V2VersionedItemMetadata)
 
 type V1VersionedItemMetadata {
-  // deprecated in bupstash version 0.9
+  // deprecated
 }
 
 type V2VersionedItemMetadata {
+  // deprecated
+}
+
+type V3VersionedItemMetadata {
   primary_key_id: Xid,
   unix_timestamp_millis: u64,
   tree_height: usize,
@@ -72,7 +76,7 @@ type V2VersionedItemMetadata {
   encryped_metadata: data
 }
 
-struct V2SecretItemMetadata {
+struct V3SecretItemMetadata {
   plain_text_hash: data<32>
   send_key_id: Xid,
   hash_key_part_2: data<32>,

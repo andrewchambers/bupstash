@@ -320,7 +320,7 @@ impl<'a> QueryCacheTx<'a> {
                 && opts.primary_key_id.unwrap() == *metadata.primary_key_id()
             {
                 let mut dmetadata =
-                    metadata.decrypt_metadata(opts.metadata_dctx.as_mut().unwrap())?;
+                    metadata.decrypt_metadata(&item_id, opts.metadata_dctx.as_mut().unwrap())?;
 
                 // Add special builtin tags.
                 dmetadata.tags.insert("id".to_string(), item_id.to_string());

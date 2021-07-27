@@ -732,6 +732,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         oplog::VersionedItemMetadata::V2(ref metadata) => {
                             Some(metadata.plain_text_metadata.unix_timestamp_millis)
                         }
+                        oplog::VersionedItemMetadata::V3(ref metadata) => {
+                            Some(metadata.plain_text_metadata.unix_timestamp_millis)
+                        }
                     };
                     if let Some(unix_timestamp_millis) = unix_timestamp_millis {
                         write!(out, ",\"unix_timestamp_millis\":{}", unix_timestamp_millis)?;
