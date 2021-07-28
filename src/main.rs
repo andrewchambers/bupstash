@@ -111,7 +111,8 @@ fn query_cli_opts(opts: &mut getopts::Options) {
         "utc-timestamps",
         "Display and search against timestamps in utc time instead of local time.",
     );
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
+    opts.optflag("", "no-progress", "Suppress progress indicators.");
+    opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 }
 
 fn repo_cli_opts(opts: &mut getopts::Options) {
@@ -470,7 +471,8 @@ fn cli_to_progress_bar(
     matches: &getopts::Matches,
     style: indicatif::ProgressStyle,
 ) -> indicatif::ProgressBar {
-    let want_visible_progress = !matches.opt_present("quiet")
+    let want_visible_progress = !matches.opt_present("no-progress")
+        && !matches.opt_present("quiet")
         && atty::is(atty::Stream::Stderr)
         && atty::is(atty::Stream::Stdout);
     let progress = indicatif::ProgressBar::with_draw_target(
@@ -515,7 +517,8 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "The storage engine specification. 'dir', or a json specification. Consult the manual for details.",
         "STORAGE",
     );
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
+    opts.optflag("", "no-progress", "Suppress progress indicators.");
+    opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
     let matches = parse_cli_opts(opts, &args[..]);
 
     let storage_spec: Option<repository::StorageEngineSpec> = match matches.opt_str("storage") {
@@ -788,11 +791,23 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag("", "no-compression", "Disable data compression.");
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
     opts.optflag(
+        "v",
+        "verbose",
+        "Be verbose, implies for --print-file-actions and --print-stats.",
+    );
+    opts.optflag(
+        "",
+        "print-file-actions",
+        "Print file actions in the form '$a $t $path' to stderr when processing directories, see the manual for details on the format.",
+    );
+    opts.optflag(
         "",
         "print-stats",
         "Print put statistics to stderr on completion.",
     );
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
+
+    opts.optflag("", "no-progress", "Suppress progress indicators.");
+    opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 
     opts.optflag(
         "e",
@@ -868,6 +883,10 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else {
         compression::Scheme::Lz4
     };
+
+    let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
+    let print_file_actions =
+        matches.opt_present("print-file-actions") || matches.opt_present("verbose");
 
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
@@ -955,6 +974,25 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner()
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
     );
+
+    let file_action_log_fn = if print_file_actions {
+        let log_fn: std::rc::Rc<dyn Fn(&str) -> Result<(), anyhow::Error>> = if progress.is_hidden()
+        {
+            std::rc::Rc::new(Box::new(move |ln: &str| {
+                writeln!(std::io::stderr(), "{}", ln)?;
+                Ok(())
+            }))
+        } else {
+            let progress = progress.clone();
+            std::rc::Rc::new(Box::new(move |ln: &str| {
+                progress.println(ln);
+                Ok(())
+            }))
+        };
+        Some(log_fn)
+    } else {
+        None
+    };
 
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
@@ -1079,6 +1117,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         idx_ectx,
         want_xattrs,
         one_file_system,
+        file_action_log_fn,
     };
 
     let (id, stats) = client::send(
@@ -1094,12 +1133,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     progress.finish_and_clear();
 
-    if matches.opt_present("print-stats") {
+    if print_stats {
         let duration = stats.end_time.signed_duration_since(stats.start_time);
         let total_uncompressed_size = stats.uncompressed_data_size + stats.uncompressed_index_size;
         writeln!(
             std::io::stderr(),
-            "{}m{}.{}s put duration",
+            "{}m{}.{}s elapsed",
             duration.num_minutes(),
             duration.num_seconds() % 60,
             duration.num_milliseconds() % 1000
@@ -1954,7 +1993,8 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
+    opts.optflag("", "no-progress", "Suppress progress indicators.");
+    opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 
     repo_cli_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);
@@ -1995,7 +2035,8 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    opts.optflag("q", "quiet", "Suppress progress indicators.");
+    opts.optflag("", "no-progress", "Suppress progress indicators.");
+    opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 
     repo_cli_opts(&mut opts);
     let matches = parse_cli_opts(opts, &args[..]);

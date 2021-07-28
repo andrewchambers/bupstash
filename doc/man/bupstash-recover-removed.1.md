@@ -24,9 +24,13 @@ invocations of bupstash-rm(1).
   May be of the form `ssh://$SERVER/$PATH` for 
   remote repositories if ssh access is configured.
   If not specified, is set to `BUPSTASH_REPOSITORY`.
-* -q, --quiet:
+
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
+
+* -q, --quiet:
+  Be quiet, implies --no-progress.
 
 ## ENVIRONMENT
 

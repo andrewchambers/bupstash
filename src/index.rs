@@ -205,6 +205,18 @@ impl IndexEntry {
             || (self.mode.0 as libc::mode_t & libc::S_IFMT) == libc::S_IFCHR
     }
 
+    pub fn type_display_char(&self) -> char {
+        match self.kind() {
+            IndexEntryKind::Other => '?',
+            IndexEntryKind::Regular => 'f',
+            IndexEntryKind::Symlink => 'l',
+            IndexEntryKind::Char => 'c',
+            IndexEntryKind::Block => 'b',
+            IndexEntryKind::Directory => 'd',
+            IndexEntryKind::Fifo => 'p',
+        }
+    }
+
     pub fn display_mode(&self) -> String {
         let mode = self.mode.0 as libc::mode_t;
 

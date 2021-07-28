@@ -69,12 +69,15 @@ more information on the query cache.
   By default bupstash refuses to remove multiple items from a single query, this flag
   disables that safety feature.
 
-* -q, --quiet:
+* --utc-timestamps:
+  Display and search against timestamps in utc time instead of local time.
+
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
-* --utc-timestamps:
-  Display and search against timestamps in utc time instead of local time.
+* -q, --quiet:
+  Be quiet, implies --no-progress.
 
 ## ENVIRONMENT
 

@@ -230,6 +230,7 @@ pub struct IndexedDir {
     pub dir_path: PathBuf,
     pub ent_paths: Vec<PathBuf>,
     pub index_ents: Vec<index::IndexEntry>,
+    pub excluded_paths: Vec<PathBuf>,
 }
 
 pub struct FsIndexer {
@@ -409,6 +410,7 @@ impl FsIndexer {
                             dir_path,
                             ent_paths: vec![],
                             index_ents: vec![],
+                            excluded_paths: vec![],
                         })
                     }
                     Err(err) => {
@@ -422,11 +424,13 @@ impl FsIndexer {
 
         let mut index_ents = Vec::with_capacity(dir_ent_paths.len());
         let mut ent_paths = Vec::with_capacity(dir_ent_paths.len());
+        let mut excluded_paths = Vec::new();
         let mut to_recurse = Vec::new();
 
         dir_ent_paths.retain(|p| {
             for excl in self.opts.exclusions.iter() {
                 if excl.matches_path(p) {
+                    excluded_paths.push(p.to_owned());
                     return false;
                 }
             }
@@ -439,6 +443,13 @@ impl FsIndexer {
             index::path_cmp(
                 &l.0.file_name().unwrap().to_string_lossy(),
                 &r.0.file_name().unwrap().to_string_lossy(),
+            )
+        });
+
+        excluded_paths.sort_by(|l, r| {
+            index::path_cmp(
+                &l.file_name().unwrap().to_string_lossy(),
+                &r.file_name().unwrap().to_string_lossy(),
             )
         });
 
@@ -505,6 +516,7 @@ impl FsIndexer {
             dir_path,
             ent_paths,
             index_ents,
+            excluded_paths,
         })
     }
 
