@@ -133,12 +133,15 @@ If --query-encrypted is specified, encrypted tags and metadata are omitted.
 * --format FORMAT:
   Set output format to one of the following 'human', 'jsonl'.
 
-* -q, --quiet:
+* --utc-timestamps:
+  Display and search against timestamps in utc time instead of local time.
+
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
-* --utc-timestamps:
-  Display and search against timestamps in utc time instead of local time.
+* -q, --quiet:
+  Be quiet, implies --no-progress.
 
 ## ENVIRONMENT
 

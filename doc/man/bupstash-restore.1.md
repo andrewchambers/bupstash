@@ -58,12 +58,15 @@ more information on the query cache.
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,
   `$XDG_CACHE_HOME/.cache/bupstash/bupstash.qcache` or `$HOME/.cache/bupstash/bupstash.qcache`.
 
-* -q, --quiet:
+* --utc-timestamps:
+  Display and search against timestamps in utc time instead of local time.
+
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
 
-* --utc-timestamps:
-  Display and search against timestamps in utc time instead of local time.
+* -q, --quiet:
+  Be quiet, implies --no-progress.
 
 ## ENVIRONMENT
 

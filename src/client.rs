@@ -21,6 +21,7 @@ use super::xtar;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::fmt::Write as FmtWrite;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -80,6 +81,8 @@ pub fn init_repository(
     }
 }
 
+type FileActionLogFn = std::rc::Rc<dyn Fn(&str) -> Result<(), anyhow::Error>>;
+
 #[derive(Clone)]
 pub struct SendContext {
     pub progress: indicatif::ProgressBar,
@@ -96,6 +99,7 @@ pub struct SendContext {
     pub want_xattrs: bool,
     pub use_stat_cache: bool,
     pub one_file_system: bool,
+    pub file_action_log_fn: Option<FileActionLogFn>,
 }
 
 struct SendSession<'a, 'b, 'c> {
@@ -119,6 +123,7 @@ struct SendSession<'a, 'b, 'c> {
     r: &'c mut dyn std::io::Read,
     w: &'c mut dyn std::io::Write,
     scratch_buf: Vec<u8>,
+    log_msg_buf: String,
 }
 
 impl<'a, 'b, 'c> htree::Sink for SendSession<'a, 'b, 'c> {
@@ -281,6 +286,26 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         Ok(())
     }
 
+    fn log_file_action(
+        &mut self,
+        action_char: char,
+        kind_char: char,
+        p: &Path,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(ref file_action_log_fn) = self.ctx.file_action_log_fn {
+            self.log_msg_buf.clear();
+            write!(
+                &mut self.log_msg_buf,
+                "{} {} {}",
+                action_char,
+                kind_char,
+                p.display()
+            )?;
+            file_action_log_fn(&self.log_msg_buf)?;
+        }
+        Ok(())
+    }
+
     fn send_dir(
         &mut self,
         paths: Vec<std::path::PathBuf>,
@@ -307,6 +332,10 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             self.ctx
                 .progress
                 .set_message(indexed_dir.dir_path.to_string_lossy().to_string());
+
+            for excluded in indexed_dir.excluded_paths.drain(..) {
+                self.log_file_action('x', '-', &excluded)?;
+            }
 
             let mut hash_state = crypto::HashState::new(Some(&self.ctx.idx_hash_key));
 
@@ -345,6 +374,11 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     assert!(cache_entry.hashes.len() == indexed_dir.index_ents.len());
 
                     for (i, mut index_ent) in indexed_dir.index_ents.drain(..).enumerate() {
+                        self.log_file_action(
+                            '~',
+                            index_ent.type_display_char(),
+                            &indexed_dir.ent_paths[i],
+                        )?;
                         index_ent.data_hash = cache_entry.hashes[i];
                         index_ent.data_cursor = cache_entry.data_cursors[i];
                         self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
@@ -376,15 +410,20 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     for (_, ent_path) in indexed_dir
                         .index_ents
                         .iter()
-                        .zip(indexed_dir.ent_paths.drain(..))
+                        .zip(indexed_dir.ent_paths.iter())
                         .filter(|x| x.0.is_file())
                     {
-                        file_opener.add_to_queue(ent_path);
+                        file_opener.add_to_queue(ent_path.to_path_buf());
                     }
 
-                    'add_dir_ents: for (i, mut index_ent) in
-                        indexed_dir.index_ents.drain(..).enumerate()
+                    'add_dir_ents: for (i, (mut index_ent, index_ent_path)) in indexed_dir
+                        .index_ents
+                        .drain(..)
+                        .zip(indexed_dir.ent_paths.drain(..))
+                        .enumerate()
                     {
+                        self.log_file_action('+', index_ent.type_display_char(), &index_ent_path)?;
+
                         let ent_data_chunk_start_idx =
                             self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
                         let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;
@@ -450,11 +489,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
                     }
 
-                    if self.send_log_session.is_some()
-                        && use_stat_cache
-                        && !smear_detected
-                        && !addresses.is_empty()
-                    {
+                    if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
                         self.send_log_session
                             .as_ref()
                             .unwrap()
@@ -643,6 +678,7 @@ pub fn send(
         w,
         r,
         scratch_buf: vec![0; 512 * 1024],
+        log_msg_buf: String::new(),
     };
 
     match data {

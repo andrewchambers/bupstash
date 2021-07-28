@@ -71,9 +71,12 @@ more information on the query cache.
 * --utc-timestamps:
   Display and search against timestamps in utc time instead of local time.
 
-* -q, --quiet:
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
+
+* -q, --quiet:
+  Be quiet, implies --no-progress.
 
 ## ENVIRONMENT
 

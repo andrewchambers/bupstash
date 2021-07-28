@@ -96,6 +96,44 @@ The following tags are reserved and cannot be set manually:
 - size
 - timestamp
 
+### File actions
+
+`bupstash put` will print a line to stderr for each directory entry
+processed when the --print-file-actions option is set.
+
+Each output line has the form:
+
+```
+$action $type $PATH
+```
+
+With possible actions:
+
+- `+` A file was added to the snapshot.
+- `~` A stat cache hit let us skip sending a file.
+- `x` A path was excluded from the snapshot due to an exclusion rule.
+
+With possible types:
+
+- `f` file
+- `l` symlink
+- `c` char device
+- `b` block device
+- `d` directory
+- `p` fifo
+
+### TIPS
+
+- `bupstash put` deduplicates and compresses data automatically, so avoid putting compressed
+  or encrypted data if you want optimal deduplication and compression. 
+
+- Combine `bupstash serve --allow-put` with ssh force commands to create restricted ssh keys that can
+  only add new backups but not list or remove old ones.
+
+- The difference between piping `tar` command output into `bupstash put`, and using `bupstash put` directly
+  on a directory, is the latter is able to use a send log and avoid reading files that has already
+  been sent to the server, and is able to create a snapshot listing for other commands like bupstash-list-contents(1).
+
 ## OPTIONS
 
 * -r, --repository REPO:
@@ -141,12 +179,21 @@ The following tags are reserved and cannot be set manually:
 * --xattrs:
   Save directory entry xattrs, only used when saving a directory.
 
+* --print-file-actions:
+  Print file actions in the form '$a $t $path' to stderr when processing directories, the section 'File Actions' for details.
+
 * --print-stats:
   Print put statistics to stderr on completion.
 
-* -q, --quiet:
+* --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr
   is not an interactive terminal).
+
+* -q, --quiet:
+  Be quiet, implies --no-progress.
+
+* -v, --verbose:
+  Be verbose, implies --print-file-actions and --print-stats.
 
 ## ENVIRONMENT
 
@@ -214,18 +261,6 @@ $ bupstash put --exec name=dbdump.sql pgdump mydb
 $ export BUPSTASH_REPOSITORY_COMMAND="ssh -F ./my-ssh-config me@$SERVER bupstash serve /my/repo"
 $ bupstash put ./files
 ```
-
-## TIPS
-
-- `bupstash put` deduplicates and compresses data automatically, so avoid putting compressed
-  or encrypted data if you want optimal deduplication and compression. 
-
-- Combine `bupstash serve --allow-put` with ssh force commands to create restricted ssh keys that can
-  only add new backups but not list or remove old ones.
-
-- The difference between piping `tar` command output into `bupstash put`, and using `bupstash put` directly
-  on a directory, is the latter is able to use a send log and avoid reading files that has already
-  been sent to the server, and is able to create a snapshot listing for use with bupstash-list-contents(1).
 
 ## SEE ALSO
 
