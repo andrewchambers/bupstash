@@ -360,7 +360,6 @@ impl Repo {
 
     pub fn add_item(
         &mut self,
-        gc_generation: Xid,
         id: Xid,
         item: oplog::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
@@ -379,10 +378,6 @@ impl Repo {
 
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
         {
-            let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
-            if gc_generation != current_gc_generation {
-                anyhow::bail!("garbage collection invalidated upload, try again");
-            }
             let serialized_md = oplog::checked_serialize_metadata(&item)?;
             let item_path = format!("items/{:x}", id);
             if txn.file_exists(&item_path)? {

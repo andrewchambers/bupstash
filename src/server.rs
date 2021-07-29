@@ -148,11 +148,13 @@ fn recv(
     // Prevent any garbage collection from taking place during send.
     repo.alter_lock_mode(repository::RepoLockMode::Shared)?;
 
+    let item_id = Xid::new();
     let gc_generation = repo.gc_generation()?;
 
     write_packet(
         w,
         &Packet::RBeginSend(RBeginSend {
+            item_id,
             gc_generation,
             has_delta_id: if let Some(delta_id) = begin.delta_id {
                 repo.has_item_with_id(&delta_id)?
@@ -172,11 +174,6 @@ fn recv(
                 write_packet(w, &Packet::RSendSync(stats))?;
             }
             Packet::TAddItem(add_item) => {
-                // This is an extra check that is not currently used, but may be
-                // used for optimistic concurrency such that we do not need to hold repository locks.
-                if add_item.gc_generation != gc_generation {
-                    anyhow::bail!("client sent an unexpected gc_generation");
-                }
 
                 match add_item.item {
                     oplog::VersionedItemMetadata::V3(ref md) => {
@@ -194,7 +191,7 @@ fn recv(
                     _ => anyhow::bail!("server refusing new item with outdated metadata version"),
                 }
 
-                repo.add_item(add_item.gc_generation, add_item.id, add_item.item)?;
+                repo.add_item(item_id, add_item.item)?;
                 write_packet(w, &Packet::RAddItem)?;
                 break;
             }

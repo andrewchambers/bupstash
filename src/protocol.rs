@@ -46,6 +46,7 @@ pub struct TBeginSend {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RBeginSend {
+    pub item_id: Xid,
     pub gc_generation: Xid,
     pub has_delta_id: bool,
 }
@@ -98,8 +99,6 @@ pub struct StorageConnect {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
-    pub gc_generation: Xid,
-    pub id: Xid,
     pub item: oplog::VersionedItemMetadata,
 }
 

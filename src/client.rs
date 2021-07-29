@@ -714,8 +714,6 @@ pub fn send(
 
     let (data_tree, index_tree, stats) = session.finish()?;
 
-    let item_id = Xid::new();
-
     let plain_text_metadata = oplog::V3PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
         unix_timestamp_millis: chrono::Utc::now().timestamp_millis().try_into()?,
@@ -724,7 +722,7 @@ pub fn send(
     };
 
     let e_metadata = oplog::V3SecretItemMetadata {
-        plain_text_hash: plain_text_metadata.hash(&item_id),
+        plain_text_hash: plain_text_metadata.hash(&ack.item_id),
         send_key_id: ctx.send_key_id,
         index_hash_key_part_2: ctx.idx_hash_key.part2.clone(),
         data_hash_key_part_2: ctx.data_hash_key.part2.clone(),
@@ -743,8 +741,6 @@ pub fn send(
     write_packet(
         w,
         &Packet::TAddItem(AddItem {
-            gc_generation: ack.gc_generation,
-            id: item_id,
             item: versioned_metadata,
         }),
     )?;
@@ -752,9 +748,9 @@ pub fn send(
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RAddItem => {
             if let Some(send_log_session) = send_log_session {
-                send_log_session.into_inner().commit(&item_id)?;
+                send_log_session.into_inner().commit(&ack.item_id)?;
             }
-            Ok((item_id, stats))
+            Ok((ack.item_id, stats))
         }
         _ => anyhow::bail!("protocol error, expected an RAddItem packet"),
     }
