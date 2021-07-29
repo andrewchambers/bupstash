@@ -174,7 +174,6 @@ fn recv(
                 write_packet(w, &Packet::RSendSync(stats))?;
             }
             Packet::TAddItem(add_item) => {
-
                 match add_item.item {
                     oplog::VersionedItemMetadata::V3(ref md) => {
                         let item_skew = (md.plain_text_metadata.unix_timestamp_millis as i64)

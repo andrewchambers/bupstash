@@ -577,7 +577,7 @@ impl Repo {
         // Set of item ids we have walked before.
         let mut xid_wset = HashSet::with_capacity(65536);
         // Fixed size cache of addresses we have walked before.
-        let mut address_wcache = acache::ACache::new(1048576); // 32 MiB address cache.
+        let mut address_wcache = acache::ACache::new(1048576);
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
