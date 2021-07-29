@@ -577,7 +577,7 @@ impl Repo {
         // Set of item ids we have walked before.
         let mut xid_wset = HashSet::with_capacity(65536);
         // Fixed size cache of addresses we have walked before.
-        let mut address_wcache = acache::ACache::new(65536);
+        let mut address_wcache = acache::ACache::new(1048576); // 32 MiB address cache.
         // Bloom filter used in the sweep phase.
         let mut reachable = abloom::ABloom::new(reachable_bloom_mem_size);
 
@@ -765,7 +765,7 @@ impl Repo {
 
         if std::env::var("BUPSTASH_DEBUG_GC").is_ok() {
             eprintln!("dbg_gc_estimated_chunk_count={}", estimated_chunk_count);
-            eprintln!("dbg_gc_reachable_bloom_size={}", reachable.mem_size());
+            eprintln!("dbg_gc_reachable_bloom_mem_size={}", reachable.mem_size());
             eprintln!(
                 "dbg_gc_reachable_bloom_utilization={}",
                 reachable.estimate_utilization()
