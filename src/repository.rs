@@ -799,14 +799,14 @@ impl Repo {
         {
             let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
-            let gc_dirty: Option<Xid> = match txn.read_opt_string(&"meta/gc_dirty")? {
+            let gc_dirty: Option<Xid> = match txn.read_opt_string("meta/gc_dirty")? {
                 Some(s) => Some(Xid::parse(&s)?),
                 None => None,
             };
 
             // Only clear this collection dirty flag.
             if gc_dirty == Some(gc_generation) {
-                txn.add_rm(&"meta/gc_dirty");
+                txn.add_rm("meta/gc_dirty");
             }
 
             txn.commit()?;

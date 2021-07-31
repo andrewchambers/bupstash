@@ -859,7 +859,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 continue;
             }
             if collecting_tags {
-                match tag_re.captures(&a) {
+                match tag_re.captures(a) {
                     Some(caps) => {
                         let t = &caps[1];
                         let v = &caps[2];

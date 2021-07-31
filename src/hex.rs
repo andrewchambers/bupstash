@@ -41,7 +41,7 @@ pub fn easy_decode_string(from: &str) -> Result<Vec<u8>, HexError> {
     // Safe because <u8> is a primitive type.
     // and v definitely has capacity for it's own capacity.
     unsafe { v.set_len(n) };
-    match decode_string(&from, &mut v) {
+    match decode_string(from, &mut v) {
         Ok(()) => Ok(v),
         Err(e) => Err(e),
     }

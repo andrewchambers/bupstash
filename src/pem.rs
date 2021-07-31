@@ -179,7 +179,7 @@ impl Pem {
 /// ```
 pub fn parse<B: AsRef<[u8]>>(input: B) -> Result<Pem> {
     ASCII_ARMOR
-        .captures(&input.as_ref())
+        .captures(input.as_ref())
         .ok_or(PemError::MalformedFraming)
         .and_then(Pem::new_from_captures)
 }
@@ -256,7 +256,7 @@ pub fn parse<B: AsRef<[u8]>>(input: B) -> Result<Pem> {
 pub fn parse_many<B: AsRef<[u8]>>(input: B) -> Vec<Pem> {
     // Each time our regex matches a PEM section, we need to decode it.
     ASCII_ARMOR
-        .captures_iter(&input.as_ref())
+        .captures_iter(input.as_ref())
         .filter_map(|caps| Pem::new_from_captures(caps).ok())
         .collect()
 }

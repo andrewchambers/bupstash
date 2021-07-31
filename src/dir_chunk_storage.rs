@@ -317,14 +317,14 @@ impl Engine for DirStorage {
             if pipeline_get_queue.len() >= MAX_READ_WORKERS {
                 let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
                 let data = rx.recv()??;
-                on_chunk(&addr, &data)?;
+                on_chunk(addr, &data)?;
             }
         }
 
         while !pipeline_get_queue.is_empty() {
             let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
             let data = rx.recv()??;
-            on_chunk(&addr, &data)?;
+            on_chunk(addr, &data)?;
         }
 
         Ok(())

@@ -170,7 +170,7 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                     Err(err) => return Err(err),
                 }
-                sync_parent_dir(&dirf, &path)?;
+                sync_parent_dir(dirf, &path)?;
             }
             Err(_) => {
                 panic!("malformed rollback journal")
@@ -390,7 +390,7 @@ impl WriteTxn {
                     }
                     WriteTxnOp::Append(data) => {
                         let mut f = self.dirf.append_file(p, 0o666)?;
-                        f.write_all(&data)?;
+                        f.write_all(data)?;
                         f.sync_all()?;
                         sync_parent_dir(&self.dirf, p)?;
                     }

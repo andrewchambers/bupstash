@@ -58,7 +58,7 @@ impl rusqlite::types::FromSql for Xid {
     fn column_result(v: rusqlite::types::ValueRef) -> rusqlite::types::FromSqlResult<Self> {
         v.as_blob().map(|b| {
             let mut id = Xid::default();
-            id.bytes[..].clone_from_slice(&b);
+            id.bytes[..].clone_from_slice(b);
             id
         })
     }

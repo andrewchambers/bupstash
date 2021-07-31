@@ -433,11 +433,11 @@ pub fn query_matches(q: &Query, ctx: &QueryContext) -> bool {
         Query::Binop {
             op, left, right, ..
         } => match op {
-            Binop::And => query_matches(&left, ctx) && query_matches(&right, ctx),
-            Binop::Or => query_matches(&left, ctx) || query_matches(&right, ctx),
+            Binop::And => query_matches(left, ctx) && query_matches(right, ctx),
+            Binop::Or => query_matches(left, ctx) || query_matches(right, ctx),
         },
         Query::Unop { op, query, .. } => match op {
-            Unop::Not => !query_matches(&query, ctx),
+            Unop::Not => !query_matches(query, ctx),
         },
         Query::AgeAssertion { op, duration, .. } => match op {
             AgeAssertion::OlderThan => ctx.age > *duration,
@@ -459,15 +459,11 @@ pub fn query_matches_encrypted(q: &Query, ctx: &QueryEncryptedContext) -> bool {
         Query::Binop {
             op, left, right, ..
         } => match op {
-            Binop::And => {
-                query_matches_encrypted(&left, ctx) && query_matches_encrypted(&right, ctx)
-            }
-            Binop::Or => {
-                query_matches_encrypted(&left, ctx) || query_matches_encrypted(&right, ctx)
-            }
+            Binop::And => query_matches_encrypted(left, ctx) && query_matches_encrypted(right, ctx),
+            Binop::Or => query_matches_encrypted(left, ctx) || query_matches_encrypted(right, ctx),
         },
         Query::Unop { op, query, .. } => match op {
-            Unop::Not => !query_matches_encrypted(&query, ctx),
+            Unop::Not => !query_matches_encrypted(query, ctx),
         },
         Query::AgeAssertion { .. } => false,
     }

@@ -173,7 +173,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         data: std::vec::Vec<u8>,
     ) -> Result<(), anyhow::Error> {
         let data = self.ctx.data_ectx.encrypt_data(data, self.ctx.compression);
-        self.write_chunk(&addr, data)
+        self.write_chunk(addr, data)
     }
 
     fn encrypt_and_write_idx_chunk(
@@ -186,7 +186,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             .ctx
             .idx_ectx
             .encrypt_data(data, compression::Scheme::Lz4);
-        self.write_chunk(&addr, data)
+        self.write_chunk(addr, data)
     }
 
     fn add_data_chunk(&mut self, data: std::vec::Vec<u8>) -> Result<Address, anyhow::Error> {
@@ -365,7 +365,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 Some(cache_entry) => {
                     let mut data_tw = self.data_tw.take().unwrap();
                     for addr in &cache_entry.addresses {
-                        data_tw.add_data_addr(self, &addr)?;
+                        data_tw.add_data_addr(self, addr)?;
                     }
                     self.data_tw.set(Some(data_tw));
                     self.data_size += cache_entry.total_size;
@@ -960,7 +960,7 @@ fn receive_htree(
             };
 
             let data = dctx.decrypt_data(data)?;
-            if addr != crypto::keyed_content_address(&data, &hash_key) {
+            if addr != crypto::keyed_content_address(&data, hash_key) {
                 return Err(ClientError::CorruptOrTamperedData.into());
             }
             out.write_all(&data)?;
@@ -1101,7 +1101,7 @@ fn receive_indexed_htree_as_tarball(
                 };
 
                 let data = dctx.decrypt_data(data)?;
-                if addr != crypto::keyed_content_address(&data, &hash_key) {
+                if addr != crypto::keyed_content_address(&data, hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }
                 return Ok(Some(data));
@@ -1161,7 +1161,7 @@ fn receive_partial_htree(
                     _ => anyhow::bail!("protocol error, expected chunk packet"),
                 };
                 let data = dctx.decrypt_data(data)?;
-                if chunk_addr != crypto::keyed_content_address(&data, &hash_key) {
+                if chunk_addr != crypto::keyed_content_address(&data, hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }
                 let data = match data_map.incomplete_data_chunks.get(&current_data_chunk_idx) {

@@ -236,7 +236,7 @@ impl EncryptionContext {
     pub fn new(recipient: &BoxPublicKey, psk: &BoxPreSharedKey) -> EncryptionContext {
         let nonce = BoxNonce::new();
         let (ephemeral_pk, ephemeral_sk) = box_keypair();
-        let ephemeral_bk = box_compute_key(recipient, &ephemeral_sk, &psk);
+        let ephemeral_bk = box_compute_key(recipient, &ephemeral_sk, psk);
         EncryptionContext {
             nonce,
             ephemeral_pk,

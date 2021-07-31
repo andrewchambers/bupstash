@@ -159,17 +159,17 @@ pub fn repo_upgrade_to_5(
     let mut schema_version = v.parse::<u64>()?;
 
     if schema_version == 2 {
-        repo_upgrade_2_to_3(db, &repo_path)?;
+        repo_upgrade_2_to_3(db, repo_path)?;
         schema_version = 3;
     }
 
     if schema_version == 3 {
-        repo_upgrade_3_to_4(db, &repo_path)?;
+        repo_upgrade_3_to_4(db, repo_path)?;
         schema_version = 4;
     }
 
     if schema_version == 4 {
-        repo_upgrade_4_to_5(db, &repo_path)?;
+        repo_upgrade_4_to_5(db, repo_path)?;
         schema_version = 5;
     }
 
@@ -198,7 +198,7 @@ pub fn repo_upgrade_to_5_to_6(repo_path: &Path) -> Result<(), anyhow::Error> {
     };
     let lock = fsutil::FileLock::get_exclusive(REPO_LOCK_CTX_TAG, &lock_path)?;
 
-    let mut fstx = fstx::WriteTxn::begin(&repo_path)?;
+    let mut fstx = fstx::WriteTxn::begin(repo_path)?;
     let schema_version = fstx.read_string("meta/schema_version")?;
     if schema_version != "5" {
         anyhow::bail!(

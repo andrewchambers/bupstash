@@ -572,7 +572,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         }
         Packet::RRequestChunkData(ref v) => {
             send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK_DATA, v.len().try_into()?)?;
-            write_to_remote(w, &v)?;
+            write_to_remote(w, v)?;
         }
         Packet::Progress(ref v) => {
             let b = serde_bare::to_vec(v)?;
@@ -618,7 +618,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             write_to_remote(w, &b)?;
         }
         Packet::StorageBeginSweep(ref v) => {
-            return write_begin_sweep(w, &v);
+            return write_begin_sweep(w, v);
         }
         Packet::StorageSweepComplete(ref v) => {
             let b = serde_bare::to_vec(v)?;
