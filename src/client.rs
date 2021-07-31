@@ -552,7 +552,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             idx_tree_meta = Some(idx_tw.finish(&mut self)?);
         }
 
-        self.ctx.progress.set_message("flushing storage...");
+        self.ctx.progress.set_message("syncing storage...");
         self.sync()?;
 
         let stats = SendStats {
