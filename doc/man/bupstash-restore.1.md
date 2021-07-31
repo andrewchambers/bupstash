@@ -89,7 +89,7 @@ more information on the query cache.
   Path to the query cache file to use.
 
 * BUPSTASH_RESTORE_DIR:
-  Path to restore into.
+  Path to restore into, can be used instead of the --into argument.
 
 ## EXAMPLES
 

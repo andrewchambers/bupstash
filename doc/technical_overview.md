@@ -55,7 +55,7 @@ solve this, each data stream has an optional auxillary index data stream.
 The index is a hash tree containing an efficient index of the data.
 
 - A client can fetch and decrypt the index quickly.
-- The index allows partial data requests of the files withing a data stream.
+- The index allows partial data requests of the files within a data stream.
 - When the user requests a data stream, we first check if there is an index,
   if there is, we synthesize a tarball stream client side out of the index and data stream.
 
