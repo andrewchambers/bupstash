@@ -76,7 +76,7 @@ pub enum ItemSyncEvent {
 const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
 const CURRENT_SCHEMA_VERSION: &str = "6";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
-const MAX_GC_BLOOM_SIZE: usize = 4 * 1024 * 1024 * 1024;
+const MAX_GC_BLOOM_SIZE: usize = 0xffffffff; // Current plugin protocol uses 32 bits.
 
 impl Repo {
     pub fn init(
