@@ -88,18 +88,9 @@ impl Repo {
             None => StorageEngineSpec::DirStore,
         };
 
-        let parent = if repo_path.is_absolute() {
-            repo_path.parent().unwrap().to_owned()
-        } else {
-            let abs = std::env::current_dir()?.join(repo_path);
-            let parent = abs.parent().unwrap();
-            parent.to_owned()
-        };
-
-        let mut path_buf = PathBuf::from(&parent);
         if repo_path.exists() {
             anyhow::bail!(
-                "repository already exists at {}",
+                "{} already exists, remove it and try again",
                 repo_path.to_string_lossy().to_string()
             );
         }
@@ -109,10 +100,20 @@ impl Repo {
             .unwrap_or_else(|| std::ffi::OsStr::new(""))
             .to_os_string();
         tmpname.push(".bupstash-repo-init-tmp");
+
+        let parent = if repo_path.is_absolute() {
+            repo_path.parent().unwrap().to_owned()
+        } else {
+            let abs = std::env::current_dir()?.join(repo_path);
+            let parent = abs.parent().unwrap();
+            parent.to_owned()
+        };
+
+        let mut path_buf = PathBuf::from(&parent);
         path_buf.push(&tmpname);
         if path_buf.exists() {
             anyhow::bail!(
-                "temp dir already exists at {}",
+                "temp dir already exists at {}, remove it and try again",
                 path_buf.to_string_lossy().to_string()
             );
         }
