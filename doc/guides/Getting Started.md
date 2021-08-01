@@ -156,8 +156,8 @@ Once we have directory snapshots, we can list the contents using bupstash `list-
 
 ```
 $ bupstash list-contents id=$id
-drwxr-xr-x 0 2020/10/30 13:32:04 .
--rw-r--r-- 9 2020/10/30 13:32:04 data.txt
+drwxr-xr-x 0B 2020/10/30 13:32:04 .
+-rw-r--r-- 9B 2020/10/30 13:32:04 data.txt
 ...
 ```
 

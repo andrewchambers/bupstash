@@ -75,12 +75,40 @@ $ bupstash list name="backup.tar" and hostname="server-1"
 id="bcb8684e6bf5cb453e77486decf61685" name="some-file.txt" hostname="server-1" timestamp="2020/07/27 11:26:16"
 ```
 
+List files in a backup.
+```
+$ bupstash list-contents id=bcb86*
+drwxr-xr-x 0B 2020/10/30 13:32:04 .
+-rw-r--r-- 7B 2020/10/30 13:32:04 hello.txt
+```
+
 Get an item matching a query.
 ```
 $ bupstash get id=bcb8684e6bf5cb453e77486decf61685
 some data...
 
 $ bupstash get id="ebb66*" | tar -C ./restore -xf -
+```
+
+Fetch a single file from a backup.
+```
+$ bupstash get --pick hello.txt id="bcb86*"
+hello!
+```
+
+Diff backups, with local directories or other backups.
+```
+$ bupstash diff ./files :: id="a4b8f*"
+...
+- -rw------- 14.50KiB    2021/08/01 02:36:19 home/ac/.bash_history
++ -rw------- 13.66KiB    2021/08/01 11:51:23 home/ac/.bash_history
+```
+
+Restore backups to a local directory.
+
+```
+$ mkdir restore-dir
+$ bupstash restore --into ./restore-dir id="a4b8f*"
 ```
 
 Remove items matching a query.
