@@ -98,10 +98,10 @@ hello!
 
 Diff backups, with local directories or other backups.
 ```
-$ bupstash diff ./files :: id="a4b8f*"
+$ bupstash diff /home/ac :: id="a4b8f*"
 ...
-- -rw------- 14.50KiB    2021/08/01 02:36:19 home/ac/.bash_history
-+ -rw------- 13.66KiB    2021/08/01 11:51:23 home/ac/.bash_history
+- -rw------- 14.50KiB    2021/08/01 02:36:19 .bash_history
++ -rw------- 13.66KiB    2021/08/01 11:51:23 .bash_history
 ```
 
 Restore backups to a local directory.
