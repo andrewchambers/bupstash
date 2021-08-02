@@ -539,7 +539,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         anyhow::Error,
     > {
         let buffered_data = self.data_chunker.take_buffered();
-        self.add_data_chunk(buffered_data)?;
+        if self.data_size == 0 || !buffered_data.is_empty() {
+            self.add_data_chunk(buffered_data)?;
+        }
         let data_tw = self.data_tw.take().unwrap();
         let data_tree_meta = data_tw.finish(&mut self)?;
         let mut idx_tree_meta = None;
@@ -1076,6 +1078,14 @@ fn write_indexed_data_as_tarball(
     out.write_all(&buf[..])?;
 
     out.flush()?;
+
+    // Do the remaining reads to coordinate the end of stream with the server.
+    while let Some(data) = read_data()? {
+        if !data.is_empty() {
+            anyhow::bail!("possibly corrupt index, expected end of data")
+        }
+    }
+
     Ok(())
 }
 
