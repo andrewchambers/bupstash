@@ -307,23 +307,10 @@ pub struct HTreeDataRange {
     pub end_idx: serde_bare::Uint,
 }
 
+#[derive(Debug)]
 pub struct DataMap {
     pub data_chunk_ranges: Vec<HTreeDataRange>,
     pub incomplete_data_chunks: HashMap<u64, rangemap::RangeSet<usize>>,
-}
-
-impl DataMap {
-    pub fn add_offset(&mut self, offset: u64) {
-        self.incomplete_data_chunks = self
-            .incomplete_data_chunks
-            .drain()
-            .map(|(k, v)| (k + offset, v))
-            .collect();
-        for range in self.data_chunk_ranges.iter_mut() {
-            range.start_idx.0 += offset;
-            range.end_idx.0 += offset;
-        }
-    }
 }
 
 fn add_ent_to_data_map(
