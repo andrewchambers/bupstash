@@ -1377,11 +1377,24 @@ pub fn restore_to_local_dir(
     progress: &indicatif::ProgressBar,
     ctx: RestoreContext,
     content_index: index::CompressedIndex,
-    data_map: Option<index::DataMap>,
+    pick: Option<String>,
     serve_out: &mut dyn std::io::Read,
     serve_in: &mut dyn std::io::Write,
     to_dir: &Path,
 ) -> Result<(), anyhow::Error> {
+    let sub_index = match pick {
+        Some(ref pick) => {
+            progress.set_message("building pick index...");
+            Some(index::pick_dir_without_data(pick, &content_index)?)
+        }
+        None => None,
+    };
+
+    let index_to_diff = match sub_index {
+        Some(ref sub_index) => sub_index,
+        None => &content_index,
+    };
+
     // Initially reset the permissions and groups on everything
     // so we don't need to worry about read only files or other access.
     progress.set_message("preparing directory...");
@@ -1442,7 +1455,7 @@ pub fn restore_to_local_dir(
         ciw.finish()
     };
 
-    progress.set_message("computing content diff...");
+    progress.set_message("calculating content diff...");
     let mut to_remove = Vec::with_capacity(512);
     let mut new_dirs = Vec::with_capacity(512);
     let mut create_path_set = HashSet::with_capacity(512);
@@ -1451,9 +1464,15 @@ pub fn restore_to_local_dir(
     let mut downloads = Vec::with_capacity(512);
 
     {
+        let download_path_prefix = match pick {
+            Some(ref pick) if pick == "." => "".to_string(),
+            Some(ref pick) => format!("{}/", pick),
+            None => "".to_string(),
+        };
+
         index::diff(
             &to_dir_index,
-            &content_index,
+            index_to_diff,
             !(index::INDEX_COMPARE_MASK_TYPE
                 | index::INDEX_COMPARE_MASK_LINK_TARGET
                 | index::INDEX_COMPARE_MASK_DEVNOS
@@ -1468,7 +1487,9 @@ pub fn restore_to_local_dir(
                         if e.is_dir() {
                             new_dirs.push(PathBuf::from(&e.path));
                         } else if e.is_file() {
-                            download_index_path_set.insert(e.path.clone());
+                            // Mapping back to the path in the unpicked index.
+                            download_index_path_set
+                                .insert(format!("{}{}", download_path_prefix, e.path));
                             downloads.push((e.path.clone(), e.size.0, e.data_hash));
                         } else {
                             create_path_set.insert(e.path.clone());
@@ -1512,17 +1533,15 @@ pub fn restore_to_local_dir(
     std::mem::drop(new_dirs);
 
     if !download_index_path_set.is_empty() {
-        progress.set_message("fetching files...");
+        progress.set_message("calculating fetch set...");
 
-        let mut fetch_data_map = index::data_map_for_predicate(&content_index, &|e| {
+        let fetch_data_map = index::data_map_for_predicate(&content_index, &|e| {
             download_index_path_set.contains(&e.path)
         })?;
 
-        if let Some(data_map) = data_map {
-            if let Some(start_range) = data_map.data_chunk_ranges.first() {
-                fetch_data_map.add_offset(start_range.start_idx.0);
-            }
-        }
+        std::mem::drop(download_index_path_set);
+
+        progress.set_message("fetching files...");
 
         let (mut r, mut w) = ioutil::buffered_pipe(3 * 1024 * 1024); // Sized to cover most packets in one allocation.
 
@@ -1584,7 +1603,6 @@ pub fn restore_to_local_dir(
             Err(err) => return Err(err.into()),
         };
     }
-    std::mem::drop(download_index_path_set);
 
     if !create_path_set.is_empty() {
         progress.set_message("creating special files and devices...");
@@ -1722,7 +1740,7 @@ pub fn restore_to_local_dir(
     {
         index::diff(
             &to_dir_index,
-            &content_index,
+            index_to_diff,
             !(index::INDEX_COMPARE_MASK_PERMS | index::INDEX_COMPARE_MASK_XATTRS),
             &mut |ds: index::DiffStat, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
                 if matches!(ds, index::DiffStat::Removed) {

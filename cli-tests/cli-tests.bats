@@ -774,13 +774,130 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
 }
 
-@test "pick fuzz torture" {
+@test "restore torture" {
+  
+  if test -z "$BUPSTASH_TORTURE_DIR"
+  then
+    skip "Set BUPSTASH_TORTURE_DIR to run this test."
+  fi
+
+  restore_dir="$SCRATCH/restore_dir"
+  copy_dir="$SCRATCH/copy_dir"
+  # Put twice so we test caching code paths.
+  id1=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+  id2=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+
+  for id in $(echo $id1 $id2)
+  do
+    for d in $(cd "$BUPSTASH_TORTURE_DIR" ; find . -type d | sed 's,^\./,,g')
+    do
+      rm -rf "$copy_dir" "$restore_dir"
+      mkdir "$copy_dir" "$restore_dir"
+
+      tar -C "$BUPSTASH_TORTURE_DIR/$d" -cf - . | tar -C "$copy_dir" -xf -
+      bupstash restore --into "$restore_dir" --pick "$d" "id=$id"
+
+      diff -u \
+        <(cd "$restore_dir" ; find . | sort) \
+        <(cd "$copy_dir" ; find . | sort)
+
+      for f in $(cd "$copy_dir" ; find . -type f | cut -c 3-)
+      do
+        cmp "$copy_dir/$f" "$restore_dir/$f"
+      done
+    done
+  done
+}
+
+@test "restore fuzz torture" {
   
   rand_dir="$SCRATCH/random_dir"
   restore_dir="$SCRATCH/restore_dir"
   copy_dir="$SCRATCH/copy_dir"
 
-  for i in `seq 100`
+  for i in `seq 50`
+  do
+    rm -rf "$rand_dir"
+
+    "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
+
+    # Put twice so we test caching code paths.
+    id1=$(bupstash put :: "$rand_dir")
+    id2=$(bupstash put :: "$rand_dir")
+
+    for id in $(echo $id1 $id2)
+    do
+      for d in $(cd "$rand_dir" ; find . -type d | sed 's,^\./,,g')
+      do
+        rm -rf "$copy_dir" "$restore_dir"
+        mkdir "$copy_dir" "$restore_dir"
+
+        tar -C "$rand_dir/$d" -cf - . | tar -C "$copy_dir" -xf -
+        bupstash restore --into "$restore_dir" --pick "$d" "id=$id"
+
+        diff -u \
+          <(cd "$restore_dir" ; find . | sort) \
+          <(cd "$copy_dir" ; find . | sort)
+
+        for f in $(cd "$copy_dir" ; find . -type f | cut -c 3-)
+        do
+          cmp "$copy_dir/$f" "$restore_dir/$f"
+        done
+      done
+      bupstash rm id=$id
+    done
+
+    bupstash gc
+  done
+}
+
+@test "get pick torture" {
+  
+  if test -z "$BUPSTASH_TORTURE_DIR"
+  then
+    skip "Set BUPSTASH_TORTURE_DIR to run this test."
+  fi
+
+  restore_dir="$SCRATCH/restore_dir"
+  copy_dir="$SCRATCH/copy_dir"
+  # Put twice so we test caching code paths.
+  id1=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+  id2=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+
+  for id in $(echo $id1 $id2)
+  do
+    for f in $(cd "$BUPSTASH_TORTURE_DIR" ; find . -type f | cut -c 3-)
+    do
+      cmp <(bupstash get --pick "$f"  "id=$id") "$BUPSTASH_TORTURE_DIR/$f"
+    done
+
+    for d in $(cd "$BUPSTASH_TORTURE_DIR" ; find . -type d | sed 's,^\./,,g')
+    do
+      rm -rf "$copy_dir" "$restore_dir"
+      mkdir "$copy_dir" "$restore_dir"
+
+      tar -C "$BUPSTASH_TORTURE_DIR/$d" -cf - . | tar -C "$copy_dir" -xf -
+      bupstash get --pick "$d" "id=$id" | tar -C "$restore_dir" -xf -
+
+      diff -u \
+        <(cd "$restore_dir" ; find . | sort) \
+        <(cd "$copy_dir" ; find . | sort)
+
+      for f in $(cd "$copy_dir" ; find . -type f | cut -c 3-)
+      do
+        cmp "$copy_dir/$f" "$restore_dir/$f"
+      done
+    done
+  done
+}
+
+@test "get pick fuzz torture" {
+  
+  rand_dir="$SCRATCH/random_dir"
+  restore_dir="$SCRATCH/restore_dir"
+  copy_dir="$SCRATCH/copy_dir"
+
+  for i in `seq 50`
   do
     rm -rf "$rand_dir"
 

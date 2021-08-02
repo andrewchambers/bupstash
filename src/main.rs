@@ -2306,15 +2306,6 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("restore is only supported for directory snapshots created by bupstash");
     };
 
-    let (content_index, data_map) = if let Some(ref pick_path) = matches.opt_str("pick") {
-        match index::pick(pick_path, &content_index)? {
-            (Some(content_index), data_map) => (content_index, Some(data_map)),
-            _ => anyhow::bail!("the given pick was not a directory"),
-        }
-    } else {
-        (content_index, None)
-    };
-
     client::restore_to_local_dir(
         &progress,
         client::RestoreContext {
@@ -2330,7 +2321,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             restore_xattrs: matches.opt_present("xattrs"),
         },
         content_index,
-        data_map,
+        matches.opt_str("pick"),
         &mut serve_out,
         &mut serve_in,
         &into_dir,
