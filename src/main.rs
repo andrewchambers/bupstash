@@ -41,6 +41,7 @@ use std::path::{Path, PathBuf};
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
+    let _ = std::io::stderr().flush();
     std::process::exit(1);
 }
 
@@ -1314,7 +1315,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     // rust line buffers stdin and stdout unconditionally, so bypass it.
     let mut stdout_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDOUT_FILENO) };
 
-    client::request_data_stream(
+    let result = client::request_data_stream(
         client::DataRequestContext {
             primary_key_id,
             data_hash_key_part_1,
@@ -1328,10 +1329,13 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &mut serve_out,
         &mut serve_in,
         &mut stdout_unbuffered,
-    )?;
+    );
 
     // Prevent stdout from being closed prematurely.
     stdout_unbuffered.into_raw_fd();
+
+    // Now that we dropped out stdout handle, it is safe to return on error.
+    result?;
 
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
@@ -2409,7 +2413,8 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut stdin_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDIN_FILENO) };
     let mut stdout_unbuffered = unsafe { std::fs::File::from_raw_fd(libc::STDOUT_FILENO) };
 
-    server::serve(
+    // preserve result until we have disposed of our stdin/stdout files.
+    let result = server::serve(
         server::ServerConfig {
             allow_init,
             allow_put,
@@ -2421,13 +2426,13 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         &mut stdin_unbuffered,
         &mut stdout_unbuffered,
-    )?;
+    );
 
     // Prevent stdin/stdout form being closed.
     stdin_unbuffered.into_raw_fd();
     stdout_unbuffered.into_raw_fd();
 
-    Ok(())
+    result
 }
 
 fn main() {
