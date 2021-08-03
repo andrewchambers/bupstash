@@ -149,8 +149,8 @@ $ ronn -r *.md
 ```
 $ sh support/src-release.sh $tag
 $ echo bupstash-*.tar.gz
-bupstash-v0.7.0-man.tar.gz
-bupstash-v0.7.0-src+deps.tar.gz
+bupstash-$version-man.tar.gz
+bupstash-$version-src+deps.tar.gz
 ```
 
 ## Test suites
