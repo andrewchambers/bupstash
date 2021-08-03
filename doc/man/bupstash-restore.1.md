@@ -34,7 +34,7 @@ more information on the query cache.
 ## OPTIONS
 
 * --into PATH:
-  Directory to restore files into, defaults to $BUPSTASH_CHECKOUT_DIR.
+  Directory to restore files into, defaults to `BUPSTASH_RESTORE_DIR`.
 
 * -r, --repository REPO:
   The repository to connect to, , may be of the form `ssh://$SERVER/$PATH` for
