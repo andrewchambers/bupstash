@@ -176,7 +176,7 @@ mod tests {
                 eprintln!("estimated_utilization={}", abloom.estimate_utilization());
                 eprintln!("prediction_delta={}", prediction_delta);
                 // This test relies on probabilities to pass, if it is flaky, we can tune it.
-                assert!(prediction_delta < 0.015);
+                assert!(prediction_delta < 0.020);
             }
         }
     }
