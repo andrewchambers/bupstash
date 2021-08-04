@@ -1,6 +1,6 @@
-// fprefetcher is a file opening queue used by the put path.
+// fprefetcher is a file opening queue used by the put command.
 // The idea is there is a queue of files you are interested
-// in reading in the near future and it let's the OS know the
+// in reading in the near future and it lets the OS know the
 // intention via whatever readahead mechanism your OS provides.
 
 use std::collections::VecDeque;
