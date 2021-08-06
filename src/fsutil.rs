@@ -339,14 +339,14 @@ pub fn likely_smear_error(err: &std::io::Error) -> bool {
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
-        // XXX These functions need testing...
+
         pub fn makedev(major: u64, minor: u64) -> libc::dev_t
         {
             ((major << 24) | minor) as libc::dev_t
         }
 
         pub fn dev_major(dev: u64) -> u64 {
-            return (dev >> 24) & 0xff
+            (dev >> 24) & 0xff
         }
 
         pub fn dev_minor(dev :u64) -> u64 {
