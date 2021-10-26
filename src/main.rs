@@ -2344,7 +2344,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag(
         "",
         "allow-init",
-        "Allow client to initialize the remote repository if it doesn't exist.",
+        "Allow the client to initialize new repositories.",
     );
     opts.optflag(
         "",
