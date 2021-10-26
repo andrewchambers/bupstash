@@ -74,12 +74,16 @@ teardown () {
 
 @test "put name override" {
   mkdir "$SCRATCH/d"
+  mkdir "$SCRATCH/d/e"
+  mkdir "$SCRATCH/d/f"
   echo foo > "$SCRATCH/d/foo.txt"
 
   id="$(bupstash put name=x.tar "$SCRATCH/d")"
   id="$(bupstash put name=foo "$SCRATCH/d/foo.txt")"
+  id="$(bupstash put name=bar.tar "$SCRATCH/d/e" "$SCRATCH/d/f")"
   bupstash get name=x.tar > /dev/null
   bupstash get name=foo > /dev/null
+  bupstash get name=bar.tar > /dev/null
 }
 
 @test "random data" {

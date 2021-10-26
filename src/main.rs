@@ -1056,10 +1056,10 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             absolute_paths.push(input_path)
         }
 
-        // We should always have at least "/" in common.
-        let base_path = fsutil::common_path_all(&absolute_paths).unwrap();
+        if default_tags && !tags.contains_key("name") {
+            // We should always have at least "/" in common.
+            let base_path = fsutil::common_path_all(&absolute_paths).unwrap();
 
-        if default_tags {
             let name = match base_path.file_name() {
                 Some(name) => name.to_string_lossy().to_string() + ".tar",
                 None => "rootfs.tar".to_string(),
