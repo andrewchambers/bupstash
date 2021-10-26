@@ -755,7 +755,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             serde_json::to_string(&v)?
                         )?;
                     }
-                    writeln!(out, "}}")?;
+                    write!(out, "}}")?;
                     writeln!(out, "}}")?;
                 }
                 ListFormat::Bare => anyhow::bail!("unsupported list format"),
