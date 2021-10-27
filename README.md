@@ -27,7 +27,7 @@ Bupstash was designed to have:
 
 ## Stability and Backwards Compatibility
 
-Bupstash is alpha software, while all efforts are made to keep bupstash bug free, we currently recommend
+Bupstash is beta software, while all efforts are made to keep bupstash bug free, we currently recommend
 using bupstash for making *REDUNDANT* backups where failure can be tolerated.
 
 The repository format is approaching stability, and will not be changed
