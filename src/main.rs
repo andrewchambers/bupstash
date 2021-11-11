@@ -835,7 +835,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optmulti(
         "",
         "exclude",
-        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.",
+        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.\
+        Paths are absolute as they are currently mounted, and must start with a slash and not end on one even for directories.\
+        Patterns without any slashes will match any file (`--exclude foo` is equivalent to `--exclude '/**/foo'`).",
         "PATTERN",
     );
     opts.optflag(
@@ -893,11 +895,40 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
     let mut exclusions = Vec::new();
-    for e in matches.opt_strs("exclude") {
-        match glob::Pattern::new(&e) {
-            Ok(pattern) => exclusions.push(pattern),
-            Err(err) => anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
+    for mut e in matches.opt_strs("exclude") {
+        /* Sanity checks. Beware, the order of the checks matters */
+
+        /* An exclude path ending on / won't match anything. */
+        if e.ends_with('/') {
+            anyhow::bail!("--exclude option '{}' ends with '/', so it won't match anything", e);
         }
+        
+        /* This check is technically redundant, but it gives a nicer error message. */
+        if e.starts_with("./") {
+            anyhow::bail!("No relative paths in --exclude");
+        }
+
+        /* Start with a / to match a path, and leave out slashes to match any file. */
+        if e.starts_with('/') {
+            /* pass */
+        } else if e.contains('/') {
+            anyhow::bail!("--exclude option '{}' must start with a '/'", e);
+        } else {
+            /* Just a file name */
+            e = format!("/**/{}", e);
+        }
+
+        /* Check for unnormalized segments, as they too won't match anything 
+         * Note that this may interfere with range syntax: `[/./]`. However, these would make no
+         * sense as a range because each character is only given once.
+         */
+        if e.contains("/./") || e.contains("/../") || e.ends_with("/.") || e.ends_with("/..") {
+            anyhow::bail!("--exclude option '{}' must be normalized (no '.' and '..' segments)", e);
+        }
+
+        let pattern = glob::Pattern::new(&e)
+            .map_err(|err| anyhow::format_err!("--exclude option '{}' is not a valid glob: {}", e, err))?;
+        exclusions.push(pattern);
     }
 
     let one_file_system = matches.opt_present("one-file-system");
