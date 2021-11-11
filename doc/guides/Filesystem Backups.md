@@ -49,7 +49,7 @@ Some points to consider about this snapshot method:
 
 - The use of --exclude to omit the user cache directories, we can save a lot of space in backups by ignoring things
   like out web browser cache, at the expense of less complete backups. You can specify --exclude more than once to
-  skip more than one directory or file.
+  skip more than one directory or file. See the man page for more details.
 
 - Bupstash incremental backups work best when the send log file used was last used for a snapshot of the same or similar input data.
   Manually specifying a send log path with --send-log ensures subsequent similar snapshots use the same send log, often dramatically increasing efficiency.
