@@ -160,7 +160,7 @@ Install bash automated test framework and run the following to run both the unit
 ```
 $ cargo test
 $ cargo build --release
-$ export PATH=`pwd`/target/release:$PATH
+$ export PATH=${CARGO_TARGET_DIR:-$PWD/target}/release:$PATH
 $ bats ./cli-tests
 ```
 
