@@ -378,20 +378,43 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
-@test "directory exclusions" {
+# Test the exclusion globbing
+@test "backup exclusions" {
   mkdir "$SCRATCH/foo"
-  mkdir "$SCRATCH/foo/bar"
-  mkdir "$SCRATCH/foo/bar/baz"
   touch "$SCRATCH/foo/bang"
+  mkdir "$SCRATCH/foo/bar"
+  touch "$SCRATCH/foo/bar/bang"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bar/baz/bang"
 
+  # No exclude, everything should be in
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  test 6 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
-  id=$(bupstash put --exclude="*/bang" :: "$SCRATCH/foo")
+  # Exclude on multiple levels
+  # As expected, this also excludes $SCRATCH/foo/bang
+  id=$(bupstash put --exclude="$SCRATCH/foo/**/bang" :: "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
-  id=$(bupstash put --exclude="*/bar" :: "$SCRATCH/foo")
-  test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  # Exclude on multiple levels (should be the same)
+  id=$(bupstash put --exclude="/**/bang" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+
+  # Exclude on a single level
+  # We want /foo /foo/bar /foo/bar/baz /foo/bang /foo/bar/baz/bang (that one's important)
+  id=$(bupstash put --exclude="$SCRATCH/foo/*/bang" :: "$SCRATCH/foo")
+  test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  
+  # Exclude on a single level, but wrongly so (nothing gets excluded)
+  id=$(bupstash put --exclude="/*/bang" :: "$SCRATCH/foo")
+  test 6 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  
+  # Same thing, but using the "match on name" shorthand (no slashes = only file name)
+  id=$(bupstash put --exclude="bang" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+
+  # Invalid exclusion regex
+  ! bupstash put --exclude="*/bar" :: "$SCRATCH/foo"
 }
 
 @test "checkpoint plain data" {
