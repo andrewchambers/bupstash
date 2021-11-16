@@ -309,7 +309,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
     fn send_dir(
         &mut self,
         paths: Vec<std::path::PathBuf>,
-        exclusions: Vec<glob::Pattern>,
+        exclusions: globset::GlobSet,
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
@@ -600,7 +600,7 @@ pub enum DataSource {
     },
     Filesystem {
         paths: Vec<std::path::PathBuf>,
-        exclusions: Vec<glob::Pattern>,
+        exclusions: globset::GlobSet,
     },
 }
 
@@ -1441,7 +1441,7 @@ pub fn restore_to_local_dir(
         for indexed_dir in indexer::FsIndexer::new(
             &[to_dir.to_owned()],
             indexer::FsIndexerOptions {
-                exclusions: vec![],
+                exclusions: globset::GlobSet::empty(),
                 want_xattrs: false,
                 want_hash: true,
                 one_file_system: false,

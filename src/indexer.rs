@@ -244,7 +244,7 @@ pub struct FsIndexer {
 }
 
 pub struct FsIndexerOptions {
-    pub exclusions: Vec<glob::Pattern>,
+    pub exclusions: globset::GlobSet,
     pub want_xattrs: bool,
     pub want_hash: bool,
     pub one_file_system: bool,
@@ -428,13 +428,12 @@ impl FsIndexer {
         let mut to_recurse = Vec::new();
 
         dir_ent_paths.retain(|p| {
-            for excl in self.opts.exclusions.iter() {
-                if excl.matches_path(p) {
-                    excluded_paths.push(p.to_owned());
-                    return false;
-                }
+            if self.opts.exclusions.is_match(p) {
+                excluded_paths.push(p.to_owned());
+                false
+            } else {
+                true
             }
-            true
         });
 
         let mut dir_ents = self.metadata_fetcher.parallel_get_metadata(dir_ent_paths);
