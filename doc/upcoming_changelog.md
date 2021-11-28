@@ -1,0 +1,3 @@
+- Remove the --no-compression flag.
+- Add --compression=none|lz4|zstd[:$level] option to specify the compression algorithm.
+- Change the default compression algorithm from lz4 to zstd:3.

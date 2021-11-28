@@ -68,7 +68,7 @@ teardown () {
 @test "simple put/get no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put --no-compression -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put --compression=none -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 

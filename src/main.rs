@@ -789,7 +789,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Primary or put key to encrypt data with.",
         "PATH",
     );
-    opts.optflag("", "no-compression", "Disable data compression.");
+    opts.optopt(
+        "",
+        "compression",
+        "Compression algorithm, one of 'none', 'lz4' or 'zstd'[:$level]. Defaults to 'zstd:3'.",
+        "COMPRESS",
+    );
     opts.optflag("", "no-default-tags", "Disable the default tag(s) 'name'.");
     opts.optflag(
         "v",
@@ -879,10 +884,11 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let want_xattrs = matches.opt_present("xattrs");
 
-    let compression = if matches.opt_present("no-compression") {
-        compression::Scheme::None
-    } else {
-        compression::Scheme::Lz4
+    let compression = {
+        let scheme = matches
+            .opt_str("compression")
+            .unwrap_or_else(|| "zstd:3".to_string());
+        compression::parse_scheme(&scheme)?
     };
 
     let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
