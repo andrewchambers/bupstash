@@ -169,9 +169,9 @@ With possible types:
 * --no-default-tags:
   Do no set default tags.
 
-* --no-compression:
-  Disable compression of data chunks, generally should only be used
-  if the input data is uncompressible and you wish to increase throughput.
+* --compression ALGO:
+  Compression algorithm, one of 'none', 'lz4' or 'zstd[:$level]'.
+  Defaults to 'zstd:3'.
 
 * --one-file-system:
   Do not traverse mount points in the file system.

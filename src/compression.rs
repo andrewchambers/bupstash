@@ -1,5 +1,8 @@
-pub const COMPRESS_FOOTER_NO_COMPRESSION: u8 = 0;
-pub const COMPRESS_FOOTER_LZ4_COMPRESSED: u8 = 1;
+use std::convert::TryInto;
+
+pub const COMPRESS_FOOTER_NONE: u8 = 0;
+pub const COMPRESS_FOOTER_LZ4: u8 = 1;
+pub const COMPRESS_FOOTER_ZSTD: u8 = 2;
 
 pub const COMPRESS_MAX_SIZE: usize = 67108864;
 
@@ -7,75 +10,109 @@ pub const COMPRESS_MAX_SIZE: usize = 67108864;
 pub enum Scheme {
     None,
     Lz4,
+    Zstd { level: i32 },
 }
 
-fn noop_compress_chunk(mut data: Vec<u8>) -> Vec<u8> {
-    data.push(COMPRESS_FOOTER_NO_COMPRESSION);
-    data
+pub fn parse_scheme(s: &str) -> Result<Scheme, anyhow::Error> {
+    if s == "none" {
+        return Ok(Scheme::None);
+    }
+    if s == "lz4" {
+        return Ok(Scheme::Lz4);
+    }
+    if s == "zstd" {
+        return Ok(Scheme::Zstd { level: 3 });
+    }
+
+    if s.starts_with("zstd:") {
+        let spec_parts: Vec<&str> = s.split(':').collect();
+        if spec_parts.len() != 2 {
+            anyhow::bail!("invalid zstd compression level, expected a number");
+        }
+        match spec_parts[1].parse() {
+            Ok(level) => {
+                if !(1..=19).contains(&level) {
+                    anyhow::bail!("zstd compression level must be in the range 1-19");
+                }
+                return Ok(Scheme::Zstd { level });
+            }
+            Err(_) => anyhow::bail!("zstd compression level must be a number"),
+        }
+    }
+    anyhow::bail!("invalid compression scheme, expected one of none, lz4, zstd[:$level]")
 }
 
-fn lz4_compress_chunk(data: Vec<u8>) -> Vec<u8> {
-    // Our max chunk and packet sizes means this should never happen.
+pub fn compress(scheme: Scheme, mut data: Vec<u8>) -> Vec<u8> {
     assert!(data.len() <= COMPRESS_MAX_SIZE);
-    let mut compressed_data = lz4::block::compress(&data, None, false).unwrap();
-    if (compressed_data.len() + 4) >= data.len() {
-        noop_compress_chunk(data)
-    } else {
-        compressed_data.reserve(5);
-        let sz = data.len() as u32;
-        compressed_data.push((sz & 0x000000ff) as u8);
-        compressed_data.push(((sz & 0x0000ff00) >> 8) as u8);
-        compressed_data.push(((sz & 0x00ff0000) >> 16) as u8);
-        compressed_data.push(((sz & 0xff000000) >> 24) as u8);
-        compressed_data.push(COMPRESS_FOOTER_LZ4_COMPRESSED);
-        compressed_data
-    }
-}
 
-pub fn compress(scheme: Scheme, data: Vec<u8>) -> Vec<u8> {
-    match scheme {
-        Scheme::None => noop_compress_chunk(data),
-        Scheme::Lz4 => lz4_compress_chunk(data),
+    let compressed_data = match scheme {
+        Scheme::None => {
+            data.push(COMPRESS_FOOTER_NONE);
+            return data;
+        }
+        Scheme::Lz4 => {
+            let mut compressed_data = lz4::block::compress(&data, None, false).unwrap();
+            compressed_data.reserve(5);
+            let sz = data.len() as u32;
+            compressed_data.extend_from_slice(&u32::to_le_bytes(sz)[..]);
+            compressed_data.push(COMPRESS_FOOTER_LZ4);
+            compressed_data
+        }
+        Scheme::Zstd { level } => {
+            let mut compressed_data: Vec<u8> =
+                Vec::with_capacity(zstd_safe::compress_bound(data.len()) + 1);
+            zstd_safe::compress(&mut compressed_data, &data, level).unwrap();
+            compressed_data.push(COMPRESS_FOOTER_ZSTD);
+            compressed_data
+        }
+    };
+
+    if (compressed_data.len()) > data.len() {
+        data.push(COMPRESS_FOOTER_NONE);
+        return data;
     }
+
+    compressed_data
 }
 
 pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
-    if data.is_empty() {
-        anyhow::bail!("data buffer too small, missing compression footer");
-    }
-
-    let data = match data[data.len() - 1] {
-        footer if footer == COMPRESS_FOOTER_NO_COMPRESSION => {
-            data.pop();
-            data
-        }
-        footer if footer == COMPRESS_FOOTER_LZ4_COMPRESSED => {
-            data.pop();
+    match data.pop() {
+        Some(COMPRESS_FOOTER_NONE) => Ok(data),
+        Some(COMPRESS_FOOTER_LZ4) => {
             if data.len() < 4 {
-                anyhow::bail!("data corrupt - lz4 data footer missing decompressed size");
+                anyhow::bail!("data corrupt - compression footer missing decompressed size");
             }
             let data_len = data.len();
-            let decompressed_sz = (((data[data_len - 1] as u32) << 24)
-                | ((data[data_len - 2] as u32) << 16)
-                | ((data[data_len - 3] as u32) << 8)
-                | (data[data_len - 4] as u32)) as usize;
+            let decompressed_sz =
+                u32::from_le_bytes(data[data_len - 4..data_len].try_into().unwrap()) as usize;
             // This limit helps prevent bad actors from causing ooms, bupstash
             // naturally limits chunks and metadata to a max size that is well below this.
             if decompressed_sz > COMPRESS_MAX_SIZE {
                 anyhow::bail!("data corrupt - decompressed size is larger than application limits");
             }
             data.truncate(data.len() - 4);
-            lz4::block::decompress(&data, Some(decompressed_sz as i32))?
+            Ok(lz4::block::decompress(&data, Some(decompressed_sz as i32))?)
         }
-        _ => anyhow::bail!("unknown compression type in footer"),
-    };
-    Ok(data)
+        Some(COMPRESS_FOOTER_ZSTD) => {
+            let max_decompressed_sz = zstd_safe::decompress_bound(&data)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let mut decompressed: Vec<u8> = Vec::with_capacity(max_decompressed_sz);
+            match zstd_safe::decompress(&mut decompressed, &data) {
+                Ok(_) => Ok(decompressed),
+                Err(_) => anyhow::bail!("error during zstd decompression"),
+            }
+        }
+        Some(_) => anyhow::bail!("unknown decompression footer, don't know how to decompress data"),
+        None => anyhow::bail!("data missing compression footer"),
+    }
 }
 
 pub fn unauthenticated_decompress(data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
     match data.last() {
         None => anyhow::bail!("data buffer too small, missing compression footer"),
-        Some(f) if *f == COMPRESS_FOOTER_NO_COMPRESSION => decompress(data),
+        Some(f) if *f == COMPRESS_FOOTER_NONE => decompress(data),
         // Once we are confident in the security/memory safety of our decompression function,
         // we can shift to enabling compression of the unauthenticated data.
         Some(f) => anyhow::bail!(
