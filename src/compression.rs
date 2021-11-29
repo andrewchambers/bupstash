@@ -104,7 +104,7 @@ pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
                 Err(_) => anyhow::bail!("error during zstd decompression"),
             }
         }
-        Some(_) => anyhow::bail!("unknown decompression footer, don't know how to decompress data"),
+        Some(_) => anyhow::bail!("unknown decompression footer, don't know how to decompress data (possibly compressed by a newer version of bupstash)"),
         None => anyhow::bail!("data missing compression footer"),
     }
 }
