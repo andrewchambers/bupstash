@@ -94,10 +94,14 @@ pub fn decompress(mut data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
             Ok(lz4::block::decompress(&data, Some(decompressed_sz as i32))?)
         }
         Some(COMPRESS_FOOTER_ZSTD) => {
+            // Zstd should read it's internal frame header to get an accurate size.
             let max_decompressed_sz = zstd_safe::decompress_bound(&data)
                 .unwrap()
                 .try_into()
                 .unwrap();
+            if max_decompressed_sz > COMPRESS_MAX_SIZE {
+                anyhow::bail!("data corrupt - decompressed size is larger than application limits");
+            }
             let mut decompressed: Vec<u8> = Vec::with_capacity(max_decompressed_sz);
             match zstd_safe::decompress(&mut decompressed, &data) {
                 Ok(_) => Ok(decompressed),
