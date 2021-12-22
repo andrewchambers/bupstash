@@ -840,6 +840,13 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         Patterns without any slashes will match any file (`--exclude foo` is equivalent to `--exclude '/**/foo'`).",
         "PATTERN",
     );
+    opts.optmulti(
+        "",
+        "exclude-if-present",
+        "[EXPERIMENTAL] Exclude a directory's content if it contains a file with the given name. May be passed multiple times.\
+        This will still backup the folder itself, empty. Common marker file names are `CACHEDIR.TAG`, `.backupexclude` or `.no-backup`.",
+        "FILENAME",
+    );
     opts.optflag(
         "",
         "one-file-system",
@@ -900,9 +907,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         /* An exclude path ending on / won't match anything. */
         if e.ends_with('/') {
-            anyhow::bail!("--exclude option '{}' ends with '/', so it won't match anything", e);
+            anyhow::bail!(
+                "--exclude option '{}' ends with '/', so it won't match anything",
+                e
+            );
         }
-        
+
         /* This check is technically redundant, but it gives a nicer error message. */
         if e.starts_with("./") {
             anyhow::bail!("No relative paths in --exclude");
@@ -918,23 +928,29 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             e = format!("/**/{}", e);
         }
 
-        /* Check for unnormalized segments, as they too won't match anything 
+        /* Check for unnormalized segments, as they too won't match anything
          * Note that this may interfere with range syntax: `[/./]`. However, these would make no
          * sense as a range because each character is only given once.
          */
         if e.contains("/./") || e.contains("/../") || e.ends_with("/.") || e.ends_with("/..") {
-            anyhow::bail!("--exclude option '{}' must be normalized (no '.' and '..' segments)", e);
+            anyhow::bail!(
+                "--exclude option '{}' must be normalized (no '.' and '..' segments)",
+                e
+            );
         }
 
         let mut pattern = globset::GlobBuilder::new(&e);
         /* For some reason, the default doesn't give us the common behavior one would expect. */
         pattern.literal_separator(true);
         pattern.backslash_escape(true);
-        let pattern = pattern.build()
-            .map_err(|err| anyhow::format_err!("--exclude option '{}' is not a valid glob: {}", e, err))?;
+        let pattern = pattern.build().map_err(|err| {
+            anyhow::format_err!("--exclude option '{}' is not a valid glob: {}", e, err)
+        })?;
         exclusions.add(pattern);
     }
     let exclusions = exclusions.build()?;
+
+    let exclusion_markers = matches.opt_strs("exclude-if-present");
 
     let one_file_system = matches.opt_present("one-file-system");
 
@@ -1067,6 +1083,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 data_source = client::DataSource::Filesystem {
                     paths: vec![input_path],
                     exclusions,
+                    exclusion_markers,
                 };
             } else if md.is_file() {
                 if default_tags && !tags.contains_key("name") {
@@ -1107,6 +1124,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         data_source = client::DataSource::Filesystem {
             paths: absolute_paths,
             exclusions,
+            exclusion_markers,
         };
     };
 
@@ -1716,6 +1734,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &paths,
                 indexer::FsIndexerOptions {
                     exclusions: globset::GlobSet::empty(),
+                    exclusion_markers: Vec::new(),
                     want_xattrs: matches.opt_present("xattrs"),
                     want_hash: true,
                     one_file_system: false,

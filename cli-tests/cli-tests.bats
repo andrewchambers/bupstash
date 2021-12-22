@@ -417,6 +417,21 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   ! bupstash put --exclude="*/bar" :: "$SCRATCH/foo"
 }
 
+# Test exclude marker files
+@test "backup exclusions 2" {
+  mkdir "$SCRATCH/foo"
+  touch "$SCRATCH/foo/bang"
+  mkdir "$SCRATCH/foo/bar"
+  touch "$SCRATCH/foo/bar/bang"
+  touch "$SCRATCH/foo/bar/.backupignore"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bar/baz/bang"
+
+  # Keep . bang bar
+  id=$(bupstash put --exclude-if-present=".backupignore" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+}
+
 @test "checkpoint plain data" {
   # Excercise the checkpointing code, does not check
   # cache invalidation, that is covered via unit tests.

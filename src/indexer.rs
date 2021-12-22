@@ -245,6 +245,8 @@ pub struct FsIndexer {
 
 pub struct FsIndexerOptions {
     pub exclusions: globset::GlobSet,
+    /// File names that if present exclude the whole directory
+    pub exclusion_markers: Vec<String>,
     pub want_xattrs: bool,
     pub want_hash: bool,
     pub one_file_system: bool,
@@ -427,14 +429,43 @@ impl FsIndexer {
         let mut excluded_paths = Vec::new();
         let mut to_recurse = Vec::new();
 
+        let mut exclude_dir = false;
         dir_ent_paths.retain(|p| {
-            if self.opts.exclusions.is_match(p) {
+            let is_marker = p.file_name()
+                .map_or(
+                    false,
+                    |file_name| self.opts
+                        .exclusion_markers
+                        .iter()
+                        .any(|marker| std::ffi::OsStr::new(marker) == file_name)
+                );
+            exclude_dir |= is_marker;
+
+            /* If we exclude a directory, we'll exclude everything anyway, so no need to do all these checks */
+            exclude_dir || (if self.opts.exclusions.is_match(p) {
                 excluded_paths.push(p.to_owned());
                 false
             } else {
                 true
-            }
+            })
         });
+
+        /* There are no paths to process, so exit early */
+        if exclude_dir {
+            excluded_paths.extend(dir_ent_paths.drain(..));
+            excluded_paths.sort_by(|l, r| {
+                index::path_cmp(
+                    &l.file_name().unwrap().to_string_lossy(),
+                    &r.file_name().unwrap().to_string_lossy(),
+                )
+            });
+            return Ok(IndexedDir {
+                dir_path,
+                ent_paths,      /* Empty */
+                index_ents,     /* Empty */
+                excluded_paths, /* Everything */
+            });
+        }
 
         let mut dir_ents = self.metadata_fetcher.parallel_get_metadata(dir_ent_paths);
 

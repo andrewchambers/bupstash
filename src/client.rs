@@ -310,6 +310,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         &mut self,
         paths: Vec<std::path::PathBuf>,
         exclusions: globset::GlobSet,
+        exclusion_markers: Vec<String>,
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
@@ -322,6 +323,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 want_xattrs: self.ctx.want_xattrs,
                 want_hash: false,
                 exclusions,
+                exclusion_markers,
             },
         )?
         .background();
@@ -601,6 +603,7 @@ pub enum DataSource {
     Filesystem {
         paths: Vec<std::path::PathBuf>,
         exclusions: globset::GlobSet,
+        exclusion_markers: Vec<String>,
     },
 }
 
@@ -709,8 +712,12 @@ pub fn send(
             ctx.progress.set_message(description);
             session.write_data(&mut data, &mut |_: &Address, _: usize| {})?;
         }
-        DataSource::Filesystem { paths, exclusions } => {
-            session.send_dir(paths, exclusions)?;
+        DataSource::Filesystem {
+            paths,
+            exclusions,
+            exclusion_markers,
+        } => {
+            session.send_dir(paths, exclusions, exclusion_markers)?;
         }
     }
 
@@ -1442,6 +1449,7 @@ pub fn restore_to_local_dir(
             &[to_dir.to_owned()],
             indexer::FsIndexerOptions {
                 exclusions: globset::GlobSet::empty(),
+                exclusion_markers: Vec::new(),
                 want_xattrs: false,
                 want_hash: true,
                 one_file_system: false,
