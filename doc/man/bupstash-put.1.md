@@ -160,6 +160,11 @@ With possible types:
   number of levels, `?` matches a single character, `[…]` matches a single character from
   a given character set (and can also be used to escape the other special characters: `[?]`).
 
+* --exclude-if-present FILENAME:
+  Exclude a directory's content if it contains a file with the given name. May be passed multiple times.
+  This will still backup the folder itself, containing the marker file. Common marker file names are `CACHEDIR.TAG`, `.backupexclude`
+  or `.no-backup`.
+
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_SEND_LOG`,

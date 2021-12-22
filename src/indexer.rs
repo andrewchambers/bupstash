@@ -245,6 +245,7 @@ pub struct FsIndexer {
 
 pub struct FsIndexerOptions {
     pub exclusions: Vec<glob::Pattern>,
+    pub exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
     pub want_xattrs: bool,
     pub want_hash: bool,
     pub one_file_system: bool,
@@ -426,6 +427,21 @@ impl FsIndexer {
         let mut ent_paths = Vec::with_capacity(dir_ent_paths.len());
         let mut excluded_paths = Vec::new();
         let mut to_recurse = Vec::new();
+
+        if !self.opts.exclusion_markers.is_empty() {
+            for p in dir_ent_paths.iter() {
+                if self.opts.exclusion_markers.contains(p.file_name().unwrap()) {
+                    dir_ent_paths.retain(|p| {
+                        if !self.opts.exclusion_markers.contains(p.file_name().unwrap()) {
+                            excluded_paths.push(p.to_owned());
+                            return false;
+                        };
+                        true
+                    });
+                    break;
+                }
+            }
+        }
 
         dir_ent_paths.retain(|p| {
             for excl in self.opts.exclusions.iter() {
