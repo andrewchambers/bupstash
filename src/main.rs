@@ -31,6 +31,7 @@ pub mod rollsum;
 pub mod sendlog;
 pub mod server;
 pub mod sodium;
+pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
@@ -908,7 +909,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
-    let mut exclusions = Vec::new();
+    let mut exclusions = globset::GlobSetBuilder::new();
     for mut e in matches.opt_strs("exclude") {
         /* Sanity checks. Beware, the order of the checks matters */
 
@@ -949,12 +950,16 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             );
         }
 
-        let pattern = glob::Pattern::new(&e).map_err(|err| {
+        let mut pattern = globset::GlobBuilder::new(&e);
+        /* For some reason, the default doesn't give us the common behavior one would expect. */
+        pattern.literal_separator(true);
+        pattern.backslash_escape(true);
+        let pattern = pattern.build().map_err(|err| {
             anyhow::format_err!("--exclude option '{}' is not a valid glob: {}", e, err)
         })?;
-
-        exclusions.push(pattern);
+        exclusions.add(pattern);
     }
+    let exclusions = exclusions.build()?;
 
     let exclusion_markers = matches
         .opt_strs("exclude-if-present")
@@ -1743,7 +1748,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             for indexed_dir in indexer::FsIndexer::new(
                 &paths,
                 indexer::FsIndexerOptions {
-                    exclusions: vec![],
+                    exclusions: globset::GlobSet::empty(),
                     exclusion_markers: std::collections::HashSet::new(),
                     want_xattrs: matches.opt_present("xattrs"),
                     want_hash: true,

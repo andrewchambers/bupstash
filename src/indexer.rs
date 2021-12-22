@@ -244,7 +244,8 @@ pub struct FsIndexer {
 }
 
 pub struct FsIndexerOptions {
-    pub exclusions: Vec<glob::Pattern>,
+    pub exclusions: globset::GlobSet,
+    /// File names that if present exclude the whole directory
     pub exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
     pub want_xattrs: bool,
     pub want_hash: bool,
@@ -444,20 +445,12 @@ impl FsIndexer {
         }
 
         dir_ent_paths.retain(|p| {
-            for excl in self.opts.exclusions.iter() {
-                if excl.matches_path_with(
-                    p,
-                    glob::MatchOptions {
-                        case_sensitive: false,
-                        require_literal_separator: true,
-                        require_literal_leading_dot: false,
-                    },
-                ) {
-                    excluded_paths.push(p.to_owned());
-                    return false;
-                }
+            if self.opts.exclusions.is_match(p) {
+                excluded_paths.push(p.to_owned());
+                false
+            } else {
+                true
             }
-            true
         });
 
         let mut dir_ents = self.metadata_fetcher.parallel_get_metadata(dir_ent_paths);

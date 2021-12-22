@@ -1,3 +1,4 @@
+use super::xglobset;
 use super::xid::*;
 use std::collections::BTreeMap;
 
@@ -32,7 +33,7 @@ pub enum AgeAssertion {
 pub enum Query {
     Glob {
         tag: String,
-        pattern: glob::Pattern,
+        pattern: xglobset::GlobMatcher,
         span: (usize, usize),
     },
     Unop {
@@ -324,13 +325,14 @@ impl Parser {
         let (_, end_pos) = self.peek();
 
         let pattern = if escape {
-            glob::Pattern::escape(&raw_pattern)
+            //Ok(globset::Glob::new_escaped(&raw_pattern))
+            Ok(globset::Glob::new(&xglobset::escape(&raw_pattern)).unwrap())
         } else {
-            raw_pattern
+            globset::Glob::new(&raw_pattern)
         };
 
-        let pattern = match glob::Pattern::new(&pattern) {
-            Ok(pattern) => pattern,
+        let pattern = match pattern {
+            Ok(pattern) => pattern.compile_matcher(),
             Err(err) => {
                 return Err(ParseError::SyntaxError {
                     query: self.query_chars.iter().collect(),
@@ -344,7 +346,7 @@ impl Parser {
 
         Ok(Query::Glob {
             tag,
-            pattern,
+            pattern: pattern.into(),
             span: (tag_pos, end_pos),
         })
     }
@@ -427,7 +429,7 @@ pub struct QueryContext<'a> {
 pub fn query_matches(q: &Query, ctx: &QueryContext) -> bool {
     match q {
         Query::Glob { tag, pattern, .. } => match ctx.tagset.get(tag) {
-            Some(v) => pattern.matches(v),
+            Some(v) => pattern.is_match(v),
             None => false,
         },
         Query::Binop {
@@ -453,7 +455,7 @@ pub struct QueryEncryptedContext<'a> {
 pub fn query_matches_encrypted(q: &Query, ctx: &QueryEncryptedContext) -> bool {
     match q {
         Query::Glob { tag, pattern, .. } => match ctx.tagset.get(tag) {
-            Some(v) => pattern.matches(v),
+            Some(v) => pattern.is_match(v),
             None => false,
         },
         Query::Binop {
@@ -472,9 +474,9 @@ pub fn query_matches_encrypted(q: &Query, ctx: &QueryEncryptedContext) -> bool {
 pub fn get_id_query(q: &Query) -> Option<Xid> {
     match q {
         Query::Glob { tag, pattern, .. }
-            if tag == "id" && pattern.as_str().chars().all(char::is_alphanumeric) =>
+            if tag == "id" && pattern.glob().glob().chars().all(char::is_alphanumeric) =>
         {
-            if let Ok(xid) = Xid::parse(pattern.as_str()) {
+            if let Ok(xid) = Xid::parse(pattern.glob().glob()) {
                 Some(xid)
             } else {
                 None

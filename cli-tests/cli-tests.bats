@@ -400,23 +400,28 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   id=$(bupstash put --exclude="**/bang" :: "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
+  # Exclude on multiple levels (should still be the same)
+  id=$(bupstash put --exclude="/**/bang" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+
+  # Still the same thing, but using the "match on name" shorthand (no slashes = only file name)
+  id=$(bupstash put --exclude="bang" :: "$SCRATCH/foo")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+
   # Exclude on a single level
   # We want /foo /foo/bar /foo/bar/baz /foo/bang /foo/bar/baz/bang (that one's important)
   id=$(bupstash put --exclude="$SCRATCH/foo/*/bang" :: "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
-  
+
   # Exclude on a single level, but wrongly so (nothing gets excluded)
   id=$(bupstash put --exclude="/*/bang" :: "$SCRATCH/foo")
   test 6 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
-  
-  # Same thing, but using the "match on name" shorthand (no slashes = only file name)
-  id=$(bupstash put --exclude="bang" :: "$SCRATCH/foo")
-  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Invalid exclusion regex
   ! bupstash put --exclude="*/bar" :: "$SCRATCH/foo"
 }
 
+# Test exclude marker files
 @test "exclude if exists" {
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/bang"
