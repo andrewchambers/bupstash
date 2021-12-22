@@ -6,7 +6,7 @@ unset BUPSTASH_KEY
 unset BUPSTASH_KEY_COMMAND
 
 export CLI_TEST_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-export SCRATCH="$BATS_TMPDIR/bupstash-test-scratch"
+export SCRATCH="${BATS_TMPDIR%/}/bupstash-test-scratch"
 export BUPSTASH_KEY="$SCRATCH/bupstash-test-primary.key"
 export PUT_KEY="$SCRATCH/bupstash-test-put.key"
 export METADATA_KEY="$SCRATCH/bupstash-test-metadata.key"
@@ -378,8 +378,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
-# Test the exclusion globbing
-@test "backup exclusions" {
+@test "exclusions" {
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/bang"
   mkdir "$SCRATCH/foo/bar"
@@ -394,10 +393,11 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   # Exclude on multiple levels
   # As expected, this also excludes $SCRATCH/foo/bang
   id=$(bupstash put --exclude="$SCRATCH/foo/**/bang" :: "$SCRATCH/foo")
+  bupstash get id=$id | tar -tf -
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on multiple levels (should be the same)
-  id=$(bupstash put --exclude="/**/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="**/bang" :: "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on a single level
@@ -415,6 +415,20 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 
   # Invalid exclusion regex
   ! bupstash put --exclude="*/bar" :: "$SCRATCH/foo"
+}
+
+@test "exclude if exists" {
+  mkdir "$SCRATCH/foo"
+  touch "$SCRATCH/foo/bang"
+  mkdir "$SCRATCH/foo/bar"
+  touch "$SCRATCH/foo/bar/bang"
+  touch "$SCRATCH/foo/bar/.backupignore"
+  mkdir "$SCRATCH/foo/bar/baz"
+  touch "$SCRATCH/foo/bar/baz/bang"
+
+  # Keep . bang bar
+  id=$(bupstash put --exclude-if-present=".backupignore" :: "$SCRATCH/foo")
+  test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "checkpoint plain data" {

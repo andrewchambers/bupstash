@@ -845,6 +845,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         Patterns without any directories will match any file of that name.",
         "PATTERN",
     );
+    opts.optmulti(
+        "",
+        "exclude-if-present",
+        "Exclude a directory's content if it contains a file with the given name. May be passed multiple times.
+  This will still backup the folder itself, containing the marker file. Common marker file names are `CACHEDIR.TAG`, `.backupexclude`
+  or `.no-backup`.",
+        "FILENAME",
+    );
     opts.optflag(
         "",
         "one-file-system",
@@ -918,12 +926,15 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
 
         /* Start with a / to match a path, and leave out slashes to match any file. */
-        if e.starts_with('/') {
+        if e.starts_with('/') || e.starts_with("**/") {
             /* pass */
         } else if e.contains('/') && !e.contains('[') {
             /* This is just to help the user with a nicer error message, we do
              * not take this branch if the pattern contains an escape character. */
-            anyhow::bail!("--exclude option '{}' contains '/' so must be absolute", e);
+            anyhow::bail!(
+                "--exclude option '{}' contains '/' so must be absolute to match anything",
+                e
+            );
         } else {
             /* Just a file name */
             e = format!("**/{}", e);
@@ -931,9 +942,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         /* Check for unnormalized segments, as they too won't match anything. Skip this
          * check if the pattern contains the escape character. */
-        if (e.contains("/./") || e.contains("/../")) && !e.contains('[') {
+        if (e.contains("/./") || e.contains("/../") || e.contains("//")) && !e.contains('[') {
             anyhow::bail!(
-                "--exclude option '{}' must be normalized (no '.' and '..' segments)",
+                "--exclude option '{}' must be normalized (no '.', '..' or '//' path segments)",
                 e
             );
         }
@@ -943,6 +954,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         })?;
         exclusions.push(pattern);
     }
+
+    let exclusion_markers = matches
+        .opt_strs("exclude-if-present")
+        .drain(..)
+        .map(std::ffi::OsString::from)
+        .collect();
 
     let one_file_system = matches.opt_present("one-file-system");
 
@@ -1075,6 +1092,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 data_source = client::DataSource::Filesystem {
                     paths: vec![input_path],
                     exclusions,
+                    exclusion_markers,
                 };
             } else if md.is_file() {
                 if default_tags && !tags.contains_key("name") {
@@ -1115,6 +1133,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         data_source = client::DataSource::Filesystem {
             paths: absolute_paths,
             exclusions,
+            exclusion_markers,
         };
     };
 
@@ -1724,6 +1743,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 &paths,
                 indexer::FsIndexerOptions {
                     exclusions: vec![],
+                    exclusion_markers: std::collections::HashSet::new(),
                     want_xattrs: matches.opt_present("xattrs"),
                     want_hash: true,
                     one_file_system: false,
