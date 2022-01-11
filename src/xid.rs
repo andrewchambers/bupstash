@@ -3,7 +3,7 @@ use super::hex;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Serialize, Debug, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Serialize, Debug, Deserialize, Default, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Xid {
     pub bytes: [u8; 16],
 }
@@ -31,12 +31,6 @@ impl Xid {
         let mut buf = [0; 32];
         hex::encode(&self.bytes[..], &mut buf[..]);
         buf
-    }
-}
-
-impl Default for Xid {
-    fn default() -> Xid {
-        Xid { bytes: [0; 16] }
     }
 }
 
