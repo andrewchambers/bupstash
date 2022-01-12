@@ -840,7 +840,9 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optmulti(
         "",
         "exclude",
-        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.",
+        "Exclude directory entries matching the given glob pattern when saving a directory, may be passed multiple times.\
+        Paths are absolute as they are currently mounted, and must start with a slash.\
+        Patterns without any directories will match any file of that name.",
         "PATTERN",
     );
     opts.optflag(
@@ -899,11 +901,47 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
     let mut exclusions = Vec::new();
-    for e in matches.opt_strs("exclude") {
-        match glob::Pattern::new(&e) {
-            Ok(pattern) => exclusions.push(pattern),
-            Err(err) => anyhow::bail!("--exclude option {:?} is not a valid glob: {}", e, err),
+    for mut e in matches.opt_strs("exclude") {
+        /* Sanity checks. Beware, the order of the checks matters */
+
+        /* An exclude path ending on / won't match anything. */
+        if e.ends_with('/') {
+            anyhow::bail!(
+                "--exclude option '{}' ends with '/', so it won't match anything",
+                e
+            );
         }
+
+        /* This check is technically redundant, but it gives a nicer error message. */
+        if e.starts_with("./") || e.starts_with("../") {
+            anyhow::bail!("relative paths are not allowed in --exclude");
+        }
+
+        /* Start with a / to match a path, and leave out slashes to match any file. */
+        if e.starts_with('/') {
+            /* pass */
+        } else if e.contains('/') && !e.contains('[') {
+            /* This is just to help the user with a nicer error message, we do
+             * not take this branch if the pattern contains an escape character. */
+            anyhow::bail!("--exclude option '{}' contains '/' so must be absolute", e);
+        } else {
+            /* Just a file name */
+            e = format!("**/{}", e);
+        }
+
+        /* Check for unnormalized segments, as they too won't match anything. Skip this
+         * check if the pattern contains the escape character. */
+        if (e.contains("/./") || e.contains("/../")) && !e.contains('[') {
+            anyhow::bail!(
+                "--exclude option '{}' must be normalized (no '.' and '..' segments)",
+                e
+            );
+        }
+
+        let pattern = glob::Pattern::new(&e).map_err(|err| {
+            anyhow::format_err!("--exclude option '{}' is not a valid glob: {}", e, err)
+        })?;
+        exclusions.push(pattern);
     }
 
     let one_file_system = matches.opt_present("one-file-system");

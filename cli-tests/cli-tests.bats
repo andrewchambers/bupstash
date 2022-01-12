@@ -387,10 +387,10 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   id=$(bupstash put :: "$SCRATCH/foo")
   test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
-  id=$(bupstash put --exclude="*/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="bang" :: "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
-  id=$(bupstash put --exclude="*/bar" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="bar" :: "$SCRATCH/foo")
   test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
