@@ -429,7 +429,14 @@ impl FsIndexer {
 
         dir_ent_paths.retain(|p| {
             for excl in self.opts.exclusions.iter() {
-                if excl.matches_path(p) {
+                if excl.matches_path_with(
+                    p,
+                    glob::MatchOptions {
+                        case_sensitive: false,
+                        require_literal_separator: true,
+                        require_literal_leading_dot: false,
+                    },
+                ) {
                     excluded_paths.push(p.to_owned());
                     return false;
                 }
