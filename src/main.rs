@@ -921,8 +921,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
 
         /* This check is technically redundant, but it gives a nicer error message. */
-        if e.starts_with("./") {
-            anyhow::bail!("No relative paths in --exclude");
+        if e.starts_with("./") || e.starts_with("../") {
+            anyhow::bail!("relative paths are not allowed in --exclude patterns");
         }
 
         /* Start with a / to match a path, and leave out slashes to match any file. */
@@ -937,7 +937,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             );
         } else {
             /* Just a file name */
-            e = format!("/**/{}", e);
+            e = format!("**/{}", e);
         }
 
         /* Check for unnormalized segments, as they too won't match anything. Skip this

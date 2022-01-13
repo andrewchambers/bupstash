@@ -153,9 +153,8 @@ With possible types:
   Add an exclusion glob pattern to filter entries from the resulting tarball.
   This option may be passed multiple times, and is ignored if not
   uploading a directory snapshot.
-  The glob is matched against the absolute path of the directory entry.
-  It thus must start with a `/` and not end on one. It must also be normalized.
-  Globs without any slash are treated as file name matches, i.e. they are automatically prepended with `/**/`.
+  The glob is matched against the absolute paths and should not end with a `/`.
+  Globs without a leading `/` or `**/` are treated as file name matches, i.e. they are automatically prepended with `**/`.
   Usual globbing rules apply: `*` matches everything on a level, `**` matches any
   number of levels, `?` matches a single character, `[…]` matches a single character from
   a given character set (and can also be used to escape the other special characters: `[?]`).
