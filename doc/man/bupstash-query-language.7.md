@@ -91,20 +91,16 @@ Supported suffixes:
 Some operators accept a glob to match against, the following describes the valid globbing meta characters.
 
 ```
-    ? matches any single character.
-
-    * matches any (possibly empty) sequence of characters.
-
-    ** matches the current directory and arbitrary subdirectories. This sequence must form a single path component, so both **a and b** are invalid and will result in an error. A sequence of more than two consecutive * characters is also invalid.
-
-    [...] matches any character inside the brackets. Character sequences can also specify ranges of characters, as ordered by Unicode, so e.g. [0-9] specifies any character between 0 and 9 inclusive. An unclosed bracket is invalid.
-
-    [!...] is the negation of [...], i.e. it matches any characters not in the brackets.
-
-    The metacharacters ?, *, [, ] can be matched by using brackets (e.g. [?]). When a ] occurs immediately following [ or [! then it is interpreted as being part of, rather then ending, the character set, so ] and NOT ] can be matched by []] and [!]] respectively. The - character can be specified inside a character sequence pattern by placing it at the start or the end, e.g. [abc-].
+    ? matches any single character. (If the literal_separator option is enabled, then ? can never match a path separator.)
+    * matches zero or more characters. (If the literal_separator option is enabled, then * can never match a path separator.)
+    ** recursively matches directories but are only legal in three situations. First, if the glob starts with **/, then it matches all directories. For example, **/foo matches foo and bar/foo but not foo/bar. Secondly, if the glob ends with /**, then it matches all sub-entries. For example, foo/** matches foo/a and foo/a/b, but not foo. Thirdly, if the glob contains /**/ anywhere within the pattern, then it matches zero or more directories. Using ** anywhere else is illegal (N.B. the glob ** is allowed and means “match everything”).
+    {a,b} matches a or b where a and b are arbitrary glob patterns. (N.B. Nesting {...} is not currently allowed.)
+    [ab] matches a or b where a and b are characters. Use [!ab] to match any character except for a and b.
+    Metacharacters such as * and ? can be escaped with character class notation. e.g., [*] matches *.
+    When backslash escapes are enabled, a backslash (\) will escape all meta characters in a glob. If it precedes a non-meta character, then the slash is ignored. A \\ will match a literal \\. Note that this mode is only enabled on Unix platforms by default, but can be enabled on any platform via the backslash_escape setting on Glob.
 ```
 
-(Documentation taken from the underlying [glob software library](https://docs.rs/glob/0.3.0/glob/struct.Pattern.html)).
+(Documentation taken from the underlying [glob software library](https://docs.rs/globset/0.4.8/globset/index.html#)).
 
 ### Binary operators
 
