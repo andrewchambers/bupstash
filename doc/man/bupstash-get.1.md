@@ -10,7 +10,8 @@ Get data from a bupstash repository.
 ## DESCRIPTION
 
 `bupstash get` fetches and decrypts data stored in a bupstash repository, sending
-it to stdout.
+it to stdout. If the requested item was saved as a directory, the command converts
+it into a tar stream.
 
 The item that is fetched is chosen based on a simple query against the 
 tags specified when saving data with `bupstash put`.
@@ -23,6 +24,11 @@ For full documentation on the query language, see bupstash-query-language(7).
 
 The get command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
+
+## SPARSE FILES
+
+When getting a directory as a tarball sparse files are not treated specially, to restore sparse
+files while preserving the file holes use `bupstash restore` instead.
 
 ## OPTIONS
 

@@ -1,3 +1,4 @@
 - Remove the --no-compression flag.
 - Add --compression=none|lz4|zstd[:$level] option to specify the compression algorithm.
 - Change the default compression algorithm from lz4 to zstd:3.
+- The put and restore command can now store sparse files while preserving file holes.

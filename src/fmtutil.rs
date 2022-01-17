@@ -81,7 +81,7 @@ pub fn format_human_content_listing(
 }
 
 pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
-    let mut result = String::new();
+    let mut result = String::with_capacity(64);
     std::fmt::write(&mut result, format_args!("{{"))?;
     std::fmt::write(
         &mut result,
@@ -134,36 +134,45 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
         &mut result,
         format_args!(",\"ino\":{}", serde_json::to_string(&ent.ino.0)?),
     )?;
+
     if ent.is_dev_node() {
         std::fmt::write(
             &mut result,
             format_args!(
                 ",\"dev_major\":{}",
-                serde_json::to_string(&ent.dev_major.0)?
+                serde_json::to_string(&ent.dev_major.0)?,
             ),
         )?;
         std::fmt::write(
             &mut result,
             format_args!(
                 ",\"dev_minor\":{}",
-                serde_json::to_string(&ent.dev_minor.0)?
+                serde_json::to_string(&ent.dev_minor.0)?,
             ),
         )?;
+    } else {
+        result.push_str(",\"dev_major\":null,\"dev_minor\":null");
     }
+
     if let Some(ref xattrs) = ent.xattrs {
         std::fmt::write(
             &mut result,
             format_args!(",\"xattrs\":{}", serde_json::to_string(xattrs)?),
         )?;
+    } else {
+        result.push_str(",\"xattrs\":null");
     }
+    std::fmt::write(&mut result, format_args!(",\"sparse\": {}", ent.sparse))?;
     if let Some(ref link_target) = ent.link_target {
         std::fmt::write(
             &mut result,
             format_args!(",\"link_target\":{}", serde_json::to_string(link_target)?),
         )?;
+    } else {
+        result.push_str(",\"link_target\":null");
     }
     match ent.data_hash {
-        index::ContentCryptoHash::None => (),
+        index::ContentCryptoHash::None => result.push_str(",\"data_hash\":null"),
         index::ContentCryptoHash::Blake3(h) => std::fmt::write(
             &mut result,
             format_args!(

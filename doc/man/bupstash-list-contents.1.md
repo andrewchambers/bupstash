@@ -49,11 +49,12 @@ Each line has the following json schema:
   "norm_dev": number,
   "ino": number,
   "nlink": number,
-  "link_target": string, // optional
-  "dev_major": number, // optional
-  "dev_minor": number, // optional
-  "xattrs": {string : [bytes...] ...}, // optional
-  "data_hash": "$KIND[:$HEXBYTE]" // optional
+  "link_target": string | null,
+  "dev_major": number | null,
+  "dev_minor": number | null,
+  "xattrs": {string : [bytes...] ...} | null,
+  "sparse": boolean,
+  "data_hash": "$KIND[:$HEXBYTE]" | null
 }
 ```
 

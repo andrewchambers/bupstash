@@ -212,3 +212,31 @@ pub fn repo_upgrade_to_5_to_6(repo_path: &Path) -> Result<(), anyhow::Error> {
     std::mem::drop(lock);
     Ok(())
 }
+
+pub fn repo_upgrade_to_6_to_7(repo_path: &Path) -> Result<(), anyhow::Error> {
+    // This upgrade adds sparse files and zstd compression.
+    // The upgrade simply increments the schema version.
+    eprintln!("upgrading repository schema from version 6 to version 7...");
+
+    eprintln!("getting exclusive repository lock for upgrade...");
+    let lock_path = {
+        let mut p = repo_path.to_owned();
+        p.push("repo.lock");
+        p
+    };
+    let lock = fsutil::FileLock::get_exclusive(REPO_LOCK_CTX_TAG, &lock_path)?;
+
+    let mut fstx = fstx::WriteTxn::begin(repo_path)?;
+    let schema_version = fstx.read_string("meta/schema_version")?;
+    if schema_version != "6" {
+        anyhow::bail!(
+            "unable to upgrade, expected schema version 6, got {}",
+            schema_version
+        )
+    }
+    fstx.add_write("meta/schema_version", "7".to_string().into_bytes());
+    fstx.commit()?;
+    eprintln!("repository upgrade successful...");
+    std::mem::drop(lock);
+    Ok(())
+}
