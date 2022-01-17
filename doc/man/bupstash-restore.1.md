@@ -31,6 +31,12 @@ For full documentation on the query language, see bupstash-query-language(7).
 The restore command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
+## SPARSE FILES
+
+If a file was detected as sparse during 'put', the restore command will restore it as 
+sparse, but it should be noted the restore command will not delete an existing file
+with the correct checksum in order to recreate it as sparse.
+
 ## OPTIONS
 
 * --into PATH:

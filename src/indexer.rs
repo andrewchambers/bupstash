@@ -6,8 +6,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 struct CombinedMetadata {
-    metadata: std::fs::Metadata,
+    stat: std::fs::Metadata,
     xattrs: Option<index::Xattrs>,
+    sparse: bool,
     data_hash: index::ContentCryptoHash,
 }
 
@@ -22,6 +23,14 @@ struct FsMetadataFetcher {
     workers: Vec<std::thread::JoinHandle<()>>,
 }
 
+#[derive(Clone)]
+struct FsMetadataFetcherOptions {
+    num_workers: usize,
+    want_xattrs: bool,
+    want_sparseness: bool,
+    want_hash: bool,
+}
+
 impl Drop for FsMetadataFetcher {
     fn drop(&mut self) {
         for _i in 0..self.workers.len() {
@@ -33,14 +42,67 @@ impl Drop for FsMetadataFetcher {
     }
 }
 
-fn get_metadata(
-    path: &Path,
-    want_xattrs: bool,
-    want_hash: bool,
-) -> std::io::Result<CombinedMetadata> {
-    let metadata = path.symlink_metadata()?;
+#[cfg(any(
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "linux",
+    target_os = "solaris"
+))]
+fn probe_sparse(path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // Heuristic that filters away expensive check.
+    if (stat.blocks() * 512) >= stat.size() {
+        return Ok(false);
+    }
+
+    // Use lseek to confirm that there is a hole.
+
+    let mut offset = 0;
+    let f = std::fs::File::open(path)?;
+
+    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekHole) {
+        Ok(next) => offset = next,
+        Err(_) => return Ok(false),
+    }
+
+    let hole_start = offset;
+
+    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekData) {
+        Ok(next) => offset = next,
+        Err(nix::Error::ENXIO) => {
+            /* There is no more data, seek to the end. */
+            match nix::unistd::lseek(f.as_raw_fd(), 0, nix::unistd::Whence::SeekEnd) {
+                Ok(next) => offset = next,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(_) => return Ok(false),
+    }
+
+    let hole_size = offset - hole_start;
+
+    Ok(hole_size != 0)
+}
+
+#[cfg(not(any(
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "linux",
+    target_os = "solaris"
+)))]
+fn probe_sparse(_path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok((stat.blocks() * 512) < stat.size())
+}
+
+fn get_metadata(path: &Path, opts: &FsMetadataFetcherOptions) -> std::io::Result<CombinedMetadata> {
     let mut xattrs = None;
-    if want_xattrs && (metadata.is_file() || metadata.is_dir()) {
+
+    let stat = path.symlink_metadata()?;
+
+    if opts.want_xattrs && (stat.is_file() || stat.is_dir()) {
         match xattr::list(path) {
             Ok(attrs) => {
                 for attr in attrs {
@@ -67,7 +129,7 @@ fn get_metadata(
         }
     }
 
-    let data_hash = if metadata.is_file() && want_hash {
+    let data_hash = if stat.is_file() && opts.want_hash {
         let mut hasher = blake3::Hasher::new();
         let mut f = std::fs::File::open(path)?;
         std::io::copy(&mut f, &mut hasher)?;
@@ -76,20 +138,32 @@ fn get_metadata(
         index::ContentCryptoHash::None
     };
 
+    let sparse = if opts.want_sparseness && stat.is_file() {
+        match probe_sparse(path, &stat) {
+            Ok(sparse) => sparse,
+            Err(err) if fsutil::likely_smear_error(&err) => false,
+            Err(err) => return Err(err),
+        }
+    } else {
+        false
+    };
+
     Ok(CombinedMetadata {
-        metadata,
+        stat,
         xattrs,
+        sparse,
         data_hash,
     })
 }
 
 impl FsMetadataFetcher {
-    fn new(num_workers: usize, want_xattrs: bool, want_hash: bool) -> FsMetadataFetcher {
-        let num_workers = num_workers.max(1);
+    fn new(opts: FsMetadataFetcherOptions) -> FsMetadataFetcher {
+        let num_workers = opts.num_workers.max(1);
         let (dispatch_tx, dispatch_rx) = crossbeam_channel::bounded(0);
         let (result_tx, result_rx) = crossbeam_channel::bounded(0);
         let mut workers = Vec::new();
         for _i in 0..num_workers {
+            let opts = opts.clone();
             let result_tx = result_tx.clone();
             let dispatch_rx = dispatch_rx.clone();
             let worker = std::thread::Builder::new()
@@ -97,7 +171,7 @@ impl FsMetadataFetcher {
                 .spawn(move || loop {
                     match dispatch_rx.recv() {
                         Ok(FsMetadataRequest::SymlinkMetadata { path }) => {
-                            let r = get_metadata(&path, want_xattrs, want_hash);
+                            let r = get_metadata(&path, &opts);
                             let _ = result_tx.send((path, r));
                         }
                         Ok(FsMetadataRequest::Done) => break,
@@ -171,6 +245,7 @@ pub fn metadata_to_index_ent(
     index_path: &std::path::Path,
     metadata: &std::fs::Metadata,
     xattrs: Option<index::Xattrs>,
+    sparse: bool,
     data_hash: index::ContentCryptoHash,
 ) -> Result<index::IndexEntry, std::io::Error> {
     // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
@@ -215,6 +290,7 @@ pub fn metadata_to_index_ent(
         dev_minor: serde_bare::Uint(dev_minor as u64),
         norm_dev: serde_bare::Uint(dev_normalizer.normalize(metadata.dev())),
         ino: serde_bare::Uint(metadata.ino()),
+        sparse,
         xattrs,
         // Dummy value, set by caller.
         data_cursor: index::RelativeDataCursor {
@@ -248,6 +324,7 @@ pub struct FsIndexerOptions {
     /// File names that if present exclude the whole directory
     pub exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
     pub want_xattrs: bool,
+    pub want_sparseness: bool,
     pub want_hash: bool,
     pub one_file_system: bool,
 }
@@ -384,8 +461,12 @@ impl FsIndexer {
             Err(err) => anyhow::bail!("error reading {:?}: {}", start_md_dir, err),
         };
 
-        let want_xattrs = opts.want_xattrs;
-        let want_hash = opts.want_hash;
+        let metadata_fetcher_opts = FsMetadataFetcherOptions {
+            num_workers: 4,
+            want_xattrs: opts.want_xattrs,
+            want_sparseness: opts.want_sparseness,
+            want_hash: opts.want_hash,
+        };
 
         Ok(FsIndexer {
             opts,
@@ -394,7 +475,7 @@ impl FsIndexer {
             filler_children,
             work_stack: vec![vec![start_dir]],
             dev_normalizer: DevNormalizer::new(),
-            metadata_fetcher: FsMetadataFetcher::new(4, want_xattrs, want_hash),
+            metadata_fetcher: FsMetadataFetcher::new(metadata_fetcher_opts),
         })
     }
 
@@ -472,11 +553,12 @@ impl FsIndexer {
         'process_dir_ents: for (dir_ent_path, md_result) in dir_ents.drain(..) {
             match md_result {
                 Ok(CombinedMetadata {
-                    metadata: md,
+                    stat,
                     xattrs,
+                    sparse,
                     data_hash,
                 }) => {
-                    if md.file_type().is_socket() {
+                    if stat.file_type().is_socket() {
                         continue 'process_dir_ents;
                     }
 
@@ -490,8 +572,9 @@ impl FsIndexer {
                         &mut self.dev_normalizer,
                         &dir_ent_path,
                         &index_ent_path,
-                        &md,
+                        &stat,
                         xattrs,
+                        sparse,
                         data_hash,
                     ) {
                         Ok(index_ent) => index_ent,
@@ -505,7 +588,9 @@ impl FsIndexer {
                         }
                     };
 
-                    if md.is_dir() && ((self.base_dev == md.dev()) || !self.opts.one_file_system) {
+                    if stat.is_dir()
+                        && ((self.base_dev == stat.dev()) || !self.opts.one_file_system)
+                    {
                         to_recurse.push(dir_ent_path.clone());
                     }
 

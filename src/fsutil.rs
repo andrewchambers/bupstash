@@ -1,9 +1,11 @@
 use super::crypto;
 use super::hex;
+use super::ioutil;
 use lazy_static::lazy_static;
 use path_clean::PathClean;
+use std::convert::TryInto;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Seek, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -104,8 +106,7 @@ impl FileLock {
 
         match nix::fcntl::fcntl(f.as_raw_fd(), nix::fcntl::FcntlArg::F_SETLK(&lock_opts)) {
             Ok(_) => Ok(Some(FileLock { _ctx: ctx, _f: f })),
-            Err(nix::Error::Sys(nix::errno::Errno::EAGAIN))
-            | Err(nix::Error::Sys(nix::errno::Errno::EACCES)) => Ok(None),
+            Err(nix::Error::EAGAIN) | Err(nix::Error::EACCES) => Ok(None),
             Err(err) => Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("unable to get exclusive lock: {}", err),
@@ -307,26 +308,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compare_paths() {
-        let one = Path::new("/foo/bar/baz/one.txt");
-        let two = Path::new("/foo/bar/quux/quuux/two.txt");
-        let result = Path::new("/foo/bar");
-        assert_eq!(common_path(&one, &two).unwrap(), result.to_path_buf())
-    }
-
-    #[test]
-    fn no_common_path() {
-        let one = Path::new("/foo/bar");
-        let two = Path::new("./baz/quux");
-        assert!(common_path(&one, &two).is_none());
-    }
-}
-
 // A smear error is an error likely caused by the filesystem being altered
 // by a concurrent process as we are making a snapshot. An example of this
 // happening is we found a file, then tried to open it and it did not exist.
@@ -381,5 +362,96 @@ cfg_if::cfg_if! {
             unsafe { libc::minor(dev as libc::dev_t) as u64 }
         }
 
+    }
+}
+
+// Aligns with most filesystem sparse boundaries.
+const SPARSE_COPY_BUF_SZ: usize = 4096;
+
+// Copy data from a reader into a file while using seek on runs of zeros
+// to encourage the OS to create a sparse file.
+pub fn copy_as_sparse_file<R>(src: &mut R, dst: &mut fs::File) -> std::io::Result<u64>
+where
+    R: Read,
+{
+    let mut buf = [0; SPARSE_COPY_BUF_SZ];
+    let mut ncopied: u64 = 0;
+    let mut buffered_zeros: u64 = 0;
+
+    loop {
+        let n = src.read(&mut buf[..])?;
+        ncopied += n as u64;
+        if n == 0 {
+            break;
+        }
+
+        if ioutil::all_zeros(&buf[..n]) {
+            buffered_zeros += n as u64;
+            continue;
+        }
+
+        if buffered_zeros != 0 {
+            dst.seek(std::io::SeekFrom::Current(
+                buffered_zeros.try_into().unwrap(),
+            ))?;
+            buffered_zeros = 0;
+        }
+
+        dst.write_all(&buf[..n])?;
+    }
+
+    if buffered_zeros != 0 {
+        nix::unistd::ftruncate(dst.as_raw_fd(), ncopied.try_into().unwrap())?;
+    }
+
+    Ok(ncopied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
+
+    #[test]
+    fn fuzz_copy_to_sparse_file() {
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..1000 {
+            let buffer_sz = rng.gen_range(0..SPARSE_COPY_BUF_SZ * 3);
+            let random_bytes: Vec<u8> = (0..buffer_sz)
+                .map(|_| rng.gen_bool(0.999))
+                .map(|z| if z { 0 } else { 1 })
+                .collect();
+            let mut cursor = std::io::Cursor::new(random_bytes);
+            let mut dst = tempfile::tempfile().unwrap();
+
+            copy_as_sparse_file(&mut cursor, &mut dst).unwrap();
+
+            let random_bytes = cursor.into_inner();
+
+            dst.seek(std::io::SeekFrom::Start(0)).unwrap();
+
+            let mut result = Vec::new();
+            dst.read_to_end(&mut result).unwrap();
+
+            if result != random_bytes {
+                panic!("copy failed");
+            }
+        }
+    }
+
+    #[test]
+    fn compare_paths() {
+        let one = Path::new("/foo/bar/baz/one.txt");
+        let two = Path::new("/foo/bar/quux/quuux/two.txt");
+        let result = Path::new("/foo/bar");
+        assert_eq!(common_path(&one, &two).unwrap(), result.to_path_buf())
+    }
+
+    #[test]
+    fn no_common_path() {
+        let one = Path::new("/foo/bar");
+        let two = Path::new("./baz/quux");
+        assert!(common_path(&one, &two).is_none());
     }
 }

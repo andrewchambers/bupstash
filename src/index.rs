@@ -4,15 +4,22 @@ use std::io::Write;
 
 pub type Xattrs = BTreeMap<String, Vec<u8>>;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum SparseHint {
+    NotSparse,
+    Sparse { min_hole_size: u64 },
+}
+
 #[non_exhaustive]
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum VersionedIndexEntry {
     V1(V1IndexEntry),
     V2(V2IndexEntry),
-    V3(IndexEntry),
+    V3(V3IndexEntry),
+    V4(IndexEntry),
 }
 
-const CURRENT_INDEX_ENTRY_KIND: u8 = 2;
+const CURRENT_INDEX_ENTRY_KIND: u8 = 3;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum IndexEntryKind {
@@ -59,6 +66,10 @@ pub struct V1IndexEntry {
     pub data_cursor: AbsoluteDataCursor,
 }
 
+// Deprecated format kept for backwards compatibility.
+// Was deprecated because absolute data cursors broke
+// deduplication, to solve this we had to change them
+// to relative cursors.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V2IndexEntry {
     pub path: String,
@@ -81,8 +92,10 @@ pub struct V2IndexEntry {
     pub data_hash: ContentCryptoHash,
 }
 
+// Deprecated format kept for backwards compatibility.
+// Was deprecated to allow us to support sparse files.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct IndexEntry {
+pub struct V3IndexEntry {
     pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
@@ -98,6 +111,31 @@ pub struct IndexEntry {
     pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
+    pub xattrs: Option<Xattrs>,
+    pub data_cursor: RelativeDataCursor,
+    pub data_hash: ContentCryptoHash,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndexEntry {
+    pub path: String,
+    pub size: serde_bare::Uint,
+    pub mtime: serde_bare::Uint,
+    pub mtime_nsec: serde_bare::Uint,
+    pub ctime: serde_bare::Uint,
+    pub ctime_nsec: serde_bare::Uint,
+    pub ino: serde_bare::Uint,
+    // Group some items together that don't change
+    // much in between files to aid in compression.
+    pub norm_dev: serde_bare::Uint,
+    pub mode: serde_bare::Uint,
+    pub uid: serde_bare::Uint,
+    pub gid: serde_bare::Uint,
+    pub nlink: serde_bare::Uint,
+    pub link_target: Option<String>,
+    pub dev_major: serde_bare::Uint,
+    pub dev_minor: serde_bare::Uint,
+    pub sparse: bool,
     pub xattrs: Option<Xattrs>,
     pub data_cursor: RelativeDataCursor,
     pub data_hash: ContentCryptoHash,
@@ -617,6 +655,7 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 link_target: ent.link_target,
                 dev_major: ent.dev_major,
                 dev_minor: ent.dev_minor,
+                sparse: false,
                 xattrs: ent.xattrs,
                 data_cursor: RelativeDataCursor {
                     chunk_delta: serde_bare::Uint(u64::MAX),
@@ -641,6 +680,7 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 link_target: ent.link_target,
                 dev_major: ent.dev_major,
                 dev_minor: ent.dev_minor,
+                sparse: false,
                 xattrs: ent.xattrs,
                 data_cursor: RelativeDataCursor {
                     chunk_delta: serde_bare::Uint(u64::MAX),
@@ -649,7 +689,32 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 },
                 data_hash: ent.data_hash,
             })),
-            Ok(VersionedIndexEntry::V3(ent)) => Some(Ok(ent)),
+            Ok(VersionedIndexEntry::V3(ent)) => Some(Ok(IndexEntry {
+                path: ent.path,
+                mode: ent.mode,
+                size: ent.size,
+                uid: ent.uid,
+                gid: ent.gid,
+                mtime: ent.mtime,
+                mtime_nsec: ent.mtime_nsec,
+                ctime: ent.ctime,
+                ctime_nsec: ent.ctime_nsec,
+                norm_dev: ent.norm_dev,
+                ino: ent.ino,
+                nlink: ent.nlink,
+                link_target: ent.link_target,
+                dev_major: ent.dev_major,
+                dev_minor: ent.dev_minor,
+                sparse: false,
+                xattrs: ent.xattrs,
+                data_cursor: RelativeDataCursor {
+                    chunk_delta: serde_bare::Uint(u64::MAX),
+                    start_byte_offset: serde_bare::Uint(u64::MAX),
+                    end_byte_offset: serde_bare::Uint(u64::MAX),
+                },
+                data_hash: ent.data_hash,
+            })),
+            Ok(VersionedIndexEntry::V4(ent)) => Some(Ok(ent)),
             Err(serde_bare::error::Error::Io(err))
                 if err.kind() == std::io::ErrorKind::UnexpectedEof =>
             {

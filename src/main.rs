@@ -831,7 +831,11 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "no-send-log",
         "Disable logging of previously sent data, implies --no-stat-caching.",
     );
-    opts.optflag("", "xattrs", "Save directory entry xattrs.");
+    opts.optflag(
+        "",
+        "xattrs",
+        "Save directory entry xattrs (at some performance cost).",
+    );
     opts.optopt(
         "",
         "send-log",
@@ -1751,6 +1755,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     exclusions: globset::GlobSet::empty(),
                     exclusion_markers: std::collections::HashSet::new(),
                     want_xattrs: matches.opt_present("xattrs"),
+                    want_sparseness: false,
                     want_hash: true,
                     one_file_system: false,
                 },

@@ -74,7 +74,7 @@ pub enum ItemSyncEvent {
 }
 
 const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
-const CURRENT_SCHEMA_VERSION: &str = "6";
+const CURRENT_SCHEMA_VERSION: &str = "7";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 0xffffffff; // Current plugin protocol uses 32 bits.
 
@@ -206,26 +206,35 @@ impl Repo {
             )?),
         };
 
-        let mut txn = fstx::ReadTxn::begin(&repo_path)?;
-        let mut schema_version = txn.read_string("meta/schema_version")?;
-        if schema_version != CURRENT_SCHEMA_VERSION {
-            txn.end();
-            // Unlock for upgrades, which can lock again if they need to.
-            repo_lock = RepoLock::None;
+        let mut txn;
 
-            if schema_version == "5" {
-                migrate::repo_upgrade_to_5_to_6(&repo_path)?;
-            }
-            // restart read transaction we cancelled...
+        loop {
             txn = fstx::ReadTxn::begin_at(repo_dirf.try_clone()?)?;
-            schema_version = txn.read_string("meta/schema_version")?;
+            let mut schema_version = txn.read_string("meta/schema_version")?;
             if schema_version != CURRENT_SCHEMA_VERSION {
-                anyhow::bail!(
-                    "the current version of bupstash expects repository schema version {}, got {}",
-                    CURRENT_SCHEMA_VERSION,
-                    schema_version
-                );
+                txn.end();
+                // Unlock for upgrades, which can lock again if they need to.
+                repo_lock = RepoLock::None;
+                if schema_version == "5" {
+                    migrate::repo_upgrade_to_5_to_6(&repo_path)?;
+                    continue;
+                }
+                if schema_version == "6" {
+                    migrate::repo_upgrade_to_6_to_7(&repo_path)?;
+                    continue;
+                }
+                // restart read transaction we cancelled...
+                txn = fstx::ReadTxn::begin_at(repo_dirf.try_clone()?)?;
+                schema_version = txn.read_string("meta/schema_version")?;
+                if schema_version != CURRENT_SCHEMA_VERSION {
+                    anyhow::bail!(
+                        "the current version of bupstash expects repository schema version {}, got {}",
+                        CURRENT_SCHEMA_VERSION,
+                        schema_version
+                    );
+                }
             }
+            break;
         }
 
         let storage_engine: Box<dyn chunk_storage::Engine> = {

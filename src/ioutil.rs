@@ -112,3 +112,26 @@ impl<R: Read, W: Write> Read for TeeReader<R, W> {
         Ok(n)
     }
 }
+
+pub fn all_zeros(buf: &[u8]) -> bool {
+    // This processes a lot of data so we iterate
+    // by 8 where we can and check the remainder byte wise.
+    let (prefix, big, suffix) = unsafe { buf.align_to::<u64>() };
+    // Check the fastest part first so we can early exit.
+    for v in big {
+        if *v != 0 {
+            return false;
+        }
+    }
+    for v in prefix {
+        if *v != 0 {
+            return false;
+        }
+    }
+    for v in suffix {
+        if *v != 0 {
+            return false;
+        }
+    }
+    true
+}

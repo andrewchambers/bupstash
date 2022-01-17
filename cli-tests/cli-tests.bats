@@ -820,6 +820,36 @@ _concurrent_modify_worker () {
   test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
 }
 
+@test "restore sparse" {
+  sparse_dir="$SCRATCH/random_dir"
+  restore_dir="$SCRATCH/restore_dir"
+  mkdir "$sparse_dir" "$restore_dir"
+
+  # create sparse files with holes in different places.
+  truncate -s 16M "$sparse_dir/file.img"
+  
+  echo data > "$sparse_dir/file_with_data1.img"
+  truncate -s 16M $sparse_dir/file_with_data1.img
+  
+  echo data > $sparse_dir/file_with_data2.img
+  truncate -s 16M $sparse_dir/file_with_data2.img
+  echo data >> $sparse_dir/file_with_data2.img
+
+  id=$(bupstash put :: "$sparse_dir")
+  bupstash restore --into "$restore_dir" "id=$id"
+
+  diff -u \
+    <(cd "$sparse_dir" ; find . | sort) \
+    <(cd "$restore_dir" ; find . | sort)
+
+  for f in $(cd "$sparse_dir" ; find . -type f | cut -c 3-)
+  do
+    cmp "$sparse_dir/$f" "$restore_dir/$f"
+    test "$(du "$sparse_dir/$f"  | awk '{print $1}' )" = \
+         "$(du "$restore_dir/$f" | awk '{print $1}' )"
+  done
+}
+
 @test "restore torture" {
   
   if test -z "$BUPSTASH_TORTURE_DIR"

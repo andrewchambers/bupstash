@@ -22,7 +22,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fmt::Write as FmtWrite;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
@@ -39,8 +39,8 @@ pub enum ClientError {
 }
 
 pub fn open_repository(
-    w: &mut dyn std::io::Write,
-    r: &mut dyn std::io::Read,
+    w: &mut dyn Write,
+    r: &mut dyn Read,
     open_mode: OpenMode,
 ) -> Result<(), anyhow::Error> {
     write_packet(
@@ -70,8 +70,8 @@ pub fn open_repository(
 }
 
 pub fn init_repository(
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
     storage_spec: Option<repository::StorageEngineSpec>,
 ) -> Result<(), anyhow::Error> {
     write_packet(w, &Packet::TInitRepository(storage_spec))?;
@@ -120,8 +120,8 @@ struct SendSession<'a, 'b, 'c> {
     idx_tw: Cell<Option<Box<htree::TreeWriter>>>,
     idx_size: u64,
     data_size: u64,
-    r: &'c mut dyn std::io::Read,
-    w: &'c mut dyn std::io::Write,
+    r: &'c mut dyn Read,
+    w: &'c mut dyn Write,
     scratch_buf: Vec<u8>,
     log_msg_buf: String,
 }
@@ -244,7 +244,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
     fn write_data(
         &mut self,
-        data: &mut dyn std::io::Read,
+        data: &mut dyn Read,
         on_chunk: &mut dyn FnMut(&Address, usize),
     ) -> Result<u64, anyhow::Error> {
         let mut n_written: u64 = 0;
@@ -321,6 +321,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             indexer::FsIndexerOptions {
                 one_file_system: self.ctx.one_file_system,
                 want_xattrs: self.ctx.want_xattrs,
+                want_sparseness: true,
                 want_hash: false,
                 exclusions,
                 exclusion_markers,
@@ -383,7 +384,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         )?;
                         index_ent.data_hash = cache_entry.hashes[i];
                         index_ent.data_cursor = cache_entry.data_cursors[i];
-                        self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
+                        self.write_idx_ent(&index::VersionedIndexEntry::V4(index_ent))?;
                     }
                 }
                 None => {
@@ -449,7 +450,6 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             let file_len = self.write_data(&mut f, &mut on_data_chunk)?;
 
                             if file_len != index_ent.size.0 {
-                                // Don't cache a smeared entry that is immediately invalidated by ctime.
                                 smear_detected = true;
                                 // The true size is what we read from disk.
                                 index_ent.size.0 = file_len;
@@ -488,7 +488,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             content_hashes.push(index_ent.data_hash)
                         }
 
-                        self.write_idx_ent(&index::VersionedIndexEntry::V3(index_ent))?;
+                        self.write_idx_ent(&index::VersionedIndexEntry::V4(index_ent))?;
                     }
 
                     if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
@@ -598,7 +598,7 @@ pub enum DataSource {
     Subprocess(Vec<String>),
     Readable {
         description: String,
-        data: Box<dyn std::io::Read>,
+        data: Box<dyn Read>,
     },
     Filesystem {
         paths: Vec<std::path::PathBuf>,
@@ -630,8 +630,8 @@ pub struct SendStats {
 
 pub fn send(
     mut ctx: SendContext,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: DataSource,
@@ -767,8 +767,8 @@ pub fn send(
 
 pub fn request_metadata(
     id: Xid,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<oplog::VersionedItemMetadata, anyhow::Error> {
     write_packet(w, &Packet::TRequestMetadata(TRequestMetadata { id }))?;
 
@@ -795,9 +795,9 @@ pub fn request_data_stream(
     metadata: &oplog::VersionedItemMetadata,
     data_map: Option<index::DataMap>,
     index: Option<index::CompressedIndex>,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
-    out: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
+    out: &mut dyn Write,
 ) -> Result<(), anyhow::Error> {
     // It makes little sense to ask the server for an empty pick.
     if let Some(ref data_map) = data_map {
@@ -880,8 +880,8 @@ pub fn request_index(
     mut ctx: IndexRequestContext,
     id: Xid,
     metadata: &oplog::VersionedItemMetadata,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<index::CompressedIndex, anyhow::Error> {
     if ctx.primary_key_id != *metadata.primary_key_id() {
         anyhow::bail!("decryption key does not match key used for encryption");
@@ -929,7 +929,7 @@ pub fn request_index(
 }
 
 fn receive_and_authenticate_htree_chunk(
-    r: &mut dyn std::io::Read,
+    r: &mut dyn Read,
     address: Address,
 ) -> Result<Vec<u8>, anyhow::Error> {
     let data = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -951,9 +951,9 @@ fn receive_and_authenticate_htree_chunk(
 fn receive_htree(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
-    r: &mut dyn std::io::Read,
+    r: &mut dyn Read,
     tr: &mut htree::TreeReader,
-    out: &mut dyn std::io::Write,
+    out: &mut dyn Write,
 ) -> Result<u64, anyhow::Error> {
     let mut n_copied: u64 = 0;
     while let Some((height, addr)) = tr.next_addr() {
@@ -987,12 +987,12 @@ fn receive_htree(
 fn write_indexed_data_as_tarball(
     read_data: &mut dyn FnMut() -> Result<Option<Vec<u8>>, anyhow::Error>,
     index: &index::CompressedIndex,
-    out: &mut dyn std::io::Write,
+    out: &mut dyn Write,
 ) -> Result<(), anyhow::Error> {
     let mut buffered = vec![];
     let mut buffer_index: usize = 0;
     let mut copy_out_and_hash =
-        |out: &mut dyn std::io::Write, mut n: u64| -> Result<blake3::Hash, anyhow::Error> {
+        |out: &mut dyn Write, mut n: u64| -> Result<blake3::Hash, anyhow::Error> {
             let mut hasher = blake3::Hasher::new();
 
             'read: while n != 0 {
@@ -1099,10 +1099,10 @@ fn write_indexed_data_as_tarball(
 fn receive_indexed_htree_as_tarball(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
-    r: &mut dyn std::io::Read,
+    r: &mut dyn Read,
     tr: &mut htree::TreeReader,
     index: &index::CompressedIndex,
-    out: &mut dyn std::io::Write,
+    out: &mut dyn Write,
 ) -> Result<(), anyhow::Error> {
     let mut read_data = || -> Result<Option<Vec<u8>>, anyhow::Error> {
         while let Some((height, addr)) = tr.next_addr() {
@@ -1138,12 +1138,12 @@ fn receive_indexed_htree_as_tarball(
 fn receive_partial_htree(
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
     tr: &mut htree::TreeReader,
     data_map: index::DataMap,
     index: Option<index::CompressedIndex>,
-    out: &mut dyn std::io::Write,
+    out: &mut dyn Write,
 ) -> Result<(), anyhow::Error> {
     // This is avoided before we make a server request.
     assert!(!data_map.data_chunk_ranges.is_empty());
@@ -1270,8 +1270,8 @@ fn receive_partial_htree(
 
 pub fn recover_removed(
     progress: indicatif::ProgressBar,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<u64, anyhow::Error> {
     progress.set_message("recovering items...");
 
@@ -1284,8 +1284,8 @@ pub fn recover_removed(
 
 pub fn gc(
     progress: indicatif::ProgressBar,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<repository::GcStats, anyhow::Error> {
     progress.set_message("collecting garbage...");
 
@@ -1307,8 +1307,8 @@ pub fn gc(
 pub fn sync_query_cache(
     progress: indicatif::ProgressBar,
     query_cache: &mut querycache::QueryCache,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<(), anyhow::Error> {
     progress.set_message("fetching remote metadata...");
 
@@ -1353,8 +1353,8 @@ pub fn sync_query_cache(
 pub fn remove(
     progress: indicatif::ProgressBar,
     ids: Vec<Xid>,
-    r: &mut dyn std::io::Read,
-    w: &mut dyn std::io::Write,
+    r: &mut dyn Read,
+    w: &mut dyn Write,
 ) -> Result<u64, anyhow::Error> {
     progress.set_message("removing items...");
 
@@ -1385,8 +1385,8 @@ pub fn restore_to_local_dir(
     ctx: RestoreContext,
     content_index: index::CompressedIndex,
     pick: Option<String>,
-    serve_out: &mut dyn std::io::Read,
-    serve_in: &mut dyn std::io::Write,
+    serve_out: &mut dyn Read,
+    serve_in: &mut dyn Write,
     to_dir: &Path,
 ) -> Result<(), anyhow::Error> {
     let sub_index = match pick {
@@ -1450,6 +1450,7 @@ pub fn restore_to_local_dir(
             indexer::FsIndexerOptions {
                 exclusions: globset::GlobSet::empty(),
                 exclusion_markers: HashSet::new(),
+                want_sparseness: false,
                 want_xattrs: false,
                 want_hash: true,
                 one_file_system: false,
@@ -1498,7 +1499,7 @@ pub fn restore_to_local_dir(
                             // Mapping back to the path in the unpicked index.
                             download_index_path_set
                                 .insert(format!("{}{}", download_path_prefix, e.path));
-                            downloads.push((e.path.clone(), e.size.0, e.data_hash));
+                            downloads.push((e.path.clone(), e.size.0, e.data_hash, e.sparse));
                         } else {
                             create_path_set.insert(e.path.clone());
                             create_index_writer.add(e);
@@ -1556,10 +1557,30 @@ pub fn restore_to_local_dir(
         let to_dir = to_dir.to_owned();
         let worker = std::thread::spawn(move || -> std::io::Result<()> {
             let r = &mut r;
-            for (path, size, hash) in downloads.drain(..) {
+            for (path, size, hash, sparse) in downloads.drain(..) {
                 let mut to_create = to_dir.to_owned();
                 to_create.push(&path);
-                let mut f = std::fs::File::create(to_create)?;
+                let mut f = std::fs::OpenOptions::new()
+                    .write(true)
+                    .read(true)
+                    .create(true)
+                    .open(to_create)?;
+
+                let n_copied = if sparse {
+                    fsutil::copy_as_sparse_file(&mut r.take(size), &mut f)?
+                } else {
+                    std::io::copy(&mut r.take(size), &mut f)?
+                };
+
+                if n_copied != size {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("content of {} is smaller than expected", &path),
+                    ));
+                }
+
+                f.seek(std::io::SeekFrom::Start(0))?;
+
                 match hash {
                     index::ContentCryptoHash::None => {
                         return Err(std::io::Error::new(
@@ -1568,15 +1589,8 @@ pub fn restore_to_local_dir(
                         ))
                     }
                     index::ContentCryptoHash::Blake3(expected_hash) => {
-                        let mut tee = ioutil::TeeReader::new(r.take(size), blake3::Hasher::new());
-                        let n = std::io::copy(&mut tee, &mut f)?;
-                        if n != size {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("content of {} is smaller than expected", &path),
-                            ));
-                        }
-                        let (_, hasher) = tee.into_inner();
+                        let mut hasher = blake3::Hasher::new();
+                        std::io::copy(&mut f, &mut hasher)?;
                         let actual_hash: [u8; 32] = hasher.finalize().into();
                         if expected_hash != actual_hash {
                             return Err(std::io::Error::new(
@@ -1818,7 +1832,7 @@ pub fn restore_to_local_dir(
     Ok(())
 }
 
-pub fn hangup(w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
+pub fn hangup(w: &mut dyn Write) -> Result<(), anyhow::Error> {
     write_packet(w, &Packet::EndOfTransmission)?;
     Ok(())
 }
