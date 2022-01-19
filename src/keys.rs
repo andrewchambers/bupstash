@@ -89,17 +89,13 @@ impl Key {
         };
 
         f.write_all("# This file contains a cryptographic key used by 'bupstash' to encrypt and decrypt data.\n#\n".to_string().as_bytes())?;
-        f.write_all(format!("# key-id={}\n", self.id().to_string()).as_bytes())?;
+        f.write_all(format!("# key-id={}\n", self.id()).as_bytes())?;
 
         match self {
             Key::PrimaryKeyV1(_) => (),
             Key::SubKeyV1(_) => {
                 f.write_all(
-                    format!(
-                        "# derived-from-key-id={}\n",
-                        self.primary_key_id().to_string(),
-                    )
-                    .as_bytes(),
+                    format!("# derived-from-key-id={}\n", self.primary_key_id(),).as_bytes(),
                 )?;
                 f.write_all(format!("# is-put-key={}\n", self.is_put_key()).as_bytes())?;
                 f.write_all(format!("# is-list-key={}\n", self.is_list_key()).as_bytes())?;

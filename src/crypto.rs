@@ -244,6 +244,7 @@ impl EncryptionContext {
         }
     }
 
+    #[allow(clippy::uninit_vec)]
     pub fn encrypt_data(&mut self, pt: Vec<u8>, compression: compression::Scheme) -> Vec<u8> {
         let pt = compression::compress(compression, pt);
         let ct_len = pt.len() + BOX_NONCEBYTES + BOX_MACBYTES + self.ephemeral_pk.bytes.len();
@@ -282,6 +283,7 @@ impl DecryptionContext {
         }
     }
 
+    #[allow(clippy::uninit_vec)]
     pub fn decrypt_data(&mut self, ct: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
         if ct.len() < BOX_PUBLICKEYBYTES + BOX_NONCEBYTES + BOX_MACBYTES {
             anyhow::bail!("data corrupt (too small)");

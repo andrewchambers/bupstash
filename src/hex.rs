@@ -38,9 +38,7 @@ pub fn decode_string(from: &str, to: &mut [u8]) -> Result<(), HexError> {
 pub fn easy_decode_string(from: &str) -> Result<Vec<u8>, HexError> {
     let n = from.len() / 2;
     let mut v = Vec::<u8>::with_capacity(n);
-    // Safe because <u8> is a primitive type.
-    // and v definitely has capacity for it's own capacity.
-    unsafe { v.set_len(n) };
+    v.resize(v.capacity(), 0);
     match decode_string(from, &mut v) {
         Ok(()) => Ok(v),
         Err(e) => Err(e),
