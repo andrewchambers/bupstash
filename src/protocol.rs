@@ -6,6 +6,7 @@ use super::repository;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
+use std::io::Read;
 use thiserror::Error;
 
 pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "12";
@@ -232,6 +233,20 @@ const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 // - We don't want to see any EPIPE at the top level caused by disconnects in the backend.
 // - It seems like it is always clearer for the end user to see a disconnected message.
 
+fn read_from_remote_into_vec(
+    r: &mut dyn std::io::Read,
+    buf: &mut Vec<u8>,
+    n: usize,
+) -> Result<(), anyhow::Error> {
+    // The stdlib is smart enough to avoid zero initializing if we use read_to_end,
+    // we can't do that ourselves easily without clippy complaining.
+    match r.take(n as u64).read_to_end(buf) {
+        Ok(n_read) if n_read == n => (),
+        _ => anyhow::bail!("remote disconnected"),
+    }
+    Ok(())
+}
+
 fn read_from_remote(r: &mut dyn std::io::Read, buf: &mut [u8]) -> Result<(), anyhow::Error> {
     if r.read_exact(buf).is_err() {
         anyhow::bail!("remote disconnected")
@@ -304,20 +319,13 @@ pub fn read_packet_raw(
         read_from_remote(r, &mut address.bytes[..])?;
         let sz = sz - ADDRESS_SZ;
         let mut data: Vec<u8> = Vec::with_capacity(sz);
-        unsafe {
-            data.set_len(sz);
-        };
-
-        read_from_remote(r, &mut data)?;
+        read_from_remote_into_vec(r, &mut data, sz)?;
         return Ok(Packet::Chunk(Chunk { address, data }));
     }
 
     let mut buf: Vec<u8> = Vec::with_capacity(sz);
-    unsafe {
-        buf.set_len(sz);
-    };
+    read_from_remote_into_vec(r, &mut buf, sz)?;
 
-    read_from_remote(r, &mut buf)?;
     let packet = match kind {
         PACKET_KIND_T_OPEN_REPOSITORY => Packet::TOpenRepository(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_OPEN_REPOSITORY => Packet::ROpenRepository(serde_bare::from_slice(&buf)?),
