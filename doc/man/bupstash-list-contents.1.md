@@ -37,7 +37,7 @@ Each line has the following json schema:
 
 ```
 {
-  "path": string,
+  "path": string | [ bytes... ],
   "mode": number,
   "size": number,
   "uid": number,
@@ -52,7 +52,7 @@ Each line has the following json schema:
   "link_target": string | null,
   "dev_major": number | null,
   "dev_minor": number | null,
-  "xattrs": {string : [bytes...] ...} | null,
+  "xattrs": {string : string | [bytes...] ...} | null,
   "sparse": boolean,
   "data_hash": "$KIND[:$HEXBYTE]" | null
 }

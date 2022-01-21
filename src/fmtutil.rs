@@ -76,22 +76,32 @@ pub fn format_human_content_listing(
     let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
     let ts = format_timestamp(&ts, utc_timestamps);
     std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();
-    std::fmt::write(&mut result, format_args!(" {}", ent.path)).unwrap();
+    std::fmt::write(&mut result, format_args!(" {}", ent.path.to_string_lossy())).unwrap();
     result
 }
 
 pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, anyhow::Error> {
-    let mut result = String::with_capacity(64);
+    let mut result = String::with_capacity(512);
     std::fmt::write(&mut result, format_args!("{{"))?;
     std::fmt::write(
         &mut result,
         format_args!("\"mode\":{}", serde_json::to_string(&ent.mode.0)?),
     )?;
     std::fmt::write(&mut result, format_args!(",\"size\":{}", ent.size.0))?;
-    std::fmt::write(
-        &mut result,
-        format_args!(",\"path\":{}", serde_json::to_string(&ent.path)?),
-    )?;
+
+    match ent.path.to_str() {
+        Some(path) => std::fmt::write(
+            &mut result,
+            format_args!(",\"path\":{}", serde_json::to_string(path)?),
+        )?,
+        None => {
+            let path = ent.path.as_os_str();
+            std::fmt::write(
+                &mut result,
+                format_args!(",\"path\":{}", serde_json::to_string(path)?),
+            )?
+        }
+    }
     std::fmt::write(
         &mut result,
         format_args!(",\"mtime\":{}", serde_json::to_string(&ent.mtime.0)?),
@@ -155,10 +165,32 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
     }
 
     if let Some(ref xattrs) = ent.xattrs {
-        std::fmt::write(
-            &mut result,
-            format_args!(",\"xattrs\":{}", serde_json::to_string(xattrs)?),
-        )?;
+        result.push_str(",\"xattrs\":{");
+        let mut first = true;
+        for (k, v) in xattrs.iter() {
+            let k = if let Some(k) = k.to_str() {
+                serde_json::to_string(k)?
+            } else {
+                serde_json::to_string(k)?
+            };
+
+            let v = if let Ok(v) = std::str::from_utf8(v.as_slice()) {
+                serde_json::to_string(v)?
+            } else {
+                serde_json::to_string(v)?
+            };
+
+            if first {
+                first = false;
+            } else {
+                result.push(',');
+            }
+
+            result.push_str(&k);
+            result.push(':');
+            result.push_str(&v);
+        }
+        result.push('}');
     } else {
         result.push_str(",\"xattrs\":null");
     }

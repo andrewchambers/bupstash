@@ -1030,7 +1030,7 @@ fn write_indexed_data_as_tarball(
             Ok(hasher.finalize())
         };
 
-    let mut hardlinks: std::collections::HashMap<(u64, u64), String> =
+    let mut hardlinks: std::collections::HashMap<(u64, u64), PathBuf> =
         std::collections::HashMap::new();
 
     for ent in index.iter() {
@@ -1065,7 +1065,7 @@ fn write_indexed_data_as_tarball(
                 index::ContentCryptoHash::None => (), // XXX we don't currently require this, but we should for 1.0.
                 index::ContentCryptoHash::Blake3(expected_hash) => {
                     if hash_bytes != expected_hash {
-                        anyhow::bail!("entry {} content hash differs from index hash, possible corruption detected.", ent.path);
+                        anyhow::bail!("entry {} content hash differs from index hash, possible corruption detected.", ent.path.to_string_lossy());
                     }
                 }
             }
@@ -1384,7 +1384,7 @@ pub fn restore_to_local_dir(
     progress: &indicatif::ProgressBar,
     ctx: RestoreContext,
     content_index: index::CompressedIndex,
-    pick: Option<String>,
+    pick: Option<PathBuf>,
     serve_out: &mut dyn Read,
     serve_in: &mut dyn Write,
     to_dir: &Path,
@@ -1473,10 +1473,10 @@ pub fn restore_to_local_dir(
     let mut downloads = Vec::with_capacity(512);
 
     {
-        let download_path_prefix = match pick {
-            Some(ref pick) if pick == "." => "".to_string(),
-            Some(ref pick) => format!("{}/", pick),
-            None => "".to_string(),
+        let download_path_prefix: PathBuf = match pick {
+            Some(ref pick) if pick == Path::new(".") => "".into(),
+            Some(ref pick) => fsutil::path_raw_join(pick, Path::new("/")),
+            None => "".into(),
         };
 
         index::diff(
@@ -1496,9 +1496,8 @@ pub fn restore_to_local_dir(
                         if e.is_dir() {
                             new_dirs.push(PathBuf::from(&e.path));
                         } else if e.is_file() {
-                            // Mapping back to the path in the unpicked index.
-                            download_index_path_set
-                                .insert(format!("{}{}", download_path_prefix, e.path));
+                            let mapped_path = fsutil::path_raw_join(&download_path_prefix, &e.path);
+                            download_index_path_set.insert(mapped_path);
                             downloads.push((e.path.clone(), e.size.0, e.data_hash, e.sparse));
                         } else {
                             create_path_set.insert(e.path.clone());
@@ -1575,7 +1574,10 @@ pub fn restore_to_local_dir(
                 if n_copied != size {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        format!("content of {} is smaller than expected", &path),
+                        format!(
+                            "content of {} is smaller than expected",
+                            path.to_string_lossy()
+                        ),
                     ));
                 }
 
@@ -1585,7 +1587,7 @@ pub fn restore_to_local_dir(
                     index::ContentCryptoHash::None => {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("{} in content index missing hash", &path),
+                            format!("{} in content index missing hash", path.to_string_lossy()),
                         ))
                     }
                     index::ContentCryptoHash::Blake3(expected_hash) => {
@@ -1595,7 +1597,10 @@ pub fn restore_to_local_dir(
                         if expected_hash != actual_hash {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
-                                format!("content of {} did not match expected hash", &path),
+                                format!(
+                                    "content of {} did not match expected hash",
+                                    path.to_string_lossy()
+                                ),
                             ));
                         }
                     }
@@ -1639,7 +1644,7 @@ pub fn restore_to_local_dir(
             match ent.kind() {
                 index::IndexEntryKind::Symlink => {
                     if ent.link_target.is_none() {
-                        anyhow::bail!("{} is missing a link target", ent.path);
+                        anyhow::bail!("{} is missing a link target", ent.path.to_string_lossy());
                     }
                     match std::os::unix::fs::symlink(&ent.link_target.unwrap(), &to_create) {
                         Ok(_) => (),
@@ -1716,7 +1721,7 @@ pub fn restore_to_local_dir(
                         Ok(()) => (),
                         Err(err) => anyhow::bail!(
                             "failed to list remove xattr {} from {}: {}",
-                            attr,
+                            attr.to_string_lossy(),
                             to_ch.display(),
                             err
                         ),

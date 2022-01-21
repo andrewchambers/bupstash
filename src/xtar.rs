@@ -2,6 +2,8 @@
 
 use super::index;
 use std::convert::TryInto;
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 fn format_pax_extended_record(key: &[u8], value: &[u8]) -> Vec<u8> {
     let mut record_len = 3 + key.len() + value.len();
@@ -29,7 +31,7 @@ fn format_pax_extended_record(key: &[u8], value: &[u8]) -> Vec<u8> {
 
 pub fn index_entry_to_tarheader(
     ent: &index::IndexEntry,
-    hard_link: Option<&String>,
+    hard_link: Option<&PathBuf>,
 ) -> Result<Vec<u8>, anyhow::Error> {
     let mut pax_ext_records = Vec::new();
     let mut ustar_hdr = tar::Header::new_ustar();
@@ -37,19 +39,25 @@ pub fn index_entry_to_tarheader(
     let tar_type = match &hard_link {
         Some(hard_link) => match ent.kind() {
             index::IndexEntryKind::Other => {
-                anyhow::bail!("index entry {} has an unknown type", ent.path)
+                anyhow::bail!(
+                    "index entry {} has an unknown type",
+                    ent.path.to_string_lossy()
+                )
             }
             index::IndexEntryKind::Directory => anyhow::bail!(
                 "index entry {} is a directory, so can't have a hard link to {}",
-                ent.path,
-                hard_link,
+                ent.path.to_string_lossy(),
+                hard_link.to_string_lossy(),
             ),
             _ => tar::EntryType::Link,
         },
 
         None => match ent.kind() {
             index::IndexEntryKind::Other => {
-                anyhow::bail!("index entry {} has an unknown type", ent.path)
+                anyhow::bail!(
+                    "index entry {} has an unknown type",
+                    ent.path.to_string_lossy()
+                )
             }
             index::IndexEntryKind::Regular => tar::EntryType::Regular,
             index::IndexEntryKind::Symlink => tar::EntryType::Symlink,
@@ -73,8 +81,8 @@ pub fn index_entry_to_tarheader(
         Ok(()) => (),
         Err(e) => {
             /* 100 is more than ustar can handle as a path target */
-            if ent.path.len() > 100 {
-                let path_bytes = ent.path.as_bytes();
+            if ent.path.as_os_str().len() > 100 {
+                let path_bytes = ent.path.as_os_str().as_bytes();
                 let path_record = format_pax_extended_record(b"path", path_bytes);
                 pax_ext_records.extend_from_slice(&path_record);
             } else {
@@ -94,8 +102,9 @@ pub fn index_entry_to_tarheader(
             Ok(()) => (),
             Err(err) => {
                 /* 100 is more than ustar can handle as a link target */
-                if target.len() > 100 {
-                    let target_record = format_pax_extended_record(b"linkpath", target.as_bytes());
+                if target.as_os_str().len() > 100 {
+                    let target_record =
+                        format_pax_extended_record(b"linkpath", target.as_os_str().as_bytes());
                     pax_ext_records.extend_from_slice(&target_record);
                 } else {
                     return Err(err.into());
@@ -108,11 +117,12 @@ pub fn index_entry_to_tarheader(
 
     match &ent.xattrs {
         Some(xattrs) => {
+            let mut key_bytes = Vec::with_capacity(24);
             for (k, v) in xattrs.iter() {
-                pax_ext_records.extend_from_slice(&format_pax_extended_record(
-                    format!("SCHILY.xattr.{}", k).as_bytes(),
-                    v,
-                ));
+                key_bytes.truncate(0);
+                key_bytes.extend_from_slice(b"SCHILY.xattr.");
+                key_bytes.extend_from_slice(k.as_bytes());
+                pax_ext_records.extend_from_slice(&format_pax_extended_record(&key_bytes, v));
             }
         }
         None => (),
