@@ -1374,8 +1374,8 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         progress.set_message("picking content...");
 
         if let Some(ref index) = get_index {
-            let (pick_index, pick_data_map) =
-                index::pick(&matches.opt_str("pick").unwrap(), index)?;
+            let pick_path: PathBuf = matches.opt_str("pick").unwrap().into();
+            let (pick_index, pick_data_map) = index::pick(&pick_path, index)?;
             get_index = pick_index;
             get_data_map = Some(pick_data_map);
         } else {
@@ -1558,8 +1558,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     if matches.opt_present("pick") {
         progress.set_message("picking content...");
-        content_index =
-            index::pick_dir_without_data(&matches.opt_str("pick").unwrap(), &content_index)?;
+        let pick_path: PathBuf = matches.opt_str("pick").unwrap().into();
+        content_index = index::pick_dir_without_data(&pick_path, &content_index)?;
     }
 
     client::hangup(&mut serve_in)?;
@@ -1859,8 +1859,8 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     for (i, pick_opt) in ["left-pick", "right-pick"].iter().enumerate() {
         if matches.opt_present(pick_opt) {
             progress.set_message("picking content...");
-            to_diff[i] =
-                index::pick_dir_without_data(&matches.opt_str(pick_opt).unwrap(), &to_diff[i])?;
+            let pick_path: PathBuf = matches.opt_str(pick_opt).unwrap().into();
+            to_diff[i] = index::pick_dir_without_data(&pick_path, &to_diff[i])?;
         }
     }
 
@@ -2400,7 +2400,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             restore_xattrs: matches.opt_present("xattrs"),
         },
         content_index,
-        matches.opt_str("pick"),
+        matches.opt_str("pick").map(|x| x.into()),
         &mut serve_out,
         &mut serve_in,
         &into_dir,

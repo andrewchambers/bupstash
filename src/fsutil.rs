@@ -221,6 +221,13 @@ pub fn anon_temp_file() -> Result<std::fs::File, std::io::Error> {
     Ok(f)
 }
 
+// Join two paths exactly as they are without any normalization.
+pub fn path_raw_join(l: &Path, r: &Path) -> PathBuf {
+    let mut p = l.to_owned().into_os_string();
+    p.push(r.as_os_str());
+    PathBuf::from(p)
+}
+
 // Get an absolute path without resolving symlinks or touching the fs.
 pub fn absolute_path<P>(path: P) -> std::io::Result<PathBuf>
 where

@@ -1,8 +1,10 @@
+use super::fsutil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
-pub type Xattrs = BTreeMap<String, Vec<u8>>;
+pub type Xattrs = BTreeMap<std::ffi::OsString, Vec<u8>>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SparseHint {
@@ -47,7 +49,7 @@ impl IndexEntryKind {
 // for snapshot diffs as well as bandwidth efficient restore.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V1IndexEntry {
-    pub path: String,
+    pub path: PathBuf,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -59,7 +61,7 @@ pub struct V1IndexEntry {
     pub dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<String>,
+    pub link_target: Option<PathBuf>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<Xattrs>,
@@ -72,7 +74,7 @@ pub struct V1IndexEntry {
 // to relative cursors.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V2IndexEntry {
-    pub path: String,
+    pub path: PathBuf,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -84,7 +86,7 @@ pub struct V2IndexEntry {
     pub norm_dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<String>,
+    pub link_target: Option<PathBuf>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<Xattrs>,
@@ -96,7 +98,7 @@ pub struct V2IndexEntry {
 // Was deprecated to allow us to support sparse files.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V3IndexEntry {
-    pub path: String,
+    pub path: PathBuf,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -108,7 +110,7 @@ pub struct V3IndexEntry {
     pub norm_dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<String>,
+    pub link_target: Option<PathBuf>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
     pub xattrs: Option<Xattrs>,
@@ -118,7 +120,7 @@ pub struct V3IndexEntry {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexEntry {
-    pub path: String,
+    pub path: PathBuf,
     pub size: serde_bare::Uint,
     pub mtime: serde_bare::Uint,
     pub mtime_nsec: serde_bare::Uint,
@@ -132,7 +134,7 @@ pub struct IndexEntry {
     pub uid: serde_bare::Uint,
     pub gid: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<String>,
+    pub link_target: Option<PathBuf>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
     pub sparse: bool,
@@ -457,7 +459,7 @@ pub fn data_map_for_predicate(
 }
 
 pub fn pick(
-    path: &str,
+    path: &Path,
     file_index: &CompressedIndex,
 ) -> Result<(Option<CompressedIndex>, DataMap), anyhow::Error> {
     let mut cur_chunk_idx = 0;
@@ -480,13 +482,13 @@ pub fn pick(
 
                     let mut sub_index_writer = CompressedIndexWriter::new();
 
-                    ent.path = ".".to_string();
+                    ent.path = ".".into();
                     sub_index_writer.add(&ent);
 
-                    let strip_prefix = if path == "." {
-                        "".to_string()
+                    let prefix_to_strip = if path.as_os_str() == "." {
+                        "".into()
                     } else {
-                        format!("{}/", path)
+                        fsutil::path_raw_join(path, Path::new("/"))
                     };
 
                     cur_chunk_idx += ent.data_cursor.chunk_delta.0;
@@ -497,7 +499,7 @@ pub fn pick(
                         let mut ent = ent?;
 
                         // Match the directory and children.
-                        if !ent.path.starts_with(&strip_prefix) {
+                        if !ent.path.starts_with(&prefix_to_strip) {
                             cur_chunk_idx += ent.data_cursor.chunk_delta.0;
                             if found_children {
                                 // We have processed all children, exit early.
@@ -509,7 +511,11 @@ pub fn pick(
                         }
                         found_children = true;
 
-                        ent.path = ent.path[strip_prefix.len()..].to_string();
+                        ent.path = ent
+                            .path
+                            .strip_prefix(&prefix_to_strip)
+                            .unwrap()
+                            .to_path_buf();
 
                         sub_index_writer.add(&ent);
 
@@ -553,7 +559,7 @@ pub fn pick(
                 }
                 kind => anyhow::bail!(
                     "unable to pick {} - unsupported directory entry type: {:?}",
-                    path,
+                    path.to_string_lossy(),
                     kind
                 ),
             }
@@ -561,11 +567,11 @@ pub fn pick(
 
         cur_chunk_idx += ent.data_cursor.chunk_delta.0;
     }
-    anyhow::bail!("{} not found in content index", path)
+    anyhow::bail!("{} not found in content index", path.to_string_lossy())
 }
 
 pub fn pick_dir_without_data(
-    path: &str,
+    path: &Path,
     file_index: &CompressedIndex,
 ) -> Result<CompressedIndex, anyhow::Error> {
     let mut iter = file_index.iter();
@@ -581,32 +587,36 @@ pub fn pick_dir_without_data(
         match ent.kind() {
             IndexEntryKind::Directory => {
                 let mut sub_index_writer = CompressedIndexWriter::new();
-                ent.path = ".".to_string();
+                ent.path = ".".into();
                 sub_index_writer.add(&ent);
 
-                let strip_prefix = if path == "." {
-                    "".to_string()
+                let prefix_to_strip = if path.as_os_str() == "." {
+                    "".into()
                 } else {
-                    format!("{}/", path)
+                    fsutil::path_raw_join(path, Path::new("/"))
                 };
 
                 for ent in iter {
                     let mut ent = ent?;
-                    if !ent.path.starts_with(&strip_prefix) {
+                    if !ent.path.starts_with(&prefix_to_strip) {
                         continue;
                     }
-                    ent.path = ent.path[strip_prefix.len()..].to_string();
+                    ent.path = ent
+                        .path
+                        .strip_prefix(&prefix_to_strip)
+                        .unwrap()
+                        .to_path_buf();
                     sub_index_writer.add(&ent);
                 }
                 return Ok(sub_index_writer.finish());
             }
             _ => anyhow::bail!(
                 "unable to pick {} in this context, it is not a directory",
-                path,
+                path.to_string_lossy(),
             ),
         }
     }
-    anyhow::bail!("{} not found in content index", path)
+    anyhow::bail!("{} not found in content index", path.to_string_lossy())
 }
 
 // The index can get huge when we have millions of files, so we use a compressed index in memory.
@@ -760,7 +770,7 @@ impl Default for CompressedIndexWriter {
     }
 }
 
-pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
+pub fn path_cmp(l: &Path, r: &Path) -> std::cmp::Ordering {
     // This path comparison is designed such that our
     // 'put' indexer always produces lists of files that are
     // sorted according to it's order. This lets our diff
@@ -784,13 +794,13 @@ pub fn path_cmp(l: &str, r: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering::*;
     if l == r {
         Equal
-    } else if l == "." {
+    } else if l.as_os_str() == "." {
         Less
-    } else if r == "." {
+    } else if r.as_os_str() == "." {
         Greater
     } else {
-        let mut liter = l.split('/');
-        let mut riter = r.split('/');
+        let mut liter = l.iter();
+        let mut riter = r.iter();
         loop {
             match (liter.next(), riter.next()) {
                 (Some(lelem), Some(relem)) => match lelem.cmp(relem) {
@@ -880,20 +890,22 @@ mod tests {
     fn test_index_path_cmp() {
         use std::cmp::Ordering::*;
 
-        assert!(path_cmp(".", ".") == Equal);
-        assert!(path_cmp(".", "a") == Less);
-        assert!(path_cmp("a", ".") == Greater);
-        assert!(path_cmp("a", "b/c/e") == Less);
-        assert!(path_cmp("b/c/e", "a") == Greater);
-        assert!(path_cmp("a", "b") == Less);
-        assert!(path_cmp("a/b/c", "b") == Greater);
-        assert!(path_cmp("a/b/c", "d/e") == Less);
-        assert!(path_cmp("a/b/a", "a/b/c") == Less);
-        assert!(path_cmp("a/b/c", "a/b/c") == Equal);
-        assert!(path_cmp("b/a/d", "b/z") == Greater);
-        assert!(path_cmp("b/z", "b/a/d",) == Less);
-        assert!(path_cmp("b/z/d", "b/a/d") == Greater);
-        assert!(path_cmp("b/a/d", "b/z/d") == Less);
+        let path_cmp_str = |l: &str, r: &str| path_cmp(Path::new(l), Path::new(r));
+
+        assert!(path_cmp_str(".", ".") == Equal);
+        assert!(path_cmp_str(".", "a") == Less);
+        assert!(path_cmp_str("a", ".") == Greater);
+        assert!(path_cmp_str("a", "b/c/e") == Less);
+        assert!(path_cmp_str("b/c/e", "a") == Greater);
+        assert!(path_cmp_str("a", "b") == Less);
+        assert!(path_cmp_str("a/b/c", "b") == Greater);
+        assert!(path_cmp_str("a/b/c", "d/e") == Less);
+        assert!(path_cmp_str("a/b/a", "a/b/c") == Less);
+        assert!(path_cmp_str("a/b/c", "a/b/c") == Equal);
+        assert!(path_cmp_str("b/a/d", "b/z") == Greater);
+        assert!(path_cmp_str("b/z", "b/a/d",) == Less);
+        assert!(path_cmp_str("b/z/d", "b/a/d") == Greater);
+        assert!(path_cmp_str("b/a/d", "b/z/d") == Less);
 
         let mut v = vec![
             "a/x.txt",
@@ -904,7 +916,7 @@ mod tests {
             "b/derp.txt",
             "c/d/slurm",
         ];
-        v.sort_by(|l, r| path_cmp(l, r));
+        v.sort_by(|l, r| path_cmp_str(l, r));
         assert_eq!(
             v,
             vec![

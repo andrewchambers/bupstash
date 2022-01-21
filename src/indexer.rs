@@ -113,7 +113,7 @@ fn get_metadata(path: &Path, opts: &FsMetadataFetcherOptions) -> std::io::Result
                             }
                             match xattrs {
                                 Some(ref mut xattrs) => {
-                                    xattrs.insert(attr.to_string_lossy().to_string(), value);
+                                    xattrs.insert(attr, value);
                                 }
                                 _ => unreachable!(),
                             }
@@ -248,9 +248,6 @@ pub fn metadata_to_index_ent(
     sparse: bool,
     data_hash: index::ContentCryptoHash,
 ) -> Result<index::IndexEntry, std::io::Error> {
-    // TODO XXX it seems we should not be using to_string_lossy and throwing away user data...
-    // how best to handle this?
-
     let t = metadata.file_type();
 
     let (dev_major, dev_minor) = if t.is_block_device() || t.is_char_device() {
@@ -263,7 +260,7 @@ pub fn metadata_to_index_ent(
     };
 
     Ok(index::IndexEntry {
-        path: index_path.to_string_lossy().to_string(),
+        path: index_path.to_owned(),
         size: serde_bare::Uint(if metadata.is_file() {
             metadata.size()
         } else {
@@ -278,11 +275,7 @@ pub fn metadata_to_index_ent(
         mtime_nsec: serde_bare::Uint(metadata.mtime_nsec() as u64),
         nlink: serde_bare::Uint(metadata.nlink()),
         link_target: if t.is_symlink() {
-            Some(
-                std::fs::read_link(&full_path)?
-                    .to_string_lossy()
-                    .to_string(),
-            )
+            Some(std::fs::read_link(&full_path)?)
         } else {
             None
         },
@@ -440,7 +433,7 @@ impl FsIndexer {
         }
 
         for (_, v) in filler_children.iter_mut() {
-            v.sort_by(|l, r| index::path_cmp(&l.to_string_lossy(), &r.to_string_lossy()))
+            v.sort_by(|l, r| index::path_cmp(l, r))
         }
 
         let start_dir = if let Some(base_parent) = base.parent() {
@@ -538,15 +531,15 @@ impl FsIndexer {
 
         dir_ents.sort_by(|l, r| {
             index::path_cmp(
-                &l.0.file_name().unwrap().to_string_lossy(),
-                &r.0.file_name().unwrap().to_string_lossy(),
+                l.0.file_name().unwrap().as_ref(),
+                r.0.file_name().unwrap().as_ref(),
             )
         });
 
         excluded_paths.sort_by(|l, r| {
             index::path_cmp(
-                &l.file_name().unwrap().to_string_lossy(),
-                &r.file_name().unwrap().to_string_lossy(),
+                l.file_name().unwrap().as_ref(),
+                r.file_name().unwrap().as_ref(),
             )
         });
 
