@@ -355,6 +355,22 @@ cfg_if::cfg_if! {
             (dev & 0xff) | ((dev & 0xffff0000) >> 8)
         }
 
+     } else if #[cfg(target_os = "freebsd")] {
+
+        // See https://github.com/freebsd/freebsd-src/sys/sys/types.h
+        pub fn makedev(major: u64, minor: u64) -> libc::dev_t {
+            (((major & 0xffffff00) << 32) | ((major & 0xff) << 8) |
+             ((minor & 0xff00) << 24) | (minor & 0xffff00ff)) as libc::dev_t
+        }
+
+        pub fn dev_major(dev: u64) -> u64 {
+            ((dev >> 32) & 0xffffff00) | ((dev >> 8) & 0xff)
+        }
+
+        pub fn dev_minor(dev :u64) -> u64 {
+            ((dev >> 24) & 0xff00) | (dev & 0xffff00ff)
+        }
+
     } else {
 
         pub fn makedev(major: u64, minor: u64) -> libc::dev_t {
