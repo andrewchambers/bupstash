@@ -135,6 +135,16 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
+### Pkgconf
+
+You can use pkgconf instead of pkg-config (this is required on freebsd) by setting
+the PKG_CONFIG environment variable.
+
+```
+$ export PKG_CONFIG=pkgconf
+```
+
+
 ## Building man pages
 
 The man pages are currently build using a markdown to man page renderer called [ronn](https://github.com/rtomayko/ronn).

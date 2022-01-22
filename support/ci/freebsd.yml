@@ -1,0 +1,19 @@
+image: freebsd/latest
+packages:
+  - rust
+  - pkgconf
+  - libsodium
+  - sqlite3
+  - python3
+  - gtar
+  - bats-core
+sources:
+  - https://github.com/andrewchambers/bupstash
+tasks:
+  - build: |
+      cd bupstash
+      export PKG_CONFIG=pkgconf
+      cargo test
+      cargo build --release
+      export PATH=$(pwd)/target/release:$PATH
+      bats ./cli-tests
