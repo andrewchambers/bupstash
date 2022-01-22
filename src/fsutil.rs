@@ -77,6 +77,8 @@ impl FileLock {
             l_start: 0,
             l_len: 0,
             l_pid: 0,
+            #[cfg(target_os = "freebsd")]
+            l_sysid: 0,
         };
 
         let ctx = FileLockCtx::new(ctx_tag);
@@ -100,6 +102,8 @@ impl FileLock {
             l_start: 0,
             l_len: 0,
             l_pid: 0,
+            #[cfg(target_os = "freebsd")]
+            l_sysid: 0,
         };
 
         let ctx = FileLockCtx::new(ctx_tag);
@@ -124,6 +128,8 @@ impl FileLock {
             l_start: 0,
             l_len: 0,
             l_pid: 0,
+            #[cfg(target_os = "freebsd")]
+            l_sysid: 0,
         };
 
         let ctx = FileLockCtx::new(ctx_tag);
