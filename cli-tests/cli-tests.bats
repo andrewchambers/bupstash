@@ -521,7 +521,7 @@ _concurrent_modify_worker () {
 
   for id in $(bupstash list --format=jsonl1 | jq -r .id)
   do
-    bupstash get id=$id | tar -t > /dev/null
+    bupstash get id=$id | tar -tf - > /dev/null
   done
 }
 
@@ -558,10 +558,10 @@ _concurrent_modify_worker () {
     do
       cmp <(bupstash get --pick "$f" id=$id) "$SCRATCH/foo/$f"
     done
-    test $(bupstash get id=$id | tar -t | expr $(wc -l)) = 22
-    bupstash get --pick . id=$id | tar -t
-    test $(bupstash get --pick . id=$id | tar -t | expr $(wc -l)) = 22
-    test $(bupstash get --pick baz id=$id | tar -t | expr $(wc -l)) = 11
+    test $(bupstash get id=$id | tar -tf - | expr $(wc -l)) = 22
+    bupstash get --pick . id=$id | tar -tf -
+    test $(bupstash get --pick . id=$id | tar -tf - | expr $(wc -l)) = 22
+    test $(bupstash get --pick baz id=$id | tar -tf - | expr $(wc -l)) = 11
     test $(bupstash list-contents  id=$id | expr $(wc -l)) = 22
   done
 }
