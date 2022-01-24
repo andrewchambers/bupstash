@@ -607,11 +607,6 @@ _concurrent_modify_worker () {
 }
 
 @test "long hard link target" {
-  if test $(uname) == "Darwin"
-  then
-    skip "Long symlinks are currently broken on macOS due to incompatible tar format"
-  fi
-
   a="aaaaaaaaaa"
   name="$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a$a"
   mkdir "$SCRATCH/foo"
@@ -620,23 +615,28 @@ _concurrent_modify_worker () {
 
   id=$(bupstash put :: "$SCRATCH/foo")
   mkdir "$SCRATCH/restore"
-  bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
+
+  if test $(uname) != "Linux"
+  then
+    bupstash get id=$id | gtar -C "$SCRATCH/restore" -xvf -
+  else
+    bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
+  fi
 
   echo -n 'x' >> "$SCRATCH/restore/$name"
-  test "x" = $(cat "$SCRATCH/restore/b")
+  test "x" = "$(cat "$SCRATCH/restore/b")"
 }
 
 @test "hard link to symlink" {
-  # On macOS hard links to symlinks actually point to the original file
-  if test $(uname) == "Darwin"
+  if test $(uname) != "Linux"
   then
-    skip "Not applicable on macOS"
+    skip "Test disabled on non-linux operating systems"
   fi
 
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/a"
   ln -s "$SCRATCH/foo/a" "$SCRATCH/foo/b"
-  ln "$SCRATCH/foo/b" "$SCRATCH/foo/c"
+  ln -n "$SCRATCH/foo/b" "$SCRATCH/foo/c"
 
   id=$(bupstash put :: "$SCRATCH/foo")
   mkdir "$SCRATCH/restore"
@@ -845,7 +845,7 @@ _concurrent_modify_worker () {
   for f in $(cd "$sparse_dir" ; find . -type f | cut -c 3-)
   do
     cmp "$sparse_dir/$f" "$restore_dir/$f"
-    test "$(du "$sparse_dir/$f"  | awk '{print $1}' )" = \
+    test "$(du "$sparse_dir/$f"  | awk '{print $1}' )" -ge \
          "$(du "$restore_dir/$f" | awk '{print $1}' )"
   done
 }
