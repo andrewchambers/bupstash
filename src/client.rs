@@ -1757,6 +1757,22 @@ pub fn restore_to_local_dir(
             };
         }
 
+        if let (Ok(tv_sec), Ok(tv_nsec)) = (ent.mtime.0.try_into(), ent.mtime_nsec.0.try_into()) {
+            match nix::sys::stat::utimensat(
+                None,
+                to_ch,
+                &nix::sys::time::TimeSpec::from(libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: libc::UTIME_OMIT,
+                }),
+                &nix::sys::time::TimeSpec::from(libc::timespec { tv_sec, tv_nsec }),
+                nix::sys::stat::UtimensatFlags::NoFollowSymlink,
+            ) {
+                Ok(_) => (),
+                Err(err) => anyhow::bail!("failed to set mtime of {}: {}", to_ch.display(), err),
+            };
+        }
+
         Ok(())
     };
 
@@ -1768,7 +1784,9 @@ pub fn restore_to_local_dir(
         index::diff(
             &to_dir_index,
             index_to_diff,
-            !(index::INDEX_COMPARE_MASK_PERMS | index::INDEX_COMPARE_MASK_XATTRS),
+            !(index::INDEX_COMPARE_MASK_PERMS
+                | index::INDEX_COMPARE_MASK_XATTRS
+                | index::INDEX_COMPARE_MASK_MTIME),
             &mut |ds: index::DiffStat, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
                 if matches!(ds, index::DiffStat::Removed) {
                     // Nothing to do, removals already processed.
@@ -1810,7 +1828,7 @@ pub fn restore_to_local_dir(
                         }
 
                         if matches!(ds, index::DiffStat::Added) {
-                            // Set the perms and xattrs of anything that changed.
+                            // Set the attributes of anything that changed.
                             let mut to_ch = to_dir.to_owned();
                             to_ch.push(&ent.path);
                             if ent.is_dir() {
