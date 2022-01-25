@@ -717,11 +717,7 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 dev_minor: ent.dev_minor,
                 sparse: false,
                 xattrs: ent.xattrs,
-                data_cursor: RelativeDataCursor {
-                    chunk_delta: serde_bare::Uint(u64::MAX),
-                    start_byte_offset: serde_bare::Uint(u64::MAX),
-                    end_byte_offset: serde_bare::Uint(u64::MAX),
-                },
+                data_cursor: ent.data_cursor,
                 data_hash: ent.data_hash,
             })),
             Ok(VersionedIndexEntry::V4(ent)) => Some(Ok(ent)),
