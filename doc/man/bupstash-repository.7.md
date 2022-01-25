@@ -204,7 +204,7 @@ KEY_EXCHANGE_PACKET1_BYTES[PACKET1_SZ] || ENCRYPTED_BYTES[...]
 After decryption, the chunk is optionally compressed, so is either compressed data, or data with a null footer byte.
 
 ```
-COMPRESSED_DATA[...] || DECOMPRESSED_SIZE[4] || COMPRESSION_FLAGS[1]
+COMPRESSED_DATA[...] || DECOMPRESSED_SIZE[4] || COMPRESSION_TYPE[1]
 ```
 
 or 
@@ -213,9 +213,10 @@ or
 DATA[...] || 0x00
 ```
 
-Valid compression flags are:
+Valid compression types are:
 
-- 1 << 0 == lz4 compression.
+- 1 == lz4 compression.
+- 2 == zstd compression.
 
 ### Hash tree node chunk
 
