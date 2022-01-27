@@ -261,6 +261,15 @@ pub enum LogOp {
 }
 
 pub fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, anyhow::Error> {
+    const MAX_HTREE_HEIGHT: u64 = 10;
+    if md.data_tree().height.0 > MAX_HTREE_HEIGHT {
+        anyhow::bail!("item has invalid data hash tree");
+    }
+    if let Some(index_tree) = md.index_tree() {
+        if index_tree.height.0 > MAX_HTREE_HEIGHT {
+            anyhow::bail!("item has invalid index hash tree");
+        }
+    }
     let serialized_op = serde_bare::to_vec(&md)?;
     if serialized_op.len() > MAX_METADATA_SIZE {
         anyhow::bail!("itemset log item metadata too big!");

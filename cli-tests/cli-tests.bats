@@ -197,7 +197,8 @@ _concurrent_send_test_worker () {
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep removed | expr $(wc -l))"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash gc
@@ -237,7 +238,7 @@ _concurrent_send_test_worker () {
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
+    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed  | expr $(wc -l))"
     test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id1
@@ -247,7 +248,7 @@ _concurrent_send_test_worker () {
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
+    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed | expr $(wc -l))"
     test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
   fi
   bupstash rm id=$id2
@@ -703,6 +704,7 @@ _concurrent_modify_worker () {
   if bupstash rm id=$id ; then exit 1 ; fi
   if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
+  if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-put $REPO"
   bupstash put -e echo hi
@@ -747,6 +749,12 @@ _concurrent_modify_worker () {
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-get --allow-put $REPO"
   bupstash recover-removed
+
+  export BUPSTASH_REPOSITORY_COMMAND="bupstash serve $REPO"
+  export BUPSTASH_TO_REPOSITORY_COMMAND="bupstash serve --allow-get --allow-put --allow-list --allow-gc --allow-remove $REPO"
+  if bupstash sync ; then exit 1 ; fi
+  export BUPSTASH_TO_REPOSITORY_COMMAND="bupstash serve --allow-sync $REPO"
+  bupstash sync
 }
 
 @test "restore sanity" {
@@ -1046,6 +1054,26 @@ _concurrent_modify_worker () {
 
   bupstash gc > /dev/null
   bupstash list --query-cache="$SCRATCH/sanity.qcache" > /dev/null
+}
+
+@test "repo sync" {
+  bupstash init -r "$SCRATCH/sync1"
+  bupstash init -r "$SCRATCH/sync2"
+  id1="$(echo foo | bupstash put -k "$PUT_KEY" -)"
+  id2="$(echo bar | bupstash put -k "$PUT_KEY" -)"
+
+  bupstash sync --to "$SCRATCH/sync1" id="$id1"
+  test 1 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+  bupstash sync --to "$SCRATCH/sync1" id="$id2"
+  test 2 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+  
+  bupstash sync --to "$SCRATCH/sync2"
+  test 2 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+
+  bupstash gc -r "$SCRATCH/sync1"
+  bupstash gc -r "$SCRATCH/sync2"
+  test 2 = $(bupstash list -r "$SCRATCH/sync1" | expr $(wc -l))
+  test 2 = $(bupstash list -r "$SCRATCH/sync2" | expr $(wc -l))
 }
 
 @test "parallel thrash" {

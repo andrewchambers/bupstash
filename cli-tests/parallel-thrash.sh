@@ -11,6 +11,16 @@ export N_WORKERS=$(nproc)
 
 trap "trap - SIGTERM ; kill -9 -- -$$" SIGINT SIGTERM EXIT
 
+if test -n "${BUPSTASH_REPOSITORY_COMMAND:-}"
+then
+  export BUPSTASH_TO_REPOSITORY_COMMAND="${BUPSTASH_REPOSITORY_COMMAND}"
+fi
+if test -n "${BUPSTASH_REPOSITORY:-}"
+then
+  export BUPSTASH_TO_REPOSITORY="${BUPSTASH_REPOSITORY}"
+fi
+bupstash init -r "$SCRATCH/sync-source-repo"
+
 rm -f "$SCRATCH/thrash.summary"
 sqlite3 "$SCRATCH/thrash.summary" "create table thrash_results(name, count, unique(name));"
 
@@ -23,12 +33,11 @@ inc_result () {
 }
 
 thrash_worker () {
-  for i in $(seq 30)
+  for i in $(seq 15)
   do
     expected=$(uuidgen)
-    
     id=$(bupstash put -q -e --no-send-log thrash_test=yes :: echo $expected)
-    
+
     if test "$?" = 0
     then
       inc_result "put-ok"
@@ -55,6 +64,37 @@ thrash_worker () {
     else
       inc_result "put-fail"
     fi
+
+    expected=$(uuidgen)
+    id=$(bupstash put -r "$SCRATCH/sync-source-repo" -q -e --no-send-log thrash_test=yes :: echo $expected)
+    bupstash sync -r "$SCRATCH/sync-source-repo" -q id="$id" >&2
+    if test "$?" = 0
+    then
+      inc_result "sync-ok"
+
+      actual="$(bupstash get -q id=$id)"
+      if test "$?" = 0
+      then
+        inc_result "sync-get-ok"
+        if test "$expected" != "$actual"
+        then
+          inc_result "sync-get-corrupt"
+        fi
+      else
+        inc_result "sync-get-fail"
+      fi
+
+      bupstash rm -q id="$id" >&2
+      if test "$?" = 0
+      then
+        inc_result "rm-ok"
+      else
+        inc_result "rm-fail"
+      fi
+    else
+      inc_result "sync-fail"
+    fi
+    bupstash rm -q -r "$SCRATCH/sync-source-repo" id="$id" >&2
 
     bupstash recover-removed -q >&2
     if test "$?" = 0
@@ -84,8 +124,8 @@ bupstash_serve_chaos_worker () {
   done
 }
 
-# Outer loop is to control the size of the gc set.
-for i in $(seq 30)
+# This loop is to control the max size of the repository.
+for i in $(seq 10)
 do
 
   bupstash rm --allow-many thrash_test=yes >&2
@@ -121,15 +161,27 @@ do
     exit 1
   fi
 
+  if sqlite3 "$SCRATCH/thrash.summary" 'select * from thrash_results;' | grep -q 'sync\-get\-corrupt'
+  then
+    echo "invariant check failed, 'get' should never return a corrupt result"
+    exit 1
+  fi
+
 done
 
-if test $(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='put-ok';") = ""
+if test "$(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='put-ok';")" = ""
 then
   echo "at least one 'put' operation must succeed for the test to pass."
   exit 1
 fi
 
-if test $(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='gc-ok';") = ""
+if test "$(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='sync-ok';")" = ""
+then
+  echo "at least one 'sync' operation must succeed for the test to pass."
+  exit 1
+fi
+
+if test "$(sqlite3 "$SCRATCH"/thrash.summary "select count from thrash_results where name='gc-ok';")" = ""
 then
   echo "at least one 'gc' operation must succeed for the test to pass."
   exit 1

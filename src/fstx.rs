@@ -30,6 +30,7 @@ enum RollbackOp {
     RemoveFile(String),
     WriteFile((String, serde_bare::Uint)),
     TruncateFile((String, serde_bare::Uint)),
+    RenameFile { from: String, to: String },
 }
 
 #[derive(Debug)]
@@ -172,6 +173,22 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                 }
                 sync_parent_dir(dirf, &path)?;
             }
+            Ok(RollbackOp::RenameFile { from, to }) => {
+                match dirf.local_rename(&from, &to) {
+                    Ok(()) => (),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        if dirf.metadata(Path::new(&to)).is_err() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "unable to rollback rename in transaction, neither source nor destination file exist",
+                            ));
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
+                sync_parent_dir(dirf, &from)?;
+                sync_parent_dir(dirf, &to)?;
+            }
             Err(_) => {
                 panic!("malformed rollback journal")
             }
@@ -250,6 +267,14 @@ impl ReadTxn {
     pub fn read_dir(&self, p: &str) -> Result<openat::DirIter, std::io::Error> {
         self.dirf.list_dir(p)
     }
+
+    pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
+        match self.dirf.metadata(p) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 enum WriteTxnOp {
@@ -257,6 +282,8 @@ enum WriteTxnOp {
     Write(Vec<u8>),
     WriteFile(std::fs::File),
     Append(Vec<u8>),
+    Rename(String),
+    RenameTarget,
 }
 
 pub struct WriteTxn {
@@ -291,114 +318,143 @@ impl WriteTxn {
     }
 
     pub fn commit(mut self) -> Result<(), std::io::Error> {
-        if !self.changes.is_empty() {
-            let mut rj = RollbackJournalWriter::create(&self.dirf)?;
-            for (p, op) in self.changes.iter() {
-                match op {
-                    WriteTxnOp::Remove => {
-                        match self.dirf.open_file(p) {
-                            Ok(mut f) => {
-                                let md = f.metadata()?;
-                                let rollback_op =
-                                    RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
-                                rj.write_op(rollback_op)?;
-                                // copy is specialized for BufWriter, so use that.
-                                let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
-                                if n != md.size() {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::Other,
-                                        "file modified outside of write transaction",
-                                    ));
-                                }
-                            }
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                                // Nothing to do.
-                            }
-                            Err(err) => return Err(err),
-                        }
-                    }
-                    WriteTxnOp::Write(_) | WriteTxnOp::WriteFile(_) => {
-                        match self.dirf.open_file(p) {
-                            Ok(mut f) => {
-                                let md = f.metadata()?;
-                                let rollback_op =
-                                    RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
-                                rj.write_op(rollback_op)?;
-                                // copy is specialized for BufWriter, so use that.
-                                let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
-                                if n != md.size() {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::Other,
-                                        "file modified outside of write transaction",
-                                    ));
-                                }
-                            }
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                                let rollback_op = RollbackOp::RemoveFile(p.clone());
-                                rj.write_op(rollback_op)?;
-                            }
-                            Err(err) => return Err(err),
-                        }
-                    }
-                    WriteTxnOp::Append(_) => match self.dirf.metadata(p) {
-                        Ok(md) => {
+        if self.changes.is_empty() {
+            return Ok(());
+        }
+
+        let mut rj = RollbackJournalWriter::create(&self.dirf)?;
+        for (p, op) in self.changes.iter() {
+            match op {
+                WriteTxnOp::Remove => {
+                    match self.dirf.open_file(p) {
+                        Ok(mut f) => {
+                            let md = f.metadata()?;
                             let rollback_op =
-                                RollbackOp::TruncateFile((p.clone(), serde_bare::Uint(md.len())));
+                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
+                            rj.write_op(rollback_op)?;
+                            // copy is specialized for BufWriter, so use that.
+                            let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
+                            if n != md.size() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "file modified outside of write transaction",
+                                ));
+                            }
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            // Nothing to do.
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                WriteTxnOp::Write(_) | WriteTxnOp::WriteFile(_) => {
+                    match self.dirf.open_file(p) {
+                        Ok(mut f) => {
+                            let md = f.metadata()?;
+                            let rollback_op =
+                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
+                            rj.write_op(rollback_op)?;
+                            // copy is specialized for BufWriter, so use that.
+                            let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
+                            if n != md.size() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::Other,
+                                    "file modified outside of write transaction",
+                                ));
+                            }
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            let rollback_op = RollbackOp::RemoveFile(p.clone());
                             rj.write_op(rollback_op)?;
                         }
                         Err(err) => return Err(err),
-                    },
-                };
-            }
-            rj.finish()?;
-            sync_dir(&self.dirf)?;
-
-            for (p, op) in self.changes.iter_mut() {
-                // Apply the write transaction. We always unlink files
-                // before we overwrite them so that its safe to open
-                // a file during a read transaction but then keep it open.
-                match op {
-                    WriteTxnOp::Remove => match self.dirf.remove_file(p) {
+                    }
+                }
+                WriteTxnOp::Append(_) => match self.dirf.metadata(p) {
+                    Ok(md) => {
+                        let rollback_op =
+                            RollbackOp::TruncateFile((p.clone(), serde_bare::Uint(md.len())));
+                        rj.write_op(rollback_op)?;
+                    }
+                    Err(err) => return Err(err),
+                },
+                WriteTxnOp::Rename(to) => {
+                    self.dirf.metadata(p)?;
+                    match self.dirf.metadata(to) {
                         Ok(_) => {
-                            sync_parent_dir(&self.dirf, p)?;
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "refusing to rename over existing file in write transaction",
+                            ));
                         }
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            let rollback_op = RollbackOp::RenameFile {
+                                from: to.clone(),
+                                to: p.clone(),
+                            };
+                            rj.write_op(rollback_op)?;
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                WriteTxnOp::RenameTarget => (),
+            };
+        }
+        rj.finish()?;
+        sync_dir(&self.dirf)?;
+
+        for (p, op) in self.changes.iter_mut() {
+            // Apply the write transaction. We always unlink files
+            // before we overwrite them so that its safe to open
+            // a file during a read transaction but then keep it open.
+            match op {
+                WriteTxnOp::Remove => match self.dirf.remove_file(p) {
+                    Ok(_) => {
+                        sync_parent_dir(&self.dirf, p)?;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(err) => return Err(err),
+                },
+                WriteTxnOp::Write(data) => {
+                    match self.dirf.remove_file(p) {
+                        Ok(_) => (),
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                         Err(err) => return Err(err),
-                    },
-                    WriteTxnOp::Write(data) => {
-                        match self.dirf.remove_file(p) {
-                            Ok(_) => (),
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-                            Err(err) => return Err(err),
-                        };
-                        let mut f = self.dirf.write_file(p, 0o666)?;
-                        f.write_all(data)?;
-                        f.sync_all()?;
-                        sync_parent_dir(&self.dirf, p)?;
-                    }
-                    WriteTxnOp::WriteFile(ref mut dataf) => {
-                        match self.dirf.remove_file(p) {
-                            Ok(_) => (),
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-                            Err(err) => return Err(err),
-                        };
-                        dataf.seek(std::io::SeekFrom::Start(0))?;
-                        let mut outf = self.dirf.write_file(p, 0o666)?;
-                        std::io::copy(dataf, &mut outf)?;
-                        outf.sync_all()?;
-                        sync_parent_dir(&self.dirf, p)?;
-                    }
-                    WriteTxnOp::Append(data) => {
-                        let mut f = self.dirf.append_file(p, 0o666)?;
-                        f.write_all(data)?;
-                        f.sync_all()?;
-                        sync_parent_dir(&self.dirf, p)?;
-                    }
-                };
-            }
-
-            self.dirf.remove_file(RJ_NAME)?;
+                    };
+                    let mut f = self.dirf.write_file(p, 0o666)?;
+                    f.write_all(data)?;
+                    f.sync_all()?;
+                    sync_parent_dir(&self.dirf, p)?;
+                }
+                WriteTxnOp::WriteFile(ref mut dataf) => {
+                    match self.dirf.remove_file(p) {
+                        Ok(_) => (),
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(err) => return Err(err),
+                    };
+                    dataf.seek(std::io::SeekFrom::Start(0))?;
+                    let mut outf = self.dirf.write_file(p, 0o666)?;
+                    std::io::copy(dataf, &mut outf)?;
+                    outf.sync_all()?;
+                    sync_parent_dir(&self.dirf, p)?;
+                }
+                WriteTxnOp::Append(data) => {
+                    let mut f = self.dirf.append_file(p, 0o666)?;
+                    f.write_all(data)?;
+                    f.sync_all()?;
+                    sync_parent_dir(&self.dirf, p)?;
+                }
+                WriteTxnOp::Rename(to) => {
+                    self.dirf.local_rename(p, Path::new(to))?;
+                    sync_parent_dir(&self.dirf, p)?;
+                    sync_parent_dir(&self.dirf, to)?;
+                }
+                WriteTxnOp::RenameTarget => (),
+            };
         }
+
+        self.dirf.remove_file(RJ_NAME)?;
+
         Ok(())
     }
 
@@ -465,43 +521,90 @@ impl WriteTxn {
         self.dirf.list_dir(p)
     }
 
-    pub fn add_rm(&mut self, p: &str) {
+    pub fn add_rm(&mut self, p: &str) -> Result<(), std::io::Error> {
+        if self.changes.contains_key(p) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to remove file modified in transaction",
+            ));
+        }
         self.changes.insert(p.into(), WriteTxnOp::Remove);
+        Ok(())
     }
 
-    pub fn add_write(&mut self, p: &str, data: Vec<u8>) {
+    pub fn add_write(&mut self, p: &str, data: Vec<u8>) -> Result<(), std::io::Error> {
+        if self.changes.contains_key(p) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to write to file modified in transaction",
+            ));
+        }
         self.changes.insert(p.into(), WriteTxnOp::Write(data));
+        Ok(())
     }
 
-    pub fn add_write_from_file(&mut self, p: &str, f: std::fs::File) {
+    pub fn add_write_from_file(&mut self, p: &str, f: std::fs::File) -> Result<(), std::io::Error> {
+        if self.changes.contains_key(p) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to write to file modified in transaction",
+            ));
+        }
         self.changes.insert(p.into(), WriteTxnOp::WriteFile(f));
+        Ok(())
     }
 
-    pub fn add_string_write(&mut self, p: &str, data: String) {
+    pub fn add_string_write(&mut self, p: &str, data: String) -> Result<(), std::io::Error> {
+        if self.changes.contains_key(p) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to write to file modified in transaction",
+            ));
+        }
         self.changes
             .insert(p.into(), WriteTxnOp::Write(data.into_bytes()));
+        Ok(())
     }
 
     pub fn add_append(&mut self, p: &str, mut data: Vec<u8>) -> Result<(), std::io::Error> {
         match self.changes.get_mut(p) {
             Some(op) => match op {
-                WriteTxnOp::Remove => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "unable to append data to file removed in transaction",
-                    ))
-                }
                 WriteTxnOp::Write(ref mut old_data) => old_data.append(&mut data),
                 WriteTxnOp::WriteFile(ref mut dataf) => {
                     dataf.write_all(&data)?;
                 }
                 WriteTxnOp::Append(ref mut old_data) => old_data.append(&mut data),
+                _ => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "unable to append data to file modified in transaction",
+                    ))
+                }
             },
             None => {
                 self.changes.insert(p.to_string(), WriteTxnOp::Append(data));
             }
         }
+        Ok(())
+    }
 
+    pub fn add_rename(&mut self, from: &str, to: &str) -> Result<(), std::io::Error> {
+        if self.changes.contains_key(from) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to rename file modified in transaction",
+            ));
+        }
+        if self.changes.contains_key(to) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "unable to rename over file modified in transaction",
+            ));
+        }
+        self.changes
+            .insert(from.to_string(), WriteTxnOp::Rename(to.to_string()));
+        self.changes
+            .insert(to.to_string(), WriteTxnOp::RenameTarget);
         Ok(())
     }
 }
@@ -568,6 +671,51 @@ mod tests {
 
     #[test]
     #[serial]
+    fn test_rename_file_rollback() {
+        let d = tempfile::tempdir().unwrap();
+        let mut p = d.path().to_owned();
+        let d = openat::Dir::open(&p).unwrap();
+
+        p.push(LOCK_NAME);
+        std::fs::File::create(&p).unwrap();
+        p.pop();
+
+        p.push("foo.x");
+        std::fs::write(&p, &vec![]).unwrap();
+        p.pop();
+
+        p.push("bar");
+        std::fs::write(&p, &vec![]).unwrap();
+        p.pop();
+
+        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        rj.write_op(RollbackOp::RenameFile {
+            from: "foo.x".into(),
+            to: "foo".into(),
+        })
+        .unwrap();
+        rj.write_op(RollbackOp::RenameFile {
+            from: "bar.x".into(),
+            to: "bar".into(),
+        })
+        .unwrap();
+        rj.finish().unwrap();
+
+        ReadTxn::begin(&p).unwrap().end();
+
+        p.push("foo.txt");
+        assert!(!p.exists());
+        p.pop();
+        p.push("foo");
+        assert!(p.exists());
+        p.pop();
+        p.push("bar");
+        assert!(p.exists());
+        p.pop();
+    }
+
+    #[test]
+    #[serial]
     fn test_truncate_file_rollback() {
         let d = tempfile::tempdir().unwrap();
         let mut p = d.path().to_owned();
@@ -609,19 +757,24 @@ mod tests {
         std::fs::File::create(&p).unwrap();
         p.pop();
 
+        p.push("rename.txt");
+        std::fs::File::create(&p).unwrap();
+        p.pop();
+
         let mut txn = WriteTxn::begin(d.path()).unwrap();
         txn.add_append("append.txt", vec![1, 2, 3]).unwrap();
-        txn.add_write("write.txt", vec![4, 5, 6]);
+        txn.add_write("write.txt", vec![4, 5, 6]).unwrap();
+        txn.add_rename("rename.txt", "renamed.txt").unwrap();
 
         let mut f = tempfile::tempfile().unwrap();
         f.write(&[7, 8, 9]).unwrap();
-        txn.add_write_from_file("write_file.txt", f);
+        txn.add_write_from_file("write_file.txt", f).unwrap();
         txn.commit().unwrap();
 
         let txn = ReadTxn::begin(d.path()).unwrap();
         assert_eq!(txn.read("append.txt").unwrap(), vec![1, 2, 3]);
         assert_eq!(txn.read("write.txt").unwrap(), vec![4, 5, 6]);
-        assert_eq!(txn.read("write_file.txt").unwrap(), vec![7, 8, 9]);
+        assert!(txn.metadata("renamed.txt").is_ok());
         txn.end();
     }
 }

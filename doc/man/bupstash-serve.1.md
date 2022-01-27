@@ -39,6 +39,8 @@ how to also forward stderr data.
   Allow client to remove repository items, implies --allow-list.
 * --allow-gc:
   Allow client to run the repository garbage collector.
+* --allow-sync:
+  Allow client to sync items into the repository, i.e. be the destination of a repository sync.
 
 ## EXAMPLES
 

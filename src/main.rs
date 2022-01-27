@@ -35,7 +35,7 @@ pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
@@ -78,6 +78,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "recover-removed" => include_str!("../doc/cli/recover-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
+        "sync" => include_str!("../doc/cli/sync.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
         "put-benchmark" => "put-benchmark tool.",
         _ => panic!(),
@@ -254,21 +255,31 @@ fn cli_to_query_cache(matches: &getopts::Matches) -> Result<querycache::QueryCac
     }
 }
 
-fn cli_to_id_and_query(
+fn cli_to_id_and_opt_query(
     matches: &getopts::Matches,
-) -> Result<(Option<xid::Xid>, query::Query), anyhow::Error> {
-    let query: query::Query = if !matches.free.is_empty() {
+) -> Result<(Option<xid::Xid>, Option<query::Query>), anyhow::Error> {
+    if !matches.free.is_empty() {
         match query::parse(&matches.free.join("•")) {
-            Ok(query) => query,
+            Ok(query) => Ok((query::get_id_query(&query), Some(query))),
             Err(e) => {
                 query::report_parse_error(e);
                 anyhow::bail!("query parse error");
             }
         }
     } else {
+        Ok((None, None))
+    }
+}
+
+fn cli_to_id_and_query(
+    matches: &getopts::Matches,
+) -> Result<(Option<xid::Xid>, query::Query), anyhow::Error> {
+    let (id, query) = cli_to_id_and_opt_query(matches)?;
+    let query = if let Some(query) = query {
+        query
+    } else {
         anyhow::bail!("you must specify a query");
     };
-    let id = query::get_id_query(&query);
     Ok((id, query))
 }
 
@@ -305,15 +316,33 @@ impl Drop for ServeProcess {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ServeProcessCliOpts<'a, 'b, 'c> {
+    repository_arg: &'a str,
+    repository_env_var: &'b str,
+    repository_command_env_var: &'c str,
+}
+
+impl<'a, 'b, 'c> Default for ServeProcessCliOpts<'a, 'b, 'c> {
+    fn default() -> Self {
+        ServeProcessCliOpts {
+            repository_arg: "repository",
+            repository_env_var: "BUPSTASH_REPOSITORY",
+            repository_command_env_var: "BUPSTASH_REPOSITORY_COMMAND",
+        }
+    }
+}
+
 fn cli_to_serve_process(
     matches: &getopts::Matches,
     progress: &indicatif::ProgressBar,
+    opts: ServeProcessCliOpts,
 ) -> Result<ServeProcess, anyhow::Error> {
     let mut serve_cmd_args = {
-        let repo = if matches.opt_present("repository") {
-            Some(matches.opt_str("repository").unwrap())
+        let repo = if matches.opt_present(opts.repository_arg) {
+            Some(matches.opt_str(opts.repository_arg).unwrap())
         } else {
-            std::env::var_os("BUPSTASH_REPOSITORY").map(|r| r.into_string().unwrap())
+            std::env::var_os(opts.repository_env_var).map(|r| r.into_string().unwrap())
         };
 
         match repo {
@@ -350,21 +379,27 @@ fn cli_to_serve_process(
                 }
             }
             None => {
-                if let Some(connect_cmd) = std::env::var_os("BUPSTASH_REPOSITORY_COMMAND") {
+                if let Some(connect_cmd) = std::env::var_os(opts.repository_command_env_var) {
                     match shlex::split(&connect_cmd.into_string().unwrap()) {
                         Some(args) => {
                             if args.is_empty() {
                                 anyhow::bail!(
-                                    "BUPSTASH_REPOSITORY_COMMAND should have at least one element"
+                                    "{} should have at least one element",
+                                    opts.repository_command_env_var,
                                 );
                             }
                             args
                         }
-                        None => anyhow::bail!("unable to parse BUPSTASH_REPOSITORY_COMMAND"),
+                        None => {
+                            anyhow::bail!("unable to parse {}", opts.repository_command_env_var)
+                        }
                     }
                 } else {
                     anyhow::bail!(
-                        "please set --repository, BUPSTASH_REPOSITORY or BUPSTASH_REPOSITORY_COMMAND"
+                        "please set --{}, {} or {}",
+                        opts.repository_arg,
+                        opts.repository_env_var,
+                        opts.repository_command_env_var,
                     );
                 }
             }
@@ -419,13 +454,14 @@ fn cli_to_serve_process(
 fn cli_to_opened_serve_process(
     matches: &getopts::Matches,
     progress: &indicatif::ProgressBar,
+    serve_process_opts: ServeProcessCliOpts,
     open_mode: protocol::OpenMode,
 ) -> Result<ServeProcess, anyhow::Error> {
     let mut retry_delay_secs = 2;
     let mut retry_count: u64 = 0;
 
     loop {
-        let mut remote = cli_to_serve_process(matches, progress)?;
+        let mut remote = cli_to_serve_process(matches, progress, serve_process_opts)?;
         // Temporary borrow of the stdin/stdout so we can handle
         // server retry back pressure if the server implements this.
         let mut proc_stdin = remote.proc.stdin.take().unwrap();
@@ -537,7 +573,7 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc = cli_to_serve_process(&matches, &progress)?;
+    let mut serve_proc = cli_to_serve_process(&matches, &progress, ServeProcessCliOpts::default())?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -629,8 +665,12 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let mut query_cache = cli_to_query_cache(&matches)?;
 
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -667,7 +707,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                             out,
                             "{}=\"{}\"",
                             k,
-                            v.replace("\\", "\\\\").replace("\"", "\\\"")
+                            v.replace('\\', "\\\\").replace('\"', "\\\"")
                         )?;
                     }
                     writeln!(out)?;
@@ -1171,8 +1211,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::ReadWrite,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1292,8 +1336,12 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1477,8 +1525,12 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1737,8 +1789,12 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1970,8 +2026,12 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         }
 
-        let mut serve_proc =
-            cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
+        let mut serve_proc = cli_to_opened_serve_process(
+            &matches,
+            &progress,
+            ServeProcessCliOpts::default(),
+            protocol::OpenMode::ReadWrite,
+        )?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1979,8 +2039,12 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         client::hangup(&mut serve_in)?;
         serve_proc.wait()?;
     } else {
-        let mut serve_proc =
-            cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
+        let mut serve_proc = cli_to_opened_serve_process(
+            &matches,
+            &progress,
+            ServeProcessCliOpts::default(),
+            protocol::OpenMode::ReadWrite,
+        )?;
         let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
         let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -2070,6 +2134,160 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    repo_cli_opts(&mut opts);
+    query_cli_opts(&mut opts);
+
+    opts.optopt("k", "key", "Key to decrypt metadata with.", "PATH");
+
+    opts.optflag(
+        "",
+        "ids-from-stdin",
+        "Sync items with IDs read from stdin, one per line, instead of executing a query.",
+    );
+
+    opts.optopt(
+        "",
+        "to",
+        "Repository to sync items to, if prefixed with ssh:// implies ssh access. \
+         Defaults to BUPSTASH_TO_REPOSITORY if not set. \
+         See the manual for additional ways to connect to the repository.",
+        "REPO",
+    );
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let progress = cli_to_progress_bar(
+        &matches,
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    let mut ids = Vec::new();
+
+    let mut source_serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
+    let mut source_serve_out = source_serve_proc.proc.stdout.as_mut().unwrap();
+    let mut source_serve_in = source_serve_proc.proc.stdin.as_mut().unwrap();
+
+    let mut ids_to_metadata: Option<HashMap<xid::Xid, oplog::VersionedItemMetadata>> = None;
+
+    if matches.opt_present("ids-from-stdin") {
+        for l in std::io::stdin().lock().lines() {
+            let l = l?;
+            if l.is_empty() {
+                continue;
+            }
+            match xid::Xid::parse(&l) {
+                Ok(id) => ids.push(id),
+                Err(err) => anyhow::bail!("error id parsing {:?}: {}", l, err),
+            };
+        }
+    } else {
+        match cli_to_id_and_opt_query(&matches)? {
+            (Some(id), _) => ids.push(id),
+            (_, query) => {
+                let mut query_cache = cli_to_query_cache(&matches)?;
+
+                // Only sync the client if we have a non id query.
+                client::sync_query_cache(
+                    progress.clone(),
+                    &mut query_cache,
+                    &mut source_serve_out,
+                    &mut source_serve_in,
+                )?;
+
+                let (primary_key_id, metadata_dctx) = match cli_to_opt_key(&matches)? {
+                    Some(key) => {
+                        if !key.is_list_key() {
+                            anyhow::bail!("only primary keys and sub keys created with '--list' can be used for listing")
+                        }
+
+                        let primary_key_id = key.primary_key_id();
+                        let metadata_dctx = match key {
+                            keys::Key::PrimaryKeyV1(k) => {
+                                crypto::DecryptionContext::new(k.metadata_sk, k.metadata_psk)
+                            }
+                            keys::Key::SubKeyV1(k) => crypto::DecryptionContext::new(
+                                k.metadata_sk.unwrap(),
+                                k.metadata_psk.unwrap(),
+                            ),
+                        };
+
+                        (Some(primary_key_id), Some(metadata_dctx))
+                    }
+                    None => (None, None),
+                };
+
+                ids_to_metadata = Some(HashMap::new());
+
+                let mut on_match =
+                    |item_id: xid::Xid,
+                     _tags: &std::collections::BTreeMap<String, String>,
+                     metadata: &oplog::VersionedItemMetadata,
+                     _secret_metadata: Option<&oplog::DecryptedItemMetadata>| {
+                        ids.push(item_id);
+                        ids_to_metadata
+                            .as_mut()
+                            .unwrap()
+                            .insert(item_id, metadata.clone());
+                        Ok(())
+                    };
+
+                let mut tx = query_cache.transaction()?;
+                tx.list(
+                    querycache::ListOptions {
+                        primary_key_id,
+                        metadata_dctx,
+                        list_encrypted: matches.opt_present("query-encrypted") || query.is_none(),
+                        utc_timestamps: matches.opt_present("utc-timestamps"),
+                        query,
+                        now: chrono::Utc::now(),
+                    },
+                    &mut on_match,
+                )?;
+            }
+        };
+    };
+
+    let mut dest_serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts {
+            repository_arg: "to",
+            repository_env_var: "BUPSTASH_TO_REPOSITORY",
+            repository_command_env_var: "BUPSTASH_TO_REPOSITORY_COMMAND",
+        },
+        protocol::OpenMode::ReadWrite,
+    )?;
+    let mut dest_serve_out = dest_serve_proc.proc.stdout.as_mut().unwrap();
+    let mut dest_serve_in = dest_serve_proc.proc.stdin.as_mut().unwrap();
+
+    client::repo_sync(
+        &progress,
+        ids,
+        ids_to_metadata,
+        &mut source_serve_out,
+        &mut source_serve_in,
+        &mut dest_serve_out,
+        &mut dest_serve_in,
+    )?;
+
+    client::hangup(&mut source_serve_in)?;
+    source_serve_proc.wait()?;
+
+    client::hangup(&mut dest_serve_in)?;
+    dest_serve_proc.wait()?;
+
+    progress.finish_and_clear();
+
+    Ok(())
+}
+
 fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("", "no-progress", "Suppress progress indicators.");
@@ -2083,7 +2301,12 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc = cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Gc)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Gc,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -2125,8 +2348,12 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
         indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
     );
 
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::ReadWrite)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::ReadWrite,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -2309,8 +2536,12 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     let (item_id, query) = cli_to_id_and_query(&matches)?;
-    let mut serve_proc =
-        cli_to_opened_serve_process(&matches, &progress, protocol::OpenMode::Read)?;
+    let mut serve_proc = cli_to_opened_serve_process(
+        &matches,
+        &progress,
+        ServeProcessCliOpts::default(),
+        protocol::OpenMode::Read,
+    )?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -2429,7 +2660,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag(
         "",
         "allow-remove",
-        "Allow client to remove repository entries.",
+        "Allow client to remove repository items, implies --allow-list.",
     );
     opts.optflag(
         "",
@@ -2439,12 +2670,17 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag(
         "",
         "allow-get",
-        "Allow client to get data from the repository.",
+        "Allow client to retrieve data from the repository, implies --allow-list.",
     );
     opts.optflag(
         "",
         "allow-list",
-        "Allow client to list snapshots and snapshot file lists.",
+        "Allow client to list items and file lists.",
+    );
+    opts.optflag(
+        "",
+        "allow-sync",
+        "Allow client to sync items into the repository, i.e. be the destination of a repository sync.",
     );
 
     let matches = parse_cli_opts(opts, &args[..]);
@@ -2459,6 +2695,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut allow_gc = true;
     let mut allow_get = true;
     let mut allow_list = true;
+    let mut allow_sync = true;
 
     if matches.opt_present("allow-init")
         || matches.opt_present("allow-put")
@@ -2466,12 +2703,14 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         || matches.opt_present("allow-gc")
         || matches.opt_present("allow-get")
         || matches.opt_present("allow-list")
+        || matches.opt_present("allow-sync")
     {
         allow_init = matches.opt_present("allow-init");
-        allow_put = matches.opt_present("allow-put");
         allow_remove = matches.opt_present("allow-remove");
         allow_gc = matches.opt_present("allow-gc");
         allow_get = matches.opt_present("allow-get");
+        allow_sync = matches.opt_present("allow-sync");
+        allow_put = matches.opt_present("allow-put");
         // --allow-get and --allow-remove implies --allow-list because they
         // are essentially useless without being able to list items.
         allow_list = allow_get || allow_remove || matches.opt_present("allow-list");
@@ -2497,6 +2736,7 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             allow_gc,
             allow_get,
             allow_list,
+            allow_sync,
             repo_path: Path::new(&matches.free[0]).to_path_buf(),
         },
         &mut stdin_unbuffered,
@@ -2540,6 +2780,7 @@ fn main() {
         "serve" => serve_main(args),
         "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
+        "sync" => sync_main(args),
         "version" | "--version" => {
             args[0] = "version".to_string();
             version_main(args)
