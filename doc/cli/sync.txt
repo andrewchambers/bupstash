@@ -1,0 +1,13 @@
+bupstash sync --to $REPO [OPTIONS] [QUERY...]
+
+Synchronize items and data to another bupstash repository.
+
+If a query is not specified, syncs all repository items.
+
+Examples:
+  # Copy all items from one repository to another.
+  bupstash sync --to ssh://$SERVER id=$id
+
+  # Perform a backup then sync it to a different server.
+  $ id="$(bupstash put ./files)
+  $ bupstash sync --to ssh://$SERVER id=$id

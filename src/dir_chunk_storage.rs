@@ -29,7 +29,7 @@ enum ReadWorkerMsg {
 
 enum WriteWorkerMsg {
     AddChunk((Address, Vec<u8>)),
-    Barrier(crossbeam_channel::Sender<Result<protocol::SyncStats, anyhow::Error>>),
+    Barrier(crossbeam_channel::Sender<Result<protocol::FlushStats, anyhow::Error>>),
     Exit,
 }
 
@@ -137,7 +137,7 @@ impl DirStorage {
                         }
                         Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.sync_all() {
                             Ok(()) => {
-                                let _ = rendezvous_tx.send(Ok(protocol::SyncStats {
+                                let _ = rendezvous_tx.send(Ok(protocol::FlushStats {
                                     added_chunks,
                                     added_bytes,
                                 }));
@@ -221,8 +221,8 @@ impl DirStorage {
         }
     }
 
-    fn sync_write_workers(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
-        let mut aggregate_stats = protocol::SyncStats {
+    fn flush_write_workers(&mut self) -> Result<protocol::FlushStats, anyhow::Error> {
+        let mut aggregate_stats = protocol::FlushStats {
             added_bytes: 0,
             added_chunks: 0,
         };
@@ -261,7 +261,7 @@ impl DirStorage {
 
     fn check_write_worker_io_errors(&mut self) -> Result<(), anyhow::Error> {
         if self.had_io_error.load(Ordering::SeqCst) {
-            match self.sync_write_workers() {
+            match self.flush_write_workers() {
                 Ok(_) => Err(anyhow::format_err!("io error")),
                 Err(err) => Err(err),
             }
@@ -331,6 +331,42 @@ impl Engine for DirStorage {
         Ok(())
     }
 
+    fn filter_existing_chunks(
+        &mut self,
+        on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
+        addresses: Vec<Address>,
+    ) -> Result<Vec<Address>, anyhow::Error> {
+        let mut progress: u64 = 0;
+
+        let progress_update_delay = std::time::Duration::from_millis(300);
+        let mut last_progress_update = std::time::Instant::now()
+            .checked_sub(progress_update_delay)
+            .unwrap();
+
+        let mut chunk_path = self.dir_path.clone();
+        let mut filtered_addresses = Vec::with_capacity(addresses.len() / 10);
+
+        for address in addresses.into_iter() {
+            chunk_path.push(address.as_hex_addr().as_str());
+            match chunk_path.metadata() {
+                Ok(_) => (),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    filtered_addresses.push(address)
+                }
+                Err(err) => return Err(err.into()),
+            };
+            chunk_path.pop();
+            progress += 1;
+            if progress % 107 == 0 && last_progress_update.elapsed() > progress_update_delay {
+                on_progress(progress)?;
+                last_progress_update = std::time::Instant::now();
+                progress = 0;
+            }
+        }
+
+        Ok(filtered_addresses)
+    }
+
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
         self.dir_path.push(addr.as_hex_addr().as_str());
         let result = std::fs::read(self.dir_path.as_path());
@@ -368,8 +404,8 @@ impl Engine for DirStorage {
         Ok(())
     }
 
-    fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
-        self.sync_write_workers()
+    fn flush(&mut self) -> Result<protocol::FlushStats, anyhow::Error> {
+        self.flush_write_workers()
     }
 
     fn prepare_for_sweep(&mut self, _gc_id: xid::Xid) -> Result<(), anyhow::Error> {
@@ -399,16 +435,16 @@ impl Engine for DirStorage {
 
         // Simple filter to reduce the number of time syscalls, but still look natural.
         let is_update_idx = |i| i % 991 == 0;
-        let update_delay_millis = std::time::Duration::from_millis(500);
+        let progress_update_delay = std::time::Duration::from_millis(500);
         let mut last_progress_update = std::time::Instant::now()
-            .checked_sub(update_delay_millis)
+            .checked_sub(progress_update_delay)
             .unwrap();
 
         // XXX: The following steps should probably be done parallel.
         // XXX: we are slowing the gc down by doing stat operatons on each chunk for diagnostics.
 
         for (i, e) in std::fs::read_dir(&self.dir_path)?.enumerate() {
-            if is_update_idx(i) && last_progress_update.elapsed() >= update_delay_millis {
+            if is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay {
                 last_progress_update = std::time::Instant::now();
                 update_progress_msg(format!(
                     "enumerating chunks, {} reachable, {} unreachable...",
@@ -436,7 +472,7 @@ impl Engine for DirStorage {
 
         for (i, p) in to_remove.iter().enumerate() {
             // Limit the number of updates, but always show the final update.
-            if (is_update_idx(i) && last_progress_update.elapsed() >= update_delay_millis)
+            if (is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay)
                 || ((i + 1) as u64 == chunks_deleted)
             {
                 last_progress_update = std::time::Instant::now();

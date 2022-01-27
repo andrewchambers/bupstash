@@ -67,7 +67,7 @@ pub struct Repo {
     repo_lock: RepoLock,
 }
 
-pub enum ItemSyncEvent {
+pub enum OpLogSyncEvent {
     Start(Xid),
     LogOps(Vec<oplog::LogOp>),
     End,
@@ -286,8 +286,17 @@ impl Repo {
         self.storage_engine.add_chunk(addr, buf)
     }
 
-    pub fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error> {
-        self.storage_engine.sync()
+    pub fn flush(&mut self) -> Result<protocol::FlushStats, anyhow::Error> {
+        self.storage_engine.flush()
+    }
+
+    pub fn filter_existing_chunks(
+        &mut self,
+        on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
+        addresses: Vec<Address>,
+    ) -> Result<Vec<Address>, anyhow::Error> {
+        self.storage_engine
+            .filter_existing_chunks(on_progress, addresses)
     }
 
     pub fn alter_lock_mode(&mut self, lock_mode: RepoLockMode) -> Result<(), anyhow::Error> {
@@ -353,7 +362,7 @@ impl Repo {
                         let mut delay = 500;
                         loop {
                             if self.storage_engine.sweep_completed(dirty_generation)? {
-                                txn.add_rm("meta/gc_dirty");
+                                txn.add_rm("meta/gc_dirty")?;
                                 break;
                             }
                             std::thread::sleep(std::time::Duration::from_millis(delay));
@@ -368,23 +377,36 @@ impl Repo {
         Ok(())
     }
 
+    pub fn import_items(
+        &mut self,
+        items: Vec<(Xid, oplog::VersionedItemMetadata)>,
+    ) -> Result<(), anyhow::Error> {
+        self.alter_lock_mode(RepoLockMode::Shared)?;
+        let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
+        for (id, item) in items.into_iter() {
+            if txn.file_exists(&format!("items/{:x}.removed", id))? {
+                continue;
+            }
+            let item_path = format!("items/{:x}", id);
+            if txn.file_exists(&item_path)? {
+                continue;
+            }
+            let serialized_md = oplog::checked_serialize_metadata(&item)?;
+            txn.add_write(&item_path, serialized_md)?;
+            let op = oplog::LogOp::AddItem((id, item));
+            let serialized_op = serde_bare::to_vec(&op)?;
+            txn.add_append("repo.oplog", serialized_op)?;
+        }
+        txn.commit()?;
+        Ok(())
+    }
+
     pub fn add_item(
         &mut self,
         id: Xid,
         item: oplog::VersionedItemMetadata,
     ) -> Result<Xid, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
-
-        const MAX_HTREE_HEIGHT: u64 = 10;
-
-        if item.data_tree().height.0 > MAX_HTREE_HEIGHT {
-            anyhow::bail!("refusing to add data hash tree taller than application limit");
-        }
-        if let Some(index_tree) = item.index_tree() {
-            if index_tree.height.0 > MAX_HTREE_HEIGHT {
-                anyhow::bail!("refusing to add index hash tree taller than application limit");
-            }
-        }
 
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
         {
@@ -393,7 +415,7 @@ impl Repo {
             if txn.file_exists(&item_path)? {
                 anyhow::bail!("item id already exists in repository");
             }
-            txn.add_write(&item_path, serialized_md);
+            txn.add_write(&item_path, serialized_md)?;
             let op = oplog::LogOp::AddItem((id, item));
             let serialized_op = serde_bare::to_vec(&op)?;
             txn.add_append("repo.oplog", serialized_op)?;
@@ -407,30 +429,65 @@ impl Repo {
 
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
-        let mut deleted_items = Vec::with_capacity(items.len());
+        let mut removed_items = Vec::with_capacity(items.len());
 
         for item in items.drain(..) {
             let path = format!("items/{:x}", item);
             match txn.metadata(&path) {
                 Ok(_) => {
-                    txn.add_rm(&path);
-                    deleted_items.push(item)
+                    let removed = path.clone() + ".removed";
+                    txn.add_rename(&path, &removed)?;
+                    removed_items.push(item)
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                 Err(err) => return Err(err.into()),
             };
         }
 
-        let n_deleted = deleted_items.len() as u64;
+        let n_removed = removed_items.len() as u64;
 
-        if !deleted_items.is_empty() {
-            let op = oplog::LogOp::RemoveItems(deleted_items);
+        if !removed_items.is_empty() {
+            let op = oplog::LogOp::RemoveItems(removed_items);
             let serialized_op = serde_bare::to_vec(&op)?;
             txn.add_append("repo.oplog", serialized_op)?;
         }
         txn.commit()?;
 
-        Ok(n_deleted)
+        Ok(n_removed)
+    }
+
+    fn open_item_for_reading(txn: &fstx::ReadTxn, id: &Xid) -> std::io::Result<std::fs::File> {
+        let f = match txn.open(&format!("items/{:x}", id)) {
+            Ok(f) => f,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                txn.open(&format!("items/{:x}.removed", id))?
+            }
+            Err(err) => return Err(err),
+        };
+        Ok(f)
+    }
+
+    pub fn batch_read_items(
+        &mut self,
+        ids: &[Xid],
+    ) -> Result<Vec<oplog::VersionedItemMetadata>, anyhow::Error> {
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
+        let mut all_metadata = Vec::with_capacity(ids.len());
+        let mut buf = Vec::with_capacity(1024);
+        for id in ids {
+            let mut f = match Repo::open_item_for_reading(&txn, id) {
+                Ok(f) => f,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    anyhow::bail!("item {:x} does not exist", id)
+                }
+                Err(err) => return Err(err.into()),
+            };
+            buf.truncate(0);
+            f.read_to_end(&mut buf)?;
+            all_metadata.push(serde_bare::from_slice(&buf)?);
+        }
+        txn.end();
+        Ok(all_metadata)
     }
 
     pub fn lookup_item_by_id(
@@ -438,7 +495,7 @@ impl Repo {
         id: &Xid,
     ) -> Result<Option<oplog::VersionedItemMetadata>, anyhow::Error> {
         let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
-        let r = match txn.open(&format!("items/{:x}", id)) {
+        let r = match Repo::open_item_for_reading(&txn, id) {
             Ok(mut f) => {
                 let mut buf = Vec::with_capacity(1024);
                 f.read_to_end(&mut buf)?;
@@ -451,22 +508,49 @@ impl Repo {
         r
     }
 
-    pub fn has_item_with_id(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
+    pub fn has_complete_data(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
         let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
-        let r = match txn.metadata(&format!("items/{:x}", id)) {
-            Ok(_) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err.into()),
-        };
+        let r = txn.file_exists(&format!("items/{:x}", id))?
+            || txn.file_exists(&format!("items/{:x}.removed", id))?;
         txn.end();
-        r
+        Ok(r)
     }
 
-    pub fn item_sync(
+    pub fn filter_items_with_complete_data(
+        &mut self,
+        on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
+        ids: Vec<Xid>,
+    ) -> Result<Vec<Xid>, anyhow::Error> {
+        let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
+        let mut missing = Vec::new();
+        let mut progress: u64 = 0;
+        let mut last_progress_update = std::time::Instant::now();
+        let update_interval = std::time::Duration::from_millis(500);
+
+        for id in ids.iter() {
+            if (progress % 61 == 0) && last_progress_update.elapsed() > update_interval {
+                on_progress(progress)?;
+                progress = 0;
+                last_progress_update = std::time::Instant::now();
+            }
+            if txn.file_exists(&format!("items/{:x}", id))?
+                || txn.file_exists(&format!("items/{:x}.removed", id))?
+            {
+                continue;
+            };
+            missing.push(*id);
+            progress += 1;
+        }
+
+        txn.end();
+        Ok(missing)
+    }
+
+    pub fn oplog_sync(
         &mut self,
         after: Option<u64>,
         start_gc_generation: Option<Xid>,
-        on_sync_event: &mut dyn FnMut(ItemSyncEvent) -> Result<(), anyhow::Error>,
+        on_sync_event: &mut dyn FnMut(OpLogSyncEvent) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
         let txn = fstx::ReadTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
@@ -487,7 +571,7 @@ impl Repo {
             log_file.seek(std::io::SeekFrom::Start(after))?;
         };
 
-        on_sync_event(ItemSyncEvent::Start(current_gc_generation))?;
+        on_sync_event(OpLogSyncEvent::Start(current_gc_generation))?;
 
         const BATCH_SIZE: usize = 64;
         let mut op_batch = Vec::with_capacity(BATCH_SIZE);
@@ -515,11 +599,11 @@ impl Repo {
             if !op_batch.is_empty() {
                 let mut send_batch = Vec::with_capacity(if !done { BATCH_SIZE } else { 0 });
                 std::mem::swap(&mut send_batch, &mut op_batch);
-                on_sync_event(ItemSyncEvent::LogOps(send_batch))?;
+                on_sync_event(OpLogSyncEvent::LogOps(send_batch))?;
             }
         }
 
-        on_sync_event(ItemSyncEvent::End)?;
+        on_sync_event(OpLogSyncEvent::End)?;
 
         Ok(())
     }
@@ -530,22 +614,17 @@ impl Repo {
         let mut txn = fstx::WriteTxn::begin_at(self.repo_dirf.try_clone()?)?;
 
         let mut n_restored = 0;
-        let log_file = txn.open("repo.oplog")?;
-        let mut log_file = std::io::BufReader::new(log_file);
 
-        while !log_file.fill_buf()?.is_empty() {
-            let op = serde_bare::from_reader(&mut log_file)?;
-            if let oplog::LogOp::AddItem((id, md)) = op {
-                let p = format!("items/{:x}", id);
-                match txn.metadata(&p) {
-                    Ok(_) => (),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        let serialized_md = serde_bare::to_vec(&md)?;
-                        txn.add_write(&p, serialized_md);
-                        n_restored += 1;
-                    }
-                    Err(err) => return Err(err.into()),
-                }
+        for item in txn.read_dir("items")? {
+            let item = item?;
+            let name = item.file_name().to_string_lossy();
+            if name.ends_with(".removed") {
+                let restored_name = &name[0..(name.len() - ".removed".len())];
+                txn.add_rename(
+                    &format!("items/{}", name),
+                    &format!("items/{}", restored_name),
+                )?;
+                n_restored += 1;
             }
         }
 
@@ -640,8 +719,11 @@ impl Repo {
 
                 for item in items_dir_ents.drain(..) {
                     let item = item?;
-                    let item_id_string = item.file_name().to_string_lossy();
-                    let item_id = Xid::parse(&item_id_string)?;
+                    let file_name = item.file_name().to_string_lossy();
+                    if file_name.ends_with(".removed") {
+                        continue;
+                    }
+                    let item_id = Xid::parse(&file_name)?;
                     reachable_items.insert(item_id);
                 }
 
@@ -722,11 +804,11 @@ impl Repo {
             txn.add_write(
                 "meta/gc_generation",
                 format!("{:x}", gc_generation).into_bytes(),
-            );
+            )?;
 
             // If a repository is dirty when we lock it, then we must ensure
             // the storage backend has terminated before continuing.
-            txn.add_write("meta/gc_dirty", format!("{:x}", gc_generation).into_bytes());
+            txn.add_write("meta/gc_dirty", format!("{:x}", gc_generation).into_bytes())?;
 
             // We compact the op log in the same transaction the the gc-generation
             // is cycled to keep client query caches consistent. They rely on the
@@ -758,7 +840,15 @@ impl Repo {
             }
 
             compacted_log.flush()?;
-            txn.add_write_from_file("repo.oplog", compacted_log.into_inner()?);
+            txn.add_write_from_file("repo.oplog", compacted_log.into_inner()?)?;
+
+            for item in txn.read_dir("items")? {
+                let item = item?;
+                let name = item.file_name().to_string_lossy();
+                if name.ends_with(".removed") {
+                    txn.add_rm(&format!("items/{}", name))?;
+                }
+            }
 
             txn.commit()?;
         }
@@ -816,7 +906,7 @@ impl Repo {
 
             // Only clear this collection dirty flag.
             if gc_dirty == Some(gc_generation) {
-                txn.add_rm("meta/gc_dirty");
+                txn.add_rm("meta/gc_dirty")?;
             }
 
             txn.commit()?;

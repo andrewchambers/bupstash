@@ -18,6 +18,7 @@ use super::rollsum;
 use super::sendlog;
 use super::xid::*;
 use super::xtar;
+use itertools::Itertools;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
@@ -514,9 +515,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
     }
 
     fn sync(&mut self) -> Result<(), anyhow::Error> {
-        write_packet(self.w, &Packet::TSendSync)?;
+        write_packet(self.w, &Packet::TFlush)?;
         match read_packet(self.r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::RSendSync(stats) => {
+            Packet::RFlush(stats) => {
                 self.added_bytes += stats.added_bytes;
                 self.added_chunks += stats.added_chunks;
             }
@@ -1292,10 +1293,7 @@ pub fn gc(
     write_packet(w, &Packet::TGc(TGc {}))?;
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-            Packet::Progress(Progress::Notice(msg)) => {
-                progress.println(&msg);
-            }
-            Packet::Progress(Progress::SetMessage(msg)) => {
+            Packet::GcProgress(msg) => {
                 progress.set_message(msg);
             }
             Packet::RGc(rgc) => return Ok(rgc.stats),
@@ -1319,18 +1317,18 @@ pub fn sync_query_cache(
 
     write_packet(
         w,
-        &Packet::TRequestItemSync(TRequestItemSync {
+        &Packet::TRequestOpLogSync(TRequestOpLogSync {
             after: after.map(serde_bare::Uint),
             gc_generation,
         }),
     )?;
 
     let gc_generation = match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
-        Packet::RRequestItemSync(ack) => ack.gc_generation,
+        Packet::RRequestOpLogSync(ack) => ack.gc_generation,
         _ => anyhow::bail!("protocol error, expected items packet"),
     };
 
-    tx.start_sync(gc_generation)?;
+    tx.start_oplog_sync(gc_generation)?;
 
     loop {
         match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
@@ -1851,6 +1849,236 @@ pub fn restore_to_local_dir(
         apply_ent_attrs(&to_ch, &ent)?
     }
     std::mem::drop(dirs_to_alter);
+
+    Ok(())
+}
+
+pub fn repo_sync(
+    progress: &indicatif::ProgressBar,
+    item_ids: Vec<Xid>,
+    ids_to_metadata: Option<HashMap<Xid, oplog::VersionedItemMetadata>>,
+    source_serve_out: &mut (dyn Read + Send),
+    source_serve_in: &mut (dyn Write + Send),
+    dest_serve_out: &mut (dyn Read + Send),
+    dest_serve_in: &mut (dyn Write + Send),
+) -> Result<(), anyhow::Error> {
+    write_packet(dest_serve_in, &Packet::TBeginItemSyncPush)?;
+
+    match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RBeginItemSyncPush(_) => (),
+        _ => anyhow::bail!("expected RBeginItemSyncPush packet"),
+    }
+
+    let mut missing_item_ids = Vec::with_capacity(256);
+
+    const ITEM_BATCH_SIZE: usize = DEFAULT_MAX_PACKET_SIZE / XID_SZ;
+    // Iterate in chunks that will fit the max packet size.
+    progress.set_message(format!("computing item send set 0/{}...", item_ids.len()));
+    let mut items_processed: u64 = 0;
+    for item_batch in item_ids.chunks(ITEM_BATCH_SIZE) {
+        write_item_sync_filter_items(dest_serve_in, item_batch)?;
+        let mut batch_progress = 0;
+        loop {
+            match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+                Packet::ItemSyncFilterItemsProgress(n) => {
+                    batch_progress += n.0;
+                    items_processed += n.0;
+                    progress.set_message(format!(
+                        "computing item send set {}/{}...",
+                        items_processed,
+                        item_ids.len(),
+                    ));
+                }
+                Packet::ItemSyncItems(mut missing) => {
+                    missing_item_ids.append(&mut missing);
+                    items_processed += (item_batch.len() as u64) - batch_progress;
+                    break;
+                }
+                _ => anyhow::bail!("expected RBeginRepoSyncPush packet"),
+            }
+        }
+    }
+
+    write_packet(source_serve_in, &Packet::TBeginItemSyncPull)?;
+
+    match read_packet(source_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RBeginItemSyncPull => (),
+        _ => anyhow::bail!("expected RBeginItemSyncPush packet"),
+    }
+
+    let all_chunks: Vec<Address> = {
+        progress.set_message("counting chunks...");
+        let mut all_chunks = HashSet::with_capacity(16 * 1024);
+        for missing_item_ids in missing_item_ids.chunks(ITEM_BATCH_SIZE) {
+            write_item_sync_request_addresses(source_serve_in, missing_item_ids)?;
+            loop {
+                let addresses = match read_packet(source_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::ItemSyncAddresses(addresses) => addresses,
+                    _ => anyhow::bail!("expected ItemSyncAddresses packet"),
+                };
+                for address in addresses.iter() {
+                    all_chunks.insert(*address);
+                }
+                progress.set_message(format!("counting chunks, {} found...", all_chunks.len(),));
+                if addresses.is_empty() {
+                    break;
+                }
+            }
+        }
+        all_chunks.into_iter().collect()
+    };
+
+    let mut all_missing_chunks = Vec::with_capacity(all_chunks.len() / 10);
+    {
+        let mut chunks_processed: u64 = 0;
+        progress.set_message("computing chunk send set...");
+        // Gather the missing chunks, doing the requests in large batches.
+        for chunk_batch in all_chunks.chunks(DEFAULT_MAX_PACKET_SIZE / ADDRESS_SZ) {
+            write_item_sync_filter_addresses(dest_serve_in, chunk_batch)?;
+            let mut batch_progress = 0;
+            loop {
+                match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::ItemSyncFilterAddressesProgress(n) => {
+                        batch_progress += n.0;
+                        chunks_processed += n.0;
+                        progress.set_message(format!(
+                            "computing chunk send set {}/{}...",
+                            chunks_processed,
+                            all_chunks.len(),
+                        ));
+                    }
+                    Packet::ItemSyncAddresses(mut missing) => {
+                        all_missing_chunks.append(&mut missing);
+                        chunks_processed += (chunk_batch.len() as u64) - batch_progress;
+                        break;
+                    }
+                    _ => anyhow::bail!("expected ItemSyncAddresses or Process packet"),
+                };
+            }
+        }
+    }
+
+    std::mem::drop(all_chunks);
+
+    progress.set_message("copying chunks...");
+    progress.set_position(0);
+    progress.set_length(all_missing_chunks.len().try_into().unwrap());
+    progress.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {msg} [{wide_bar}] {pos:>7}/{len:7}")
+            .progress_chars("=> "),
+    );
+
+    let n_chunks_to_copy = all_missing_chunks.len();
+    // Read chunks in a thread so we are always reading and writing chunks in parallel.
+    crossbeam_utils::thread::scope(|tscope| -> Result<(), anyhow::Error> {
+        let (chunk_tx, chunk_rx) = crossbeam_channel::bounded(0);
+        let copy_chunk_worker: crossbeam_utils::thread::ScopedJoinHandle<
+            Result<(), anyhow::Error>,
+        > = tscope.spawn(|_| {
+            let mut n_chunks_to_copy = n_chunks_to_copy;
+            let chunk_tx = chunk_tx;
+            while n_chunks_to_copy != 0 {
+                match read_packet(source_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::Chunk(chunk) => {
+                        chunk_tx.send(chunk)?;
+                        n_chunks_to_copy -= 1;
+                    }
+                    _ => anyhow::bail!("expected Chunk packet"),
+                };
+            }
+            Ok(())
+        });
+
+        for addresses in all_missing_chunks.chunks(DEFAULT_MAX_PACKET_SIZE / ADDRESS_SZ) {
+            write_item_sync_addresses(source_serve_in, addresses)?;
+            for _ in 0..addresses.len() {
+                match chunk_rx.recv() {
+                    Ok(chunk) => {
+                        write_chunk(dest_serve_in, &chunk.address, &chunk.data)?;
+                        progress.inc(1);
+                    }
+                    Err(_) => {
+                        copy_chunk_worker.join().unwrap()?;
+                        unreachable!();
+                    }
+                }
+            }
+        }
+
+        copy_chunk_worker.join().unwrap()?;
+        Ok(())
+    })
+    .unwrap()?;
+
+    // XXX indicatif doesn't provide a way to save and then restore the previous style,
+    // so we just use our knowledge of what it was to reset it.
+    progress.set_style(
+        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+    );
+
+    write_packet(dest_serve_in, &Packet::TFlush)?;
+    match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::RFlush(_) => (),
+        _ => anyhow::bail!("protocol error, expected RSentSync packet"),
+    }
+
+    let mut missing_item_metadata = Vec::with_capacity(missing_item_ids.len());
+    if let Some(ids_to_metadata) = ids_to_metadata {
+        for id in missing_item_ids.iter() {
+            match ids_to_metadata.get(id) {
+                Some(md) => missing_item_metadata.push(md.clone()),
+                None => anyhow::bail!("metadata missing for {}", id.to_string()),
+            }
+        }
+    } else {
+        progress.set_message(format!(
+            "fetching item metadata from source 0/{}...",
+            missing_item_ids.len(),
+        ));
+        for missing_item_ids in missing_item_ids.chunks(ITEM_BATCH_SIZE) {
+            write_packet(
+                source_serve_in,
+                &Packet::ItemSyncRequestMetadata(missing_item_ids.iter().copied().collect()),
+            )?;
+            while missing_item_metadata.len() != missing_item_ids.len() {
+                match read_packet(source_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+                    Packet::ItemSyncMetadata(mut md) => {
+                        progress.set_message(format!(
+                            "fetching item metadata from source {}/{}...",
+                            missing_item_metadata.len(),
+                            missing_item_ids.len(),
+                        ));
+                        missing_item_metadata.append(&mut md);
+                    }
+                    _ => anyhow::bail!("protocol error, expected ItemSyncMetadata packet"),
+                }
+            }
+        }
+    }
+
+    progress.set_message("adding new items...");
+    for packet in missing_item_ids
+        .into_iter()
+        .zip(missing_item_metadata.into_iter())
+        .chunks(128) // Small enough to avoid max packet size even with large metadata.
+        .into_iter()
+        .map(|it| Packet::ItemSyncAddItems(it.collect()))
+    {
+        write_packet(dest_serve_in, &packet)?;
+    }
+
+    write_packet(source_serve_in, &Packet::TEndItemSyncPull)?;
+    match read_packet(source_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::REndItemSyncPull => (),
+        _ => anyhow::bail!("expected REndItemSyncPull packet"),
+    };
+
+    write_packet(dest_serve_in, &Packet::TEndItemSyncPush)?;
+    match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {
+        Packet::REndItemSyncPush => (),
+        _ => anyhow::bail!("expected REndItemSyncPush packet"),
+    };
 
     Ok(())
 }

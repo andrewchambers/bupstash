@@ -9,7 +9,7 @@ use std::convert::TryInto;
 use std::io::Read;
 use thiserror::Error;
 
-pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "12";
+pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "13";
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -82,13 +82,13 @@ pub struct RGc {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct TRequestItemSync {
+pub struct TRequestOpLogSync {
     pub after: Option<serde_bare::Uint>,
     pub gc_generation: Option<Xid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct RRequestItemSync {
+pub struct RRequestOpLogSync {
     pub gc_generation: Xid,
 }
 
@@ -101,12 +101,6 @@ pub struct StorageConnect {
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AddItem {
     pub item: oplog::VersionedItemMetadata,
-}
-
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub enum Progress {
-    Notice(String),
-    SetMessage(String),
 }
 
 pub const ABORT_CODE_SERVER_UNAVAILABLE: u64 = 0x9cf5c3ce325d27a6;
@@ -123,12 +117,17 @@ pub struct RRecoverRemoved {
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub struct RBeginItemSyncPush {
+    pub gc_generation: Xid,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct RStorageEstimateCount {
     pub count: serde_bare::Uint,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub struct SyncStats {
+pub struct FlushStats {
     pub added_chunks: u64,
     pub added_bytes: u64,
 }
@@ -143,8 +142,8 @@ pub enum Packet {
     TBeginSend(TBeginSend),
     RBeginSend(RBeginSend),
     Chunk(Chunk),
-    TSendSync,
-    RSendSync(SyncStats),
+    TFlush,
+    RFlush(FlushStats),
     TAddItem(AddItem),
     RAddItem,
     TRmItems(Vec<Xid>),
@@ -154,29 +153,56 @@ pub enum Packet {
     RequestData(RequestData),
     RequestDataRanges(Vec<index::HTreeDataRange>),
     TGc(TGc),
+    GcProgress(String),
     RGc(RGc),
-    TRequestItemSync(TRequestItemSync),
-    RRequestItemSync(RRequestItemSync),
+    TRequestOpLogSync(TRequestOpLogSync),
+    RRequestOpLogSync(RRequestOpLogSync),
     SyncLogOps(Vec<oplog::LogOp>),
-    TRequestChunkData(Address),
-    RRequestChunkData(Vec<u8>),
-    Progress(Progress),
+
     Abort(Abort),
     TRecoverRemoved,
     RRecoverRemoved(RRecoverRemoved),
     RequestIndex(RequestIndex),
-    TStorageWriteBarrier,
-    RStorageWriteBarrier(SyncStats),
+    TBeginItemSyncPush,
+    RBeginItemSyncPush(RBeginItemSyncPush),
+    ItemSyncFilterItems(Vec<Xid>),
+    ItemSyncFilterItemsProgress(serde_bare::Uint),
+    ItemSyncItems(Vec<Xid>),
+    TBeginItemSyncPull,
+    RBeginItemSyncPull,
+    ItemSyncRequestAddresses(Vec<Xid>),
+    ItemSyncFilterAddresses(Vec<Address>),
+    ItemSyncFilterAddressesProgress(serde_bare::Uint),
+    ItemSyncAddresses(Vec<Address>),
+    ItemSyncRequestMetadata(Vec<Xid>),
+    ItemSyncMetadata(Vec<oplog::VersionedItemMetadata>),
+    ItemSyncAddItems(Vec<(Xid, oplog::VersionedItemMetadata)>),
+    TEndItemSyncPull,
+    REndItemSyncPull,
+    TEndItemSyncPush,
+    REndItemSyncPush,
+
+    // Storage plugin protocol packets.
+    TStorageRequestChunkData(Address),
+    RStorageRequestChunkData(Vec<u8>),
+    TStorageFlush,
+    RStorageFlush(FlushStats),
     StorageConnect(StorageConnect),
     TStoragePrepareForSweep(Xid),
     RStoragePrepareForSweep,
     StorageBeginSweep(abloom::ABloom),
+    StorageSweepProgress(String),
     StorageSweepComplete(repository::GcStats),
     TStorageQuerySweepCompleted(Xid),
     RStorageQuerySweepCompleted(bool),
     TStorageEstimateCount,
     RStorageEstimateCount(RStorageEstimateCount),
     StoragePipelineGetChunks(Vec<Address>),
+    StorageFilterAddresses(Vec<Address>),
+    StorageFilterAddressesProgress(serde_bare::Uint),
+    StorageAddresses(Vec<Address>),
+
+    // Shared protocol packets.
     EndOfTransmission,
 }
 
@@ -186,8 +212,8 @@ const PACKET_KIND_T_INIT_REPOSITORY: u8 = 2;
 const PACKET_KIND_R_INIT_REPOSITORY: u8 = 3;
 const PACKET_KIND_T_BEGIN_SEND: u8 = 4;
 const PACKET_KIND_R_BEGIN_SEND: u8 = 5;
-const PACKET_KIND_T_SEND_SYNC: u8 = 6;
-const PACKET_KIND_R_SEND_SYNC: u8 = 7;
+const PACKET_KIND_T_FLUSH: u8 = 6;
+const PACKET_KIND_R_FLUSH: u8 = 7;
 const PACKET_KIND_CHUNK: u8 = 8;
 const PACKET_KIND_T_ADD_ITEM: u8 = 9;
 const PACKET_KIND_R_ADD_ITEM: u8 = 10;
@@ -196,34 +222,56 @@ const PACKET_KIND_R_RM_ITEMS: u8 = 12;
 const PACKET_KIND_REQUEST_DATA: u8 = 13;
 const PACKET_KIND_REQUEST_DATA_RANGES: u8 = 14;
 const PACKET_KIND_T_GC: u8 = 15;
-const PACKET_KIND_R_GC: u8 = 16;
-const PACKET_KIND_T_REQUEST_ITEM_SYNC: u8 = 17;
-const PACKET_KIND_R_REQUEST_ITEM_SYNC: u8 = 18;
-const PACKET_KIND_SYNC_LOG_OPS: u8 = 19;
-const PACKET_KIND_T_REQUEST_CHUNK_DATA: u8 = 20;
-const PACKET_KIND_R_REQUEST_CHUNK_DATA: u8 = 21;
-const PACKET_KIND_PROGRESS: u8 = 22;
-const PACKET_KIND_ABORT: u8 = 23;
-const PACKET_KIND_T_RECOVER_REMOVED: u8 = 24;
-const PACKET_KIND_R_RECOVER_REMOVED: u8 = 25;
-const PACKET_KIND_REQUEST_INDEX: u8 = 26;
-const PACKET_KIND_T_REQUEST_METADATA: u8 = 28;
-const PACKET_KIND_R_REQUEST_METADATA: u8 = 29;
+const PACKET_KIND_GC_PROGRESS: u8 = 16;
+const PACKET_KIND_R_GC: u8 = 17;
+const PACKET_KIND_T_REQUEST_OPLOG_SYNC: u8 = 18;
+const PACKET_KIND_R_REQUEST_OPLOG_SYNC: u8 = 19;
+const PACKET_KIND_SYNC_LOG_OPS: u8 = 20;
+const PACKET_KIND_ABORT: u8 = 21;
+const PACKET_KIND_T_RECOVER_REMOVED: u8 = 22;
+const PACKET_KIND_R_RECOVER_REMOVED: u8 = 23;
+const PACKET_KIND_REQUEST_INDEX: u8 = 24;
+const PACKET_KIND_T_REQUEST_METADATA: u8 = 25;
+const PACKET_KIND_R_REQUEST_METADATA: u8 = 26;
+const PACKET_KIND_T_BEGIN_ITEM_SYNC_PUSH: u8 = 27;
+const PACKET_KIND_R_BEGIN_ITEM_SYNC_PUSH: u8 = 28;
+const PACKET_KIND_ITEM_SYNC_FILTER_ITEMS: u8 = 29;
+const PACKET_KIND_ITEM_SYNC_FILTER_ITEMS_PROGRESS: u8 = 30;
+const PACKET_KIND_ITEM_SYNC_ITEMS: u8 = 31;
+const PACKET_KIND_T_BEGIN_ITEM_SYNC_PULL: u8 = 32;
+const PACKET_KIND_R_BEGIN_ITEM_SYNC_PULL: u8 = 33;
+const PACKET_KIND_ITEM_SYNC_REQUEST_ADDRESSES: u8 = 34;
+const PACKET_KIND_ITEM_SYNC_ADDRESSES: u8 = 35;
+const PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES: u8 = 36;
+const PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES_PROGRESS: u8 = 37;
+const PACKET_KIND_ITEM_SYNC_REQUEST_METADATA: u8 = 38;
+const PACKET_KIND_ITEM_SYNC_METADATA: u8 = 39;
+const PACKET_KIND_ITEM_SYNC_ADD_ITEMS: u8 = 40;
+const PACKET_KIND_T_END_ITEM_SYNC_PULL: u8 = 41;
+const PACKET_KIND_R_END_ITEM_SYNC_PULL: u8 = 42;
+const PACKET_KIND_T_END_ITEM_SYNC_PUSH: u8 = 43;
+const PACKET_KIND_R_END_ITEM_SYNC_PUSH: u8 = 44;
 
 // Backend storage protocol messages, not really subject to the same
 // compatibility requirements.
-const PACKET_KIND_T_STORAGE_WRITE_BARRIER: u8 = 100;
-const PACKET_KIND_R_STORAGE_WRITE_BARRIER: u8 = 101;
-const PACKET_KIND_STORAGE_CONNECT: u8 = 102;
+const PACKET_KIND_STORAGE_CONNECT: u8 = 100;
+const PACKET_KIND_T_STORAGE_FLUSH: u8 = 101;
+const PACKET_KIND_R_STORAGE_FLUSH: u8 = 102;
 const PACKET_KIND_T_STORAGE_PREPARE_FOR_SWEEP: u8 = 103;
 const PACKET_KIND_R_STORAGE_PREPARE_FOR_SWEEP: u8 = 104;
 const PACKET_KIND_T_STORAGE_ESTIMATE_COUNT: u8 = 105;
 const PACKET_KIND_R_STORAGE_ESTIMATE_COUNT: u8 = 106;
 const PACKET_KIND_STORAGE_BEGIN_SWEEP: u8 = 107;
-const PACKET_KIND_STORAGE_SWEEP_COMPLETE: u8 = 108;
-const PACKET_KIND_T_STORAGE_QUERY_SWEEP_COMPLETED: u8 = 109;
-const PACKET_KIND_R_STORAGE_QUERY_SWEEP_COMPLETED: u8 = 110;
-const PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS: u8 = 111;
+const PACKET_KIND_STORAGE_SWEEP_PROGRESS: u8 = 108;
+const PACKET_KIND_STORAGE_SWEEP_COMPLETE: u8 = 109;
+const PACKET_KIND_T_STORAGE_QUERY_SWEEP_COMPLETED: u8 = 110;
+const PACKET_KIND_R_STORAGE_QUERY_SWEEP_COMPLETED: u8 = 111;
+const PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS: u8 = 112;
+const PACKET_KIND_T_STORAGE_REQUEST_CHUNK_DATA: u8 = 113;
+const PACKET_KIND_R_STORAGE_REQUEST_CHUNK_DATA: u8 = 114;
+const PACKET_KIND_STORAGE_FILTER_ADDRESSES: u8 = 115;
+const PACKET_KIND_STORAGE_FILTER_ADDRESSES_PROGRESS: u8 = 116;
+const PACKET_KIND_STORAGE_ADDRESSES: u8 = 117;
 
 const PACKET_KIND_END_OF_TRANSMISSION: u8 = 255;
 
@@ -309,12 +357,11 @@ pub fn read_packet_raw(
         anyhow::bail!("packet too large");
     }
 
-    /* special case chunks, bypass serde */
+    /* special case decoders that, bypass serde for performance */
     if kind == PACKET_KIND_CHUNK {
         if sz < ADDRESS_SZ {
-            anyhow::bail!("protocol error, packet smaller than address");
+            anyhow::bail!("protocol error, chunk packet smaller than address");
         }
-
         let mut address = Address { bytes: [0; 32] };
         read_from_remote(r, &mut address.bytes[..])?;
         let sz = sz - ADDRESS_SZ;
@@ -333,11 +380,10 @@ pub fn read_packet_raw(
         PACKET_KIND_R_INIT_REPOSITORY => Packet::RInitRepository,
         PACKET_KIND_T_BEGIN_SEND => Packet::TBeginSend(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_BEGIN_SEND => Packet::RBeginSend(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_SEND_SYNC => Packet::TSendSync,
-        PACKET_KIND_R_SEND_SYNC => Packet::RSendSync(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_FLUSH => Packet::TFlush,
+        PACKET_KIND_R_FLUSH => Packet::RFlush(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_ADD_ITEM => Packet::TAddItem(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_ADD_ITEM => Packet::RAddItem,
-        PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_RM_ITEMS => Packet::RRmItems(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_REQUEST_METADATA => Packet::TRequestMetadata(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_REQUEST_METADATA => Packet::RRequestMetadata(serde_bare::from_slice(&buf)?),
@@ -346,17 +392,55 @@ pub fn read_packet_raw(
         PACKET_KIND_REQUEST_INDEX => Packet::RequestIndex(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_GC => Packet::TGc(serde_bare::from_slice(&buf)?),
         PACKET_KIND_R_GC => Packet::RGc(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_REQUEST_ITEM_SYNC => Packet::TRequestItemSync(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_R_REQUEST_ITEM_SYNC => Packet::RRequestItemSync(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
-        PACKET_KIND_T_REQUEST_CHUNK_DATA => {
-            Packet::TRequestChunkData(serde_bare::from_slice(&buf)?)
+        PACKET_KIND_T_REQUEST_OPLOG_SYNC => {
+            Packet::TRequestOpLogSync(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_R_REQUEST_CHUNK_DATA => Packet::RRequestChunkData(buf),
-        PACKET_KIND_PROGRESS => Packet::Progress(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_REQUEST_OPLOG_SYNC => {
+            Packet::RRequestOpLogSync(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_SYNC_LOG_OPS => Packet::SyncLogOps(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_STORAGE_REQUEST_CHUNK_DATA => {
+            Packet::TStorageRequestChunkData(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_R_STORAGE_REQUEST_CHUNK_DATA => Packet::RStorageRequestChunkData(buf),
+        PACKET_KIND_GC_PROGRESS => Packet::GcProgress(serde_bare::from_slice(&buf)?),
         PACKET_KIND_ABORT => Packet::Abort(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_RECOVER_REMOVED => Packet::TRecoverRemoved,
         PACKET_KIND_R_RECOVER_REMOVED => Packet::RRecoverRemoved(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_BEGIN_ITEM_SYNC_PUSH => Packet::TBeginItemSyncPush,
+        PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES_PROGRESS => Packet::ItemSyncFilterAddressesProgress(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_R_BEGIN_ITEM_SYNC_PUSH => {
+            Packet::RBeginItemSyncPush(serde_bare::from_slice(&buf)?)
+        }
+        PACKET_KIND_ITEM_SYNC_REQUEST_ADDRESSES
+        | PACKET_KIND_ITEM_SYNC_REQUEST_METADATA
+        | PACKET_KIND_ITEM_SYNC_FILTER_ITEMS
+        | PACKET_KIND_ITEM_SYNC_ITEMS
+        | PACKET_KIND_T_RM_ITEMS => {
+            if sz % XID_SZ != 0 {
+                anyhow::bail!("protocol error, packet must be a multiple of xid size");
+            }
+            let xids = buf
+                .chunks(XID_SZ)
+                .map(|b| Xid::from_slice(b).unwrap())
+                .collect();
+            match kind {
+                PACKET_KIND_ITEM_SYNC_REQUEST_ADDRESSES => Packet::ItemSyncRequestAddresses(xids),
+                PACKET_KIND_ITEM_SYNC_FILTER_ITEMS => Packet::ItemSyncFilterItems(xids),
+                PACKET_KIND_ITEM_SYNC_ITEMS => Packet::ItemSyncItems(xids),
+                PACKET_KIND_ITEM_SYNC_REQUEST_METADATA => Packet::ItemSyncRequestMetadata(xids),
+                PACKET_KIND_T_RM_ITEMS => Packet::TRmItems(xids),
+                _ => unreachable!(),
+            }
+        }
+        PACKET_KIND_T_BEGIN_ITEM_SYNC_PULL => Packet::TBeginItemSyncPull,
+        PACKET_KIND_R_BEGIN_ITEM_SYNC_PULL => Packet::RBeginItemSyncPull,
+        PACKET_KIND_ITEM_SYNC_METADATA => Packet::ItemSyncMetadata(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_ITEM_SYNC_ADD_ITEMS => Packet::ItemSyncAddItems(serde_bare::from_slice(&buf)?),
+        PACKET_KIND_T_END_ITEM_SYNC_PUSH => Packet::TEndItemSyncPush,
+        PACKET_KIND_R_END_ITEM_SYNC_PUSH => Packet::REndItemSyncPush,
+        PACKET_KIND_T_END_ITEM_SYNC_PULL => Packet::TEndItemSyncPull,
+        PACKET_KIND_R_END_ITEM_SYNC_PULL => Packet::REndItemSyncPull,
         PACKET_KIND_STORAGE_CONNECT => Packet::StorageConnect(serde_bare::from_slice(&buf)?),
         PACKET_KIND_T_STORAGE_PREPARE_FOR_SWEEP => {
             Packet::TStoragePrepareForSweep(serde_bare::from_slice(&buf)?)
@@ -369,6 +453,9 @@ pub fn read_packet_raw(
         PACKET_KIND_STORAGE_BEGIN_SWEEP => {
             Packet::StorageBeginSweep(abloom::ABloom::from_bytes(buf))
         }
+        PACKET_KIND_STORAGE_SWEEP_PROGRESS => {
+            Packet::StorageSweepProgress(serde_bare::from_slice(&buf)?)
+        }
         PACKET_KIND_STORAGE_SWEEP_COMPLETE => {
             Packet::StorageSweepComplete(serde_bare::from_slice(&buf)?)
         }
@@ -378,24 +465,39 @@ pub fn read_packet_raw(
         PACKET_KIND_R_STORAGE_QUERY_SWEEP_COMPLETED => {
             Packet::RStorageQuerySweepCompleted(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_T_STORAGE_WRITE_BARRIER => Packet::TStorageWriteBarrier,
-        PACKET_KIND_R_STORAGE_WRITE_BARRIER => {
-            Packet::RStorageWriteBarrier(serde_bare::from_slice(&buf)?)
+        PACKET_KIND_T_STORAGE_FLUSH => Packet::TStorageFlush,
+        PACKET_KIND_R_STORAGE_FLUSH => {
+            Packet::RStorageFlush(serde_bare::from_slice(&buf)?)
         }
-        PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS => {
+        PACKET_KIND_ITEM_SYNC_ADDRESSES
+        | PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES
+        | PACKET_KIND_STORAGE_FILTER_ADDRESSES
+        | PACKET_KIND_STORAGE_ADDRESSES
+        | PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS => {
             if buf.len() % ADDRESS_SZ != 0 {
-                anyhow::bail!("protocol error, pipeline get chunks size error");
+                anyhow::bail!("protocol error, packet must be a multiple of address size");
             }
             let addrs = buf
                 .chunks(ADDRESS_SZ)
                 .map(|a| Address::from_slice(a).unwrap())
                 .collect();
-            Packet::StoragePipelineGetChunks(addrs)
+            match kind {
+                PACKET_KIND_ITEM_SYNC_ADDRESSES => Packet::ItemSyncAddresses(addrs),
+                PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES => Packet::ItemSyncFilterAddresses(addrs),
+                PACKET_KIND_STORAGE_ADDRESSES => Packet::StorageAddresses(addrs),
+                PACKET_KIND_STORAGE_FILTER_ADDRESSES => Packet::StorageFilterAddresses(addrs),
+                PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS => Packet::StoragePipelineGetChunks(addrs),
+                _ => unreachable!(),
+            }
+        }
+        PACKET_KIND_STORAGE_FILTER_ADDRESSES_PROGRESS => {
+            Packet::StorageFilterAddressesProgress(serde_bare::from_slice(&buf)?)
         }
         PACKET_KIND_END_OF_TRANSMISSION => Packet::EndOfTransmission,
         _ => {
             return Err(anyhow::format_err!(
-                "protocol error, unknown packet kind sent by remote"
+                "protocol error, unknown packet kind ({}) sent by remote (possibly a bupstash version incompatibility)",
+                kind
             ))
         }
     };
@@ -438,19 +540,70 @@ pub fn write_request_data_ranges(
     Ok(())
 }
 
+fn write_xid_vec_packet(
+    w: &mut dyn std::io::Write,
+    kind: u8,
+    xids: &[Xid],
+) -> Result<(), anyhow::Error> {
+    let b = xids_to_bytes(xids);
+    send_hdr(w, kind, b.len().try_into()?)?;
+    write_to_remote(w, b)?;
+    flush_remote(w)?;
+    Ok(())
+}
+
+pub fn write_item_sync_request_addresses(
+    w: &mut dyn std::io::Write,
+    xids: &[Xid],
+) -> Result<(), anyhow::Error> {
+    write_xid_vec_packet(w, PACKET_KIND_ITEM_SYNC_REQUEST_ADDRESSES, xids)
+}
+
+pub fn write_item_sync_filter_items(
+    w: &mut dyn std::io::Write,
+    xids: &[Xid],
+) -> Result<(), anyhow::Error> {
+    write_xid_vec_packet(w, PACKET_KIND_ITEM_SYNC_FILTER_ITEMS, xids)
+}
+
+fn write_address_vec_packet(
+    w: &mut dyn std::io::Write,
+    kind: u8,
+    addresses: &[Address],
+) -> Result<(), anyhow::Error> {
+    let b = addresses_to_bytes(addresses);
+    send_hdr(w, kind, b.len().try_into()?)?;
+    write_to_remote(w, b)?;
+    flush_remote(w)?;
+    Ok(())
+}
+
 pub fn write_storage_pipelined_get_chunks(
     w: &mut dyn std::io::Write,
     addresses: &[Address],
 ) -> Result<(), anyhow::Error> {
-    let b = addresses_to_bytes(addresses);
-    send_hdr(
-        w,
-        PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS,
-        b.len().try_into()?,
-    )?;
-    write_to_remote(w, b)?;
-    flush_remote(w)?;
-    Ok(())
+    write_address_vec_packet(w, PACKET_KIND_STORAGE_PIPELINE_GET_CHUNKS, addresses)
+}
+
+pub fn write_item_sync_addresses(
+    w: &mut dyn std::io::Write,
+    addresses: &[Address],
+) -> Result<(), anyhow::Error> {
+    write_address_vec_packet(w, PACKET_KIND_ITEM_SYNC_ADDRESSES, addresses)
+}
+
+pub fn write_item_sync_filter_addresses(
+    w: &mut dyn std::io::Write,
+    addresses: &[Address],
+) -> Result<(), anyhow::Error> {
+    write_address_vec_packet(w, PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES, addresses)
+}
+
+pub fn write_storage_filter_addresses(
+    w: &mut dyn std::io::Write,
+    addresses: &[Address],
+) -> Result<(), anyhow::Error> {
+    write_address_vec_packet(w, PACKET_KIND_STORAGE_FILTER_ADDRESSES, addresses)
 }
 
 pub fn write_begin_sweep(
@@ -497,12 +650,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_BEGIN_SEND, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TSendSync => {
-            send_hdr(w, PACKET_KIND_T_SEND_SYNC, 0)?;
+        Packet::TFlush => {
+            send_hdr(w, PACKET_KIND_T_FLUSH, 0)?;
         }
-        Packet::RSendSync(ref v) => {
+        Packet::RFlush(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_R_SEND_SYNC, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_FLUSH, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::TAddItem(ref v) => {
@@ -514,9 +667,7 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_ADD_ITEM, 0)?;
         }
         Packet::TRmItems(ref v) => {
-            let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_T_RM_ITEMS, b.len().try_into()?)?;
-            write_to_remote(w, &b)?;
+            write_xid_vec_packet(w, PACKET_KIND_T_RM_ITEMS, v)?;
         }
         Packet::RRmItems(ref v) => {
             let b = serde_bare::to_vec(v)?;
@@ -558,14 +709,14 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_R_GC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TRequestItemSync(ref v) => {
+        Packet::TRequestOpLogSync(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_T_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_T_REQUEST_OPLOG_SYNC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRequestItemSync(ref v) => {
+        Packet::RRequestOpLogSync(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_R_REQUEST_ITEM_SYNC, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_REQUEST_OPLOG_SYNC, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::SyncLogOps(ref v) => {
@@ -573,18 +724,26 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             send_hdr(w, PACKET_KIND_SYNC_LOG_OPS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
-        Packet::TRequestChunkData(ref v) => {
+        Packet::TStorageRequestChunkData(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_T_REQUEST_CHUNK_DATA, b.len().try_into()?)?;
+            send_hdr(
+                w,
+                PACKET_KIND_T_STORAGE_REQUEST_CHUNK_DATA,
+                b.len().try_into()?,
+            )?;
             write_to_remote(w, &b)?;
         }
-        Packet::RRequestChunkData(ref v) => {
-            send_hdr(w, PACKET_KIND_R_REQUEST_CHUNK_DATA, v.len().try_into()?)?;
+        Packet::RStorageRequestChunkData(ref v) => {
+            send_hdr(
+                w,
+                PACKET_KIND_R_STORAGE_REQUEST_CHUNK_DATA,
+                v.len().try_into()?,
+            )?;
             write_to_remote(w, v)?;
         }
-        Packet::Progress(ref v) => {
+        Packet::GcProgress(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_PROGRESS, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_GC_PROGRESS, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::Abort(ref v) => {
@@ -599,6 +758,78 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_R_RECOVER_REMOVED, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
+        }
+        Packet::TBeginItemSyncPush => {
+            send_hdr(w, PACKET_KIND_T_BEGIN_ITEM_SYNC_PUSH, 0)?;
+        }
+        Packet::RBeginItemSyncPush(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(w, PACKET_KIND_R_BEGIN_ITEM_SYNC_PUSH, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::TBeginItemSyncPull => {
+            send_hdr(w, PACKET_KIND_T_BEGIN_ITEM_SYNC_PULL, 0)?;
+        }
+        Packet::RBeginItemSyncPull => {
+            send_hdr(w, PACKET_KIND_R_BEGIN_ITEM_SYNC_PULL, 0)?;
+        }
+        Packet::ItemSyncFilterItems(ref v) => {
+            write_xid_vec_packet(w, PACKET_KIND_ITEM_SYNC_FILTER_ITEMS, v)?;
+        }
+        Packet::ItemSyncFilterItemsProgress(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(
+                w,
+                PACKET_KIND_ITEM_SYNC_FILTER_ITEMS_PROGRESS,
+                b.len().try_into()?,
+            )?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::ItemSyncItems(ref v) => {
+            write_xid_vec_packet(w, PACKET_KIND_ITEM_SYNC_ITEMS, v)?;
+        }
+        Packet::ItemSyncRequestAddresses(ref v) => {
+            write_item_sync_request_addresses(w, v)?;
+        }
+        Packet::ItemSyncAddresses(ref v) => {
+            write_item_sync_addresses(w, v)?;
+        }
+        Packet::ItemSyncFilterAddresses(ref v) => {
+            write_item_sync_filter_addresses(w, v)?;
+        }
+        Packet::ItemSyncFilterAddressesProgress(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(
+                w,
+                PACKET_KIND_ITEM_SYNC_FILTER_ADDRESSES_PROGRESS,
+                b.len().try_into()?,
+            )?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::ItemSyncRequestMetadata(ref v) => {
+            write_xid_vec_packet(w, PACKET_KIND_ITEM_SYNC_REQUEST_METADATA, v)?;
+        }
+        Packet::ItemSyncMetadata(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(w, PACKET_KIND_ITEM_SYNC_METADATA, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::ItemSyncAddItems(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(w, PACKET_KIND_ITEM_SYNC_ADD_ITEMS, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::TEndItemSyncPush => {
+            send_hdr(w, PACKET_KIND_T_END_ITEM_SYNC_PUSH, 0)?;
+        }
+        Packet::REndItemSyncPush => {
+            send_hdr(w, PACKET_KIND_R_END_ITEM_SYNC_PUSH, 0)?;
+        }
+        Packet::TEndItemSyncPull => {
+            send_hdr(w, PACKET_KIND_T_END_ITEM_SYNC_PULL, 0)?;
+        }
+        Packet::REndItemSyncPull => {
+            send_hdr(w, PACKET_KIND_R_END_ITEM_SYNC_PULL, 0)?;
         }
         Packet::StorageConnect(ref v) => {
             let b = serde_bare::to_vec(v)?;
@@ -628,9 +859,29 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
         Packet::StorageBeginSweep(ref v) => {
             return write_begin_sweep(w, v);
         }
+        Packet::StorageSweepProgress(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(w, PACKET_KIND_STORAGE_SWEEP_PROGRESS, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
         Packet::StorageSweepComplete(ref v) => {
             let b = serde_bare::to_vec(v)?;
             send_hdr(w, PACKET_KIND_STORAGE_SWEEP_COMPLETE, b.len().try_into()?)?;
+            write_to_remote(w, &b)?;
+        }
+        Packet::StorageAddresses(ref v) => {
+            write_address_vec_packet(w, PACKET_KIND_STORAGE_ADDRESSES, v)?;
+        }
+        Packet::StorageFilterAddresses(ref v) => {
+            write_storage_filter_addresses(w, v)?;
+        }
+        Packet::StorageFilterAddressesProgress(ref v) => {
+            let b = serde_bare::to_vec(v)?;
+            send_hdr(
+                w,
+                PACKET_KIND_STORAGE_FILTER_ADDRESSES_PROGRESS,
+                b.len().try_into()?,
+            )?;
             write_to_remote(w, &b)?;
         }
         Packet::TStorageQuerySweepCompleted(ref v) => {
@@ -651,12 +902,12 @@ pub fn write_packet(w: &mut dyn std::io::Write, pkt: &Packet) -> Result<(), anyh
             )?;
             write_to_remote(w, &b)?;
         }
-        Packet::TStorageWriteBarrier => {
-            send_hdr(w, PACKET_KIND_T_STORAGE_WRITE_BARRIER, 0)?;
+        Packet::TStorageFlush => {
+            send_hdr(w, PACKET_KIND_T_STORAGE_FLUSH, 0)?;
         }
-        Packet::RStorageWriteBarrier(ref v) => {
+        Packet::RStorageFlush(ref v) => {
             let b = serde_bare::to_vec(v)?;
-            send_hdr(w, PACKET_KIND_R_STORAGE_WRITE_BARRIER, b.len().try_into()?)?;
+            send_hdr(w, PACKET_KIND_R_STORAGE_FLUSH, b.len().try_into()?)?;
             write_to_remote(w, &b)?;
         }
         Packet::StoragePipelineGetChunks(ref a) => {

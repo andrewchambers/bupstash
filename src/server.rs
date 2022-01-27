@@ -1,3 +1,4 @@
+use super::acache;
 use super::address;
 use super::compression;
 use super::htree;
@@ -15,6 +16,7 @@ pub struct ServerConfig {
     pub allow_put: bool,
     pub allow_remove: bool,
     pub allow_list: bool,
+    pub allow_sync: bool,
 }
 
 pub fn serve(
@@ -50,7 +52,6 @@ pub fn serve(
 
                 return serve_repository(cfg, &mut repo, r, w);
             }
-
             Packet::TInitRepository(engine) => {
                 if !cfg.allow_init {
                     anyhow::bail!("server has disabled init for this client")
@@ -58,7 +59,6 @@ pub fn serve(
                 repository::Repo::init(std::path::Path::new(&cfg.repo_path), engine)?;
                 write_packet(w, &Packet::RInitRepository)?;
             }
-
             Packet::EndOfTransmission => return Ok(()),
             _ => anyhow::bail!("expected client info"),
         }
@@ -108,11 +108,11 @@ fn serve_repository(
                 }
                 gc(repo, w)?;
             }
-            Packet::TRequestItemSync(req) => {
+            Packet::TRequestOpLogSync(req) => {
                 if !cfg.allow_list {
                     anyhow::bail!("server has disabled query and search for this client")
                 }
-                item_sync(repo, req.after.map(|x| x.0), req.gc_generation, w)?;
+                oplog_sync(repo, req.after.map(|x| x.0), req.gc_generation, w)?;
             }
             Packet::TRmItems(items) => {
                 if !cfg.allow_remove {
@@ -132,6 +132,20 @@ fn serve_repository(
                         n_recovered: serde_bare::Uint(n_recovered),
                     }),
                 )?;
+            }
+            Packet::TBeginItemSyncPush => {
+                if !cfg.allow_sync {
+                    anyhow::bail!("server has disabled sync push for this client")
+                }
+                item_sync_push(repo, r, w)?;
+            }
+            Packet::TBeginItemSyncPull => {
+                if !cfg.allow_get {
+                    anyhow::bail!(
+                        "server has disabled get (and therefore sync pull) for this client"
+                    )
+                }
+                item_sync_pull(repo, r, w)?;
             }
             Packet::EndOfTransmission => return Ok(()),
             _ => anyhow::bail!("protocol error, unexpected packet kind"),
@@ -157,7 +171,7 @@ fn recv(
             item_id,
             gc_generation,
             has_delta_id: if let Some(delta_id) = begin.delta_id {
-                repo.has_item_with_id(&delta_id)?
+                repo.has_complete_data(&delta_id)?
             } else {
                 false
             },
@@ -169,9 +183,9 @@ fn recv(
             Packet::Chunk(chunk) => {
                 repo.add_chunk(&chunk.address, chunk.data)?;
             }
-            Packet::TSendSync => {
-                let stats = repo.sync()?;
-                write_packet(w, &Packet::RSendSync(stats))?;
+            Packet::TFlush => {
+                let stats = repo.flush()?;
+                write_packet(w, &Packet::RFlush(stats))?;
             }
             Packet::TAddItem(add_item) => {
                 match add_item.item {
@@ -406,38 +420,186 @@ fn send_partial_htree(
 
 fn gc(repo: &mut repository::Repo, w: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
     let mut update_progress_msg = |msg| {
-        write_packet(w, &Packet::Progress(Progress::SetMessage(msg)))?;
+        write_packet(w, &Packet::GcProgress(msg))?;
         Ok(())
     };
-
     let stats = repo.gc(&mut update_progress_msg)?;
-
     write_packet(w, &Packet::RGc(RGc { stats }))?;
     Ok(())
 }
 
-fn item_sync(
+fn oplog_sync(
     repo: &mut repository::Repo,
     after: Option<u64>,
     request_gc_generation: Option<Xid>,
     w: &mut dyn std::io::Write,
 ) -> Result<(), anyhow::Error> {
-    repo.item_sync(after, request_gc_generation, &mut |event| match event {
-        repository::ItemSyncEvent::Start(gc_generation) => {
+    repo.oplog_sync(after, request_gc_generation, &mut |event| match event {
+        repository::OpLogSyncEvent::Start(gc_generation) => {
             write_packet(
                 w,
-                &Packet::RRequestItemSync(RRequestItemSync { gc_generation }),
+                &Packet::RRequestOpLogSync(RRequestOpLogSync { gc_generation }),
             )?;
             Ok(())
         }
-        repository::ItemSyncEvent::LogOps(ops) => {
+        repository::OpLogSyncEvent::LogOps(ops) => {
             write_packet(w, &Packet::SyncLogOps(ops))?;
             Ok(())
         }
-        repository::ItemSyncEvent::End => {
+        repository::OpLogSyncEvent::End => {
             write_packet(w, &Packet::SyncLogOps(vec![]))?;
             Ok(())
         }
     })?;
+    Ok(())
+}
+
+fn item_sync_push(
+    repo: &mut repository::Repo,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    repo.alter_lock_mode(repository::RepoLockMode::Shared)?;
+
+    write_packet(
+        w,
+        &Packet::RBeginItemSyncPush(RBeginItemSyncPush {
+            gc_generation: repo.gc_generation()?,
+        }),
+    )?;
+
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::ItemSyncFilterItems(items) => {
+                let mut on_progress = |progress| {
+                    write_packet(
+                      w,
+                      &Packet::ItemSyncFilterItemsProgress(serde_bare::Uint(progress)),
+                    )
+                };
+                let items = repo.filter_items_with_complete_data(&mut on_progress, items)?;
+                write_packet(w, &Packet::ItemSyncItems(items))?;
+            }
+            Packet::ItemSyncFilterAddresses(mut addresses) => {
+                let mut on_progress = |progress| {
+                    write_packet(
+                      w,
+                      &Packet::ItemSyncFilterAddressesProgress(serde_bare::Uint(progress)),
+                    )
+                };
+                addresses = repo.filter_existing_chunks(&mut on_progress, addresses)?;
+                write_item_sync_addresses(w, &addresses)?;
+            }
+            Packet::Chunk(chunk) => {
+                repo.add_chunk(&chunk.address, chunk.data)?;
+            }
+            Packet::TFlush => {
+                let stats = repo.flush()?;
+                write_packet(w, &Packet::RFlush(stats))?;
+            }
+            Packet::ItemSyncAddItems(items) => {
+                repo.import_items(items)?;
+            }
+            Packet::TEndItemSyncPush => {
+                write_packet(w, &Packet::REndItemSyncPush)?;
+                break;
+            }
+            _ => anyhow::bail!("expected TItemSyncFilterItems, ItemSyncAddresses, Chunk, TFlush, ItemSyncAddItems or TEndItemSyncPush packet"),
+        }
+    }
+
+    Ok(())
+}
+
+fn item_sync_pull(
+    repo: &mut repository::Repo,
+    r: &mut dyn std::io::Read,
+    w: &mut dyn std::io::Write,
+) -> Result<(), anyhow::Error> {
+    repo.alter_lock_mode(repository::RepoLockMode::Shared)?;
+
+    write_packet(w, &Packet::RBeginItemSyncPull)?;
+
+    let mut address_cache = acache::ACache::new(1048576);
+
+    loop {
+        match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
+            Packet::ItemSyncRequestMetadata(item_ids) => {
+                for metadata in item_ids
+                    .chunks(128)
+                    .map(|item_ids| repo.batch_read_items(item_ids))
+                {
+                    write_packet(w, &Packet::ItemSyncMetadata(metadata?))?;
+                }
+            }
+            Packet::ItemSyncRequestAddresses(item_ids) => {
+                const ADDRESSES_PER_PACKET: usize = DEFAULT_MAX_PACKET_SIZE / address::ADDRESS_SZ;
+                let mut address_batch = Vec::with_capacity(4096);
+
+                for id in item_ids {
+                    let item_metadata = match repo.lookup_item_by_id(&id)? {
+                        Some(md) => md,
+                        None => anyhow::bail!("sync failed, requested item no longer exists"),
+                    };
+
+                    let data_tree = item_metadata.data_tree();
+
+                    let trees = if let Some(index_tree) = item_metadata.index_tree() {
+                        vec![data_tree, index_tree]
+                    } else {
+                        vec![data_tree]
+                    };
+
+                    for tree in trees {
+                        let mut tr = htree::TreeReader::new(
+                            tree.height.0.try_into()?,
+                            tree.data_chunk_count.0,
+                            &tree.address,
+                        );
+
+                        while let Some((height, addr)) = tr.next_addr() {
+                            let new_address = address_cache.add(&addr);
+
+                            if new_address {
+                                address_batch.push(addr);
+                                // Send a batch of addresses periodically if things are slow,
+                                // this lets us show progress to the user at more pleasant intervals.
+                                if address_batch.len() == ADDRESSES_PER_PACKET
+                                    || (height != 0 && (address_batch.len() > 5000))
+                                {
+                                    write_item_sync_addresses(w, &address_batch)?;
+                                    address_batch.truncate(0);
+                                }
+                            }
+
+                            if height != 0 && new_address {
+                                let data = repo.get_chunk(&addr)?;
+                                let data = compression::unauthenticated_decompress(data)?;
+                                tr.push_level(height - 1, data)?;
+                            }
+                        }
+                    }
+                }
+                if !address_batch.is_empty() {
+                    write_item_sync_addresses(w, &address_batch)?;
+                }
+                write_item_sync_addresses(w, &[])?;
+            }
+            Packet::ItemSyncAddresses(addresses) => {
+                repo.pipelined_get_chunks(&addresses, &mut |address, data| {
+                    write_chunk(w, address, data)?;
+                    Ok(())
+                })?;
+            }
+            Packet::TEndItemSyncPull => {
+                write_packet(w, &Packet::REndItemSyncPull)?;
+                break;
+            }
+            _ => anyhow::bail!(
+                "Expected ItemSyncRequestAddresses, ItemSyncAddresses or TEndItemSyncPull",
+            ),
+        }
+    }
+
     Ok(())
 }

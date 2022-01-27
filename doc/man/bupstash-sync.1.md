@@ -1,50 +1,41 @@
-bupstash-rm(1) 
-==============
+bupstash-sync(1) 
+================
 
 ## SYNOPSIS
 
-Remove items from a bupstash repository.
+Sync items and data from one bupstash repository to another.
 
-`bupstash rm [OPTIONS] QUERY... `
+`bupstash sync [OPTIONS] --to $REMOTE [QUERY...]`
 
 ## DESCRIPTION
 
-`bupstash rm` removes items from a bupstash repository.
+`bupstash sync` copies items and data from one repository to another while
+attempting to minimize unnecessary bandwidth usage.
 
-Items that are removed are not immediately deleted, instead the deletion and 
-space reclamation is scheduled for the next time the garbage collector bupstash-gc(1)
-is run.
+A typical use of this command is to backup files to a local repository (e.g. and external drive) while also efficiently
+uploading them to an offsite location for safe storage.
 
-Only the metadata needs to be decrypted to remove items, so a metadata key is sufficient
-for item deletion, even without access to the data decryption key.
+Note that when no query is specified all items are synced, even those that do not match the current bupstash key.
+
 
 ## QUERY LANGUAGE
 
 For full documentation on the query language, see bupstash-query-language(7).
 
-### Remove query examples
-```
-$ id=$(bupstash put ./some-data)
-
-$ bupstash rm id=$id
-
-$ bupstash rm name=backups.tar
-
-$ bupstash rm --allow-many name='*.tar' and older-than 30d
-
-$ bupstash rm --allow-many id="*"
-```
-
 ## QUERY CACHING
 
-The rm command uses the same query caching mechanisms as bupstash-list(1), check that page for
+The sync command uses the same query caching mechanisms as bupstash-list(1), check that page for
 more information on the query cache.
 
 ## OPTIONS
 
 * -r, --repository REPO:
-  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  The repository to sync from. May be of the form `ssh://$SERVER/$PATH` for
   remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_REPOSITORY`.
+
+* --to REPO:
+  The destination repository to sync items to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured. If not specified, is set to `BUPSTASH_TO_REPOSITORY`.
 
 * -k, --key KEY:
   Key used to decrypt metadata when executing a query. If not set, defaults
@@ -61,11 +52,7 @@ more information on the query cache.
   This option inserts the pseudo query tag 'decryption-key-id'.
 
 * --ids-from-stdin:
-  Remove items with IDs read from stdin, one per line, instead of executing a query.
-
-* --allow-many:
-  By default bupstash refuses to remove multiple items from a single query, this flag
-  disables that safety feature.
+  Sync items with IDs read from stdin, one per line, instead of executing a query.
 
 * --utc-timestamps:
   Display and search against timestamps in utc time instead of local time.
@@ -80,10 +67,18 @@ more information on the query cache.
 ## ENVIRONMENT
 
 * BUPSTASH_REPOSITORY:
-  The repository to connect to. May be of the form `ssh://$SERVER/$PATH` for
+  The repository to pull items from. May be of the form `ssh://$SERVER/$PATH` for
   remote repositories if ssh access is configured.
 
 * BUPSTASH_REPOSITORY_COMMAND:
+  A command to run to connect to an instance of bupstash-serve(1). This 
+  allows more complex connections to the repository for less common use cases.
+
+* BUPSTASH_TO_REPOSITORY:
+  The repository to sync items to. May be of the form `ssh://$SERVER/$PATH` for
+  remote repositories if ssh access is configured.
+
+* BUPSTASH_TO_REPOSITORY_COMMAND:
   A command to run to connect to an instance of bupstash-serve(1). This 
   allows more complex connections to the repository for less common use cases.
 
@@ -99,32 +94,20 @@ more information on the query cache.
 
 ## EXAMPLES
 
-### remove an item with a specific id from the repository
+### Push all items from a local repository to a remote repository
 
 ```
-$ bupstash rm id=14ebd2073b258b1f55c5bbc889c49db4 
+$ bupstash sync --repository ./local-repository --to ssh://$REMOTE
 ```
 
-### remove all items from the respository
+### Perform a backup locally then sync a copy to a remote repository
 
 ```
-$ bupstash rm id="*" 
-```
-
-### remove items with name backup.tar that are older than 30 days
-
-```
-$ bupstash rm name=backup.tar and older-than 30d
-```
-
-### remove items with a custom script
-
-```
- $ bupstash list --format=jsonl1 \
-    | custom-json-filter \
-    | bupstash rm --ids-from-stdin
+$ export BUPSTASH_REPOSITORY=./local-repository
+$ id="$(bupstash put ./some-files)"
+$ bupstash sync --to ssh://$REMOTE id="$id"
 ```
 
 ## SEE ALSO
 
-bupstash(1), bupstash-list(1),  bupstash-gc(1),  bupstash-query-language(7)
+bupstash(1), bupstash-query-language(7)
