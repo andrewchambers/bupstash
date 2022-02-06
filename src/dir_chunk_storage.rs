@@ -202,6 +202,7 @@ impl DirStorage {
         for h in self.write_worker_handles.drain(..) {
             h.join().unwrap();
         }
+        self.write_round_robin_index = 0;
         self.write_worker_tx.clear();
     }
 
@@ -338,20 +339,31 @@ impl Engine for DirStorage {
     }
 
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
-        // Lazily start our write threads.
-        while self.write_worker_handles.len() < self.write_round_robin_index + 1 {
-            self.add_write_worker_thread();
-        }
-
         self.check_write_worker_io_errors()?;
 
-        self.write_worker_tx[self.write_round_robin_index]
-            .send(WriteWorkerMsg::AddChunk((*addr, buf)))?;
+        let msg = WriteWorkerMsg::AddChunk((*addr, buf));
 
-        self.write_round_robin_index += 1;
-        if self.write_round_robin_index >= MAX_WRITE_WORKERS {
-            self.write_round_robin_index = 0;
+        if self.write_worker_tx.is_empty() {
+            self.add_write_worker_thread();
+            self.write_worker_tx[self.write_round_robin_index].send(msg)?;
+        } else if self.write_round_robin_index == self.write_worker_tx.len()
+            && self.write_worker_tx.len() != MAX_WRITE_WORKERS
+        {
+            match self.write_worker_tx[0].try_send(msg) {
+                Ok(_) => {
+                    self.write_round_robin_index = 0;
+                }
+                Err(crossbeam_channel::TrySendError::Full(msg)) => {
+                    self.add_write_worker_thread();
+                    self.write_worker_tx[self.write_round_robin_index].send(msg)?;
+                }
+                Err(_) => anyhow::bail!("write worker exited"),
+            }
+        } else {
+            self.write_worker_tx[self.write_round_robin_index].send(msg)?;
         }
+
+        self.write_round_robin_index = (self.write_round_robin_index + 1) % MAX_WRITE_WORKERS;
 
         Ok(())
     }
