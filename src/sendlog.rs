@@ -293,7 +293,13 @@ impl<'a> SendLogSession<'a> {
             let data: Vec<u8> = r.get(0)?;
             Ok(data)
         }) {
-            Ok(cached) => Ok(Some(serde_bare::from_slice(&cached)?)),
+            Ok(cached) => {
+                let entry: StatCacheEntry = serde_bare::from_slice(&cached)?;
+                for address in entry.addresses.iter() {
+                    self.add_address(address)?;
+                }
+                Ok(Some(entry))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(err) => Err(err.into()),
         }
