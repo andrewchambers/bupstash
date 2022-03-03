@@ -4,7 +4,10 @@
 // other changes.
 use super::fstx;
 use super::fsutil;
+use super::oplog;
 use super::xid;
+use std::collections::HashSet;
+use std::io::BufRead;
 use std::path::Path;
 
 // This lock context tag is duplicated from repository to make migrate a stand alone module.
@@ -101,10 +104,10 @@ fn repo_upgrade_4_to_5(
         fstx.add_write(
             "meta/gc_generation",
             format!("{:x}", xid::Xid::new()).into_bytes(),
-        );
-        fstx.add_write("meta/storage_engine", storage_engine);
-        fstx.add_write("meta/schema_version", "5".to_string().into_bytes());
-        fstx.add_write_from_file("repo.oplog", fsutil::anon_temp_file()?);
+        )?;
+        fstx.add_write("meta/storage_engine", storage_engine)?;
+        fstx.add_write("meta/schema_version", "5".to_string().into_bytes())?;
+        fstx.add_write_from_file("repo.oplog", fsutil::anon_temp_file()?)?;
 
         let mut stmt = tx.prepare("select OpData from ItemOpLog order by OpId;")?;
         let mut rows = stmt.query([])?;
@@ -118,7 +121,7 @@ fn repo_upgrade_4_to_5(
         while let Some(row) = rows.next()? {
             let item_id: xid::Xid = row.get(0)?;
             let metadata: Vec<u8> = row.get(1)?;
-            fstx.add_write(&format!("items/{:x}", item_id), metadata);
+            fstx.add_write(&format!("items/{:x}", item_id), metadata)?;
         }
     }
     fstx.commit()?;
@@ -206,7 +209,7 @@ pub fn repo_upgrade_to_5_to_6(repo_path: &Path) -> Result<(), anyhow::Error> {
             schema_version
         )
     }
-    fstx.add_write("meta/schema_version", "6".to_string().into_bytes());
+    fstx.add_write("meta/schema_version", "6".to_string().into_bytes())?;
     fstx.commit()?;
     eprintln!("repository upgrade successful...");
     std::mem::drop(lock);
@@ -215,7 +218,7 @@ pub fn repo_upgrade_to_5_to_6(repo_path: &Path) -> Result<(), anyhow::Error> {
 
 pub fn repo_upgrade_to_6_to_7(repo_path: &Path) -> Result<(), anyhow::Error> {
     // This upgrade adds sparse files and zstd compression.
-    // The upgrade simply increments the schema version.
+    // This upgrade also adds the '.removed' suffix for removed items.
     eprintln!("upgrading repository schema from version 6 to version 7...");
 
     eprintln!("getting exclusive repository lock for upgrade...");
@@ -226,16 +229,45 @@ pub fn repo_upgrade_to_6_to_7(repo_path: &Path) -> Result<(), anyhow::Error> {
     };
     let lock = fsutil::FileLock::get_exclusive(REPO_LOCK_CTX_TAG, &lock_path)?;
 
-    let mut fstx = fstx::WriteTxn::begin(repo_path)?;
-    let schema_version = fstx.read_string("meta/schema_version")?;
+    let mut txn = fstx::WriteTxn::begin(repo_path)?;
+
+    let mut active_items: HashSet<xid::Xid> = HashSet::new();
+    for item in txn.read_dir("items")? {
+        let item = item?;
+        let id = item.file_name().to_string_lossy();
+        match xid::Xid::parse(&id) {
+            Ok(id) => {
+                active_items.insert(id);
+            }
+            Err(_) => anyhow::bail!("unable to parse item id at path items/{}", id),
+        }
+    }
+
+    let log_file = txn.open("repo.oplog")?;
+
+    let mut log_file = std::io::BufReader::new(log_file);
+
+    while !log_file.fill_buf()?.is_empty() {
+        let op = serde_bare::from_reader(&mut log_file)?;
+        if let oplog::LogOp::AddItem((id, md)) = op {
+            if !active_items.contains(&id) {
+                let serialized_md = serde_bare::to_vec(&md)?;
+                txn.add_write(&format!("items/{:x}.removed", id), serialized_md)?;
+            }
+        }
+    }
+
+    let schema_version = txn.read_string("meta/schema_version")?;
     if schema_version != "6" {
         anyhow::bail!(
             "unable to upgrade, expected schema version 6, got {}",
             schema_version
         )
     }
-    fstx.add_write("meta/schema_version", "7".to_string().into_bytes());
-    fstx.commit()?;
+
+    txn.add_write("meta/schema_version", "7".to_string().into_bytes())?;
+    txn.commit()?;
+
     eprintln!("repository upgrade successful...");
     std::mem::drop(lock);
     Ok(())

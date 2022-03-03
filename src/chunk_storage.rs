@@ -36,10 +36,20 @@ pub trait Engine {
     // after a call to Engine::sync completes without error.
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error>;
 
+    // Filter a list of chunk addresses removing any that already exist in the repository.
+    // This function is often called in very large batches so requires the backend to periodically
+    // report progress, the argument to on_progress is how many addresses have been processed since the last
+    // progress report.
+    fn filter_existing_chunks(
+        &mut self,
+        on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
+        addr: Vec<Address>,
+    ) -> Result<Vec<Address>, anyhow::Error>;
+
     // A write barrier, any previously added chunks are only guaranteed to be
-    // in stable storage after a call to sync has returned. A backend
+    // in stable storage after a call to flush has returned. A backend
     // can use this to implement concurrent background writes.
-    fn sync(&mut self) -> Result<protocol::SyncStats, anyhow::Error>;
+    fn flush(&mut self) -> Result<protocol::FlushStats, anyhow::Error>;
 
     // Estimate how many chunks we have stored, the implementation is free to
     // make a rough guess to increase performance. One trick is sampling

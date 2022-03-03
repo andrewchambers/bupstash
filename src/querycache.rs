@@ -193,7 +193,7 @@ impl<'a> QueryCacheTx<'a> {
         }
     }
 
-    pub fn start_sync(&mut self, gc_generation: Xid) -> Result<(), anyhow::Error> {
+    pub fn start_oplog_sync(&mut self, gc_generation: Xid) -> Result<(), anyhow::Error> {
         match self.tx.query_row(
             "select value from QueryCacheMeta where key = 'gc-generation';",
             [],

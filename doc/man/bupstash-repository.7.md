@@ -56,7 +56,7 @@ type RemoveItems {
   items: []Xid
 }
 
-type RemoveRemoved {}
+type RecoverRemoved {}
 
 type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata | V2VersionedItemMetadata)
 
@@ -103,7 +103,7 @@ This file is a [bare](https://baremessages.org/) encoded rollback log with the f
 
 ```
 
-type RollbackOp = RollbackComplete | RemoveFile | WriteFile | TruncateFile;
+type RollbackOp = RollbackComplete | RemoveFile | WriteFile | TruncateFile | RenameFile;
 
 type RollbackComplete {};
 
@@ -120,6 +120,11 @@ type WriteFile {
 type TruncateFile {
   path: String,
   size: Uint,
+};
+
+type RenameFile {
+  from: String,
+  to: String,
 };
 ```
 
@@ -147,6 +152,12 @@ client side caches.
 This file marks if a garbage collection was interrupted prematurely and is used for crash
 recovery. This file not always present.
 
+
+### items/
+
+This directory contains one file for each item, where the contents of the file is an encoded
+`VersionedItemMetadata` as described in the repo.oplog section. When an item is removed and is 
+pending garbage collection it is given the .removed suffix.
 
 ### data/
 
