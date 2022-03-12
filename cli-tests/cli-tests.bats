@@ -1076,6 +1076,18 @@ _concurrent_modify_worker () {
   test 2 = $(bupstash list -r "$SCRATCH/sync2" | expr $(wc -l))
 }
 
+@test "exec with locks" {
+  if ! test -d "${BUPSTASH_REPOSITORY:-}"
+  then
+    skip "test needs a local repository"
+  fi
+  ls $BUPSTASH_REPOSITORY
+  bupstash exec-with-locks sh -c \
+    "rmdir \"$BUPSTASH_REPOSITORY/items\" && sleep 0.5 && mkdir \"$BUPSTASH_REPOSITORY/items\"" &
+  sleep 0.2
+  bupstash put -q -e echo foo
+}
+
 @test "parallel thrash" {
   
   if ! ps --version | grep -q procps-ng

@@ -19,9 +19,9 @@ use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-const RJ_NAME: &str = "rollback.journal";
 // See fsutil for explanation of this tag.
-const FSTX_LOCK_CTX_TAG: fsutil::FileLockTag = 0x870bc1047fbdb6ac;
+pub const FSTX_LOCK_CTX_TAG: fsutil::FileLockTag = 0x870bc1047fbdb6ac;
+const RJ_NAME: &str = "rollback.journal";
 const LOCK_NAME: &str = "tx.lock";
 
 #[derive(Deserialize, Serialize)]
