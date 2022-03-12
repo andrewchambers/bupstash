@@ -19,6 +19,7 @@ Run one of the following `bupstash` subcommands.
 `bupstash rm ...`<br>
 `bupstash recover-removed ...`<br>
 `bupstash gc ...`<br>
+`bupstash exec-with-locks ...`<br>
 `bupstash serve ...`<br>
 `bupstash help ...`<br>
 `bupstash version ...`<br>
@@ -68,6 +69,8 @@ that each have their own documentation.
   Recover removed items that are pending garbage collection.
 * bupstash-gc(1):
   Reclaim diskspace in a repository.
+* bupstash-exec-with-locks(1):
+  Exec a command with exclusive locks held on the repository.
 * bupstash-serve(1):
   Serve a repository over stdin/stdout using the bupstash-protocol(7).
 

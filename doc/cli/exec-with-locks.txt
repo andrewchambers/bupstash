@@ -1,0 +1,7 @@
+bupstash exec-with-locks -r REPO COMMAND...
+
+Execute COMMAND with exclusive locks held on the bupstash repository,
+preventing concurrent modification to the repository for the duration of the command.
+
+Examples:
+  $ bupstash exec-with-locks -r ./repo rsync ...

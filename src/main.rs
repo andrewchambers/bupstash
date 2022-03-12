@@ -80,6 +80,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "serve" => include_str!("../doc/cli/serve.txt"),
         "sync" => include_str!("../doc/cli/sync.txt"),
         "version" => include_str!("../doc/cli/version.txt"),
+        "exec-with-locks" => include_str!("../doc/cli/exec-with-locks.txt"),
         "put-benchmark" => "put-benchmark tool.",
         _ => panic!(),
     };
@@ -2750,6 +2751,76 @@ fn serve_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     result
 }
 
+fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    opts.optopt(
+        "r",
+        "repository",
+        "Repository to lock. \
+         Defaults to BUPSTASH_REPOSITORY if not set. \
+         Unlike other commands, does not support remote repository access.",
+        "REPO",
+    );
+
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let repo = match matches.opt_str("repository") {
+        Some(repo) => repo,
+        None => match std::env::var("BUPSTASH_REPOSITORY") {
+            Ok(repo) => repo,
+            Err(_) => anyhow::bail!("you must specify either -r or BUPSTASH_REPOSITORY"),
+        },
+    };
+
+    if repo.starts_with("ssh://") {
+        anyhow::bail!("exec-with-locks does not support remote repositories.");
+    }
+
+    if matches.free.is_empty() {
+        die("Expected a command to exec.".to_string());
+    }
+
+    let mut fstx_lock_path = PathBuf::from(repo.clone());
+    fstx_lock_path.push("tx.lock");
+    let mut repo_lock_path = PathBuf::from(repo);
+    repo_lock_path.push("repo.lock");
+
+    // We open files with unsafe so we can disable CLOEXEC, in this
+    // case we explicitly want our child to inherit these locks.
+    let fstx_lock_file = unsafe {
+        std::fs::File::from_raw_fd(nix::fcntl::open(
+            &fstx_lock_path,
+            nix::fcntl::OFlag::O_RDWR,
+            nix::sys::stat::Mode::empty(),
+        )?)
+    };
+    let repo_lock_file = unsafe {
+        std::fs::File::from_raw_fd(nix::fcntl::open(
+            &repo_lock_path,
+            nix::fcntl::OFlag::O_RDWR,
+            nix::sys::stat::Mode::empty(),
+        )?)
+    };
+
+    let fstx_lock = fsutil::FileLock::exclusive_on_file(fstx::FSTX_LOCK_CTX_TAG, fstx_lock_file)?;
+    let repo_lock =
+        fsutil::FileLock::exclusive_on_file(repository::REPO_LOCK_CTX_TAG, repo_lock_file)?;
+
+    let bin = std::ffi::CString::new(matches.free[0].clone()).unwrap();
+    let args: Vec<std::ffi::CString> = matches
+        .free
+        .into_iter()
+        .map(|a| std::ffi::CString::new(a).unwrap())
+        .collect();
+
+    nix::unistd::execvp(&bin, &args)?;
+
+    // Manually drop to ensure these are alive until after exec call.
+    std::mem::drop(fstx_lock);
+    std::mem::drop(repo_lock);
+    anyhow::bail!("exec failed");
+}
+
 fn main() {
     crypto::init();
     cksumvfs::register_cksumvfs();
@@ -2781,6 +2852,7 @@ fn main() {
         "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
         "sync" => sync_main(args),
+        "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {
             args[0] = "version".to_string();
             version_main(args)

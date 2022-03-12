@@ -73,8 +73,8 @@ pub enum OpLogSyncEvent {
     End,
 }
 
-const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
-const CURRENT_SCHEMA_VERSION: &str = "7";
+pub const REPO_LOCK_CTX_TAG: fsutil::FileLockTag = 0xc969b6cb9ba99dc5;
+pub const CURRENT_SCHEMA_VERSION: &str = "7";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 0xffffffff; // Current plugin protocol uses 32 bits.
 
