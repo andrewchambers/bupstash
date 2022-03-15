@@ -36,6 +36,7 @@ pub mod xid;
 pub mod xtar;
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
@@ -63,7 +64,12 @@ fn cache_dir() -> Result<PathBuf, anyhow::Error> {
 }
 
 fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
-    let brief = match subcommand {
+    let subcommand_no_alias = match subcommand {
+        "remove" => "rm",
+        subcommand => subcommand,
+    };
+
+    let mut brief = match subcommand_no_alias {
         "init" => include_str!("../doc/cli/init.txt"),
         "help" => include_str!("../doc/cli/help.txt"),
         "new-key" => include_str!("../doc/cli/new-key.txt"),
@@ -74,7 +80,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "diff" => include_str!("../doc/cli/diff.txt"),
         "get" => include_str!("../doc/cli/get.txt"),
         "restore" => include_str!("../doc/cli/restore.txt"),
-        "rm" | "remove" => include_str!("../doc/cli/rm.txt"),
+        "rm" => include_str!("../doc/cli/rm.txt"),
         "recover-removed" => include_str!("../doc/cli/recover-removed.txt"),
         "gc" => include_str!("../doc/cli/gc.txt"),
         "serve" => include_str!("../doc/cli/serve.txt"),
@@ -83,8 +89,20 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
         "exec-with-locks" => include_str!("../doc/cli/exec-with-locks.txt"),
         "put-benchmark" => "put-benchmark tool.",
         _ => panic!(),
-    };
-    let _ = std::io::stdout().write_all(opts.usage(brief).as_bytes());
+    }
+    .to_string();
+
+    writeln!(brief, "\n\nOnline Manual:").unwrap();
+    write!(
+        brief,
+        "  https://bupstash.io/doc/man/v{}/bupstash-{}.html",
+        env!("CARGO_PKG_VERSION"),
+        subcommand_no_alias
+    )
+    .unwrap();
+
+    let _ = std::io::stdout().write_all(opts.usage(&brief).as_bytes());
+
     std::process::exit(0);
 }
 
