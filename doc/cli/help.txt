@@ -16,6 +16,7 @@ Subcommands:
   rm/remove         Remove items from a repository.
   recover-removed   Recover items pending garbage collection.
   gc                Delete unreferenced data and free space.
+  sync              Sync items between repositories.
   exec-with-locks   Exec a command with a locked repository.
   version           Print the version and exit.
   help              Print this message.
