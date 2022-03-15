@@ -95,7 +95,7 @@ fn print_help_and_exit(subcommand: &str, opts: &getopts::Options) {
     writeln!(brief, "\n\nOnline Manual:").unwrap();
     write!(
         brief,
-        "  https://bupstash.io/doc/man/v{}/bupstash-{}.html",
+        "  https://bupstash.io/doc/{}/man/bupstash-{}.html",
         env!("CARGO_PKG_VERSION"),
         subcommand_no_alias
     )
