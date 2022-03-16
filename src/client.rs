@@ -1960,7 +1960,7 @@ pub fn repo_sync(
 
     std::mem::drop(all_chunks);
 
-    progress.set_message("copying chunks...");
+    progress.set_message("copying chunks");
     progress.set_position(0);
     progress.set_length(all_missing_chunks.len().try_into().unwrap());
     progress.set_style(
