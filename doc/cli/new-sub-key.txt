@@ -1,7 +1,6 @@
 bupstash new-sub-key [OPTIONS]
 
-Create a new sub-key capable of a limited set of
-decryption and encryption operations compared to the main key.
+Generate a bupstash sub key with lesser encryption and decryption capabilities.
 
 *NOTE*: decryption differs from access - An attacker may still
 delete data by simply deleting the items or files they have access

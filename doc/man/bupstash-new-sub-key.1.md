@@ -3,8 +3,7 @@ bupstash-new-sub-key(1)
 
 ## SYNOPSIS
 
-Generate a new bupstash sub key with lesser decryption capabilities by deriving
-it from another bupstash key.
+Generate a bupstash sub key with lesser encryption and decryption capabilities.
 
 `bupstash new-sub-key -k KEY -o SUB_KEY`
 
