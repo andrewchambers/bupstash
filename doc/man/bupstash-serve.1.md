@@ -13,14 +13,11 @@ Serve the bupstash protocol over stdin/stdout.
 interaction with a repository. Most bupstash commands operate via an instance of bupstash serve.
 
 The serve command has flags that can be set to restrict access permissions, by default
-all access is permitted until the first --allow-* option is provided.
+all access is permitted until the first --allow-* option is provided. These flags can be enforced
+ssh authorized_keys file, or through mechanisms such as `sudo` or `doas` configuration.
 
-Clients with permission to read data will still not be able to decrypt it unless they 
+Clients with permission to read data may still not be able to decrypt it unless they 
 have the correct client side decryption key.
-
-Typically users won't need to interact with `bupstash serve` unless they need
-to create a custom connection via an arbitrary command or they wish to configure
-via an ssh forced command access controls.
 
 Note that many errors are printed out of band via stderr, so alternative transports should consider
 how to also forward stderr data.
@@ -73,7 +70,6 @@ $ sudo chmod +x /bin/bupstash-put-force-command.sh
 ```
 
 Now any client with ssh access to the 'backups' user will only be able to add new backups to one repository:
-
 
 ```
 $ export BUPSTASH_REPOSITORY="ssh://backups@$SERVER"

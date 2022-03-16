@@ -10,9 +10,10 @@ Generate a new bupstash key.
 ## DESCRIPTION
 
 `bupstash new-key` creates a new bupstash key capable of both
-reading and writing repository entries.
+encrypting and decrypting repository entries.
 
-The generated key will be marked readable only for the creating user.
+The generated key will be have permissions that make it readable by
+only the creating user.
 
 Remember to keep your keys safe, as losing a key is the same as losing all
 data stored using that key.

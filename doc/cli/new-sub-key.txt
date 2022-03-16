@@ -1,7 +1,12 @@
 bupstash new-sub-key [OPTIONS]
 
 Create a new sub-key capable of a limited set of
-operations the original key can.
+decryption and encryption operations compared to the main key.
+
+*NOTE*: decryption differs from access - An attacker may still
+delete data by simply deleting the items or files they have access
+to. Use `bupstash serve` access controls to restrict what operations
+a user can perform and prevent unauthorized deletion of data.
 
 Examples:
   $ bupstash new-key -o ./backups.key

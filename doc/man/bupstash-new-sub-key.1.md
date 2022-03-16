@@ -1,21 +1,21 @@
 bupstash-new-sub-key(1) 
-============================
+=======================
 
 ## SYNOPSIS
 
-Generate a new bupstash sub key with lesser
-capabilities derived from a bupstash key.
+Generate a new bupstash sub key with lesser decryption capabilities by deriving
+it from another bupstash key.
 
 `bupstash new-sub-key -k KEY -o SUB_KEY`
 
 ## DESCRIPTION
 
 `bupstash new-sub-key` creates a new bupstash key capable of
-a subset of the operations of a main key.
+a subset of the encryption and decryption operations of the main key.
 
-Capabilities are any of 'put', 'list' and 'list-contents'. Put
-keys can create new backups, list keys can decrypt tags and other metadata,
-while 'list-contents' keys can list the contents of tarballs created by 'bupstash put'.
+Capabilities are any of 'put', 'list' and 'list-contents'. 'put' keys can
+create new backups but not decrypt data, 'list' keys can decrypt tags and other metadata,
+while 'list-contents' keys can decrypt the contents of items created by 'bupstash put'.
 
 A typical use of a list only key would be to allow a cron job to rotate old backups by
 their search tags, without exposing the data decryption key.
@@ -24,6 +24,11 @@ The generated key will be marked readable only for the creating user.
 
 If a sub-key is lost, the original key will still be able to decrypt any data in the repository
 encrypted by that sub-key.
+
+*NOTE*: decryption differs from access - An attacker may still delete data by simply deleting the
+ items or files they have access to. Use bupstash-serve(1) access controls to restrict which
+ operations a user can perform and prevent unauthorized deletion of data. This can be done via an
+ ssh authorized_keys file, or through mechanisms such as `sudo` or `doas` configuration.
 
 ## OPTIONS
 
