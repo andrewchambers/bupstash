@@ -1032,12 +1032,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let one_file_system = matches.opt_present("one-file-system");
 
-    let checkpoint_bytes: u64 = match std::env::var("BUPSTASH_CHECKPOINT_BYTES") {
+    let checkpoint_seconds: u64 = match std::env::var("BUPSTASH_CHECKPOINT_SECONDS") {
         Ok(v) => match v.parse() {
             Ok(v) => v,
-            Err(err) => anyhow::bail!("unable to parse BUPSTASH_CHECKPOINT_BYTES: {}", err),
+            Err(err) => anyhow::bail!("unable to parse BUPSTASH_CHECKPOINT_SECONDS: {}", err),
         },
-        Err(_) => 21474836480,
+        Err(_) => 300, /* Default value 5 minutes */
     };
 
     let key = cli_to_key(&matches)?;
@@ -1242,7 +1242,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let ctx = client::SendContext {
         progress: progress.clone(),
         compression,
-        checkpoint_bytes,
+        checkpoint_seconds,
         use_stat_cache,
         primary_key_id,
         send_key_id,

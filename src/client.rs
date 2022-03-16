@@ -96,7 +96,7 @@ pub struct SendContext {
     pub idx_ectx: crypto::EncryptionContext,
     pub metadata_ectx: crypto::EncryptionContext,
     pub gear_tab: rollsum::GearTab,
-    pub checkpoint_bytes: u64,
+    pub checkpoint_seconds: u64,
     pub want_xattrs: bool,
     pub use_stat_cache: bool,
     pub one_file_system: bool,
@@ -106,7 +106,7 @@ pub struct SendContext {
 struct SendSession<'a, 'b, 'c> {
     ctx: SendContext,
     start_time: chrono::DateTime<chrono::Utc>,
-    dirty_bytes: u64,
+    next_sync: std::time::Instant,
     transferred_chunks: u64,
     transferred_bytes: u64,
     added_chunks: u64,
@@ -159,10 +159,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         data: std::vec::Vec<u8>,
     ) -> Result<(), anyhow::Error> {
         write_chunk(self.w, addr, &data)?;
-        self.dirty_bytes += data.len() as u64;
         self.transferred_bytes += data.len() as u64;
         self.transferred_chunks += 1;
-        if self.dirty_bytes > self.ctx.checkpoint_bytes {
+        if std::time::Instant::now() > self.next_sync {
             self.sync()?;
         }
         Ok(())
@@ -527,7 +526,8 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
             Some(ref mut send_log_session) => send_log_session.borrow_mut().checkpoint()?,
             None => (),
         }
-        self.dirty_bytes = 0;
+        self.next_sync =
+            std::time::Instant::now() + std::time::Duration::from_secs(self.ctx.checkpoint_seconds);
         Ok(())
     }
 
@@ -668,7 +668,8 @@ pub fn send(
     let mut session = SendSession {
         ctx: ctx.clone(),
         start_time,
-        dirty_bytes: 0,
+        next_sync: std::time::Instant::now()
+            + std::time::Duration::from_secs(ctx.checkpoint_seconds),
         transferred_bytes: 0,
         transferred_chunks: 0,
         added_chunks: 0,

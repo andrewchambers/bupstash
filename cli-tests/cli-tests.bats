@@ -441,7 +441,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   # Excercise the checkpointing code, does not check
   # cache invalidation, that is covered via unit tests.
   n=32000000
-  export BUPSTASH_CHECKPOINT_BYTES=1
+  export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possibly, possibly every chunk
   head -c $n /dev/urandom > "$SCRATCH/rand.dat"
   id="$(bupstash put :: "$SCRATCH/rand.dat")"
   bupstash get id=$id > "$SCRATCH/got.dat"
@@ -458,7 +458,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   mkdir "$SCRATCH/foo/bar/baz"
   touch "$SCRATCH/foo/bang"
 
-  export BUPSTASH_CHECKPOINT_BYTES=1
+  export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possibly, possibly every chunk
 
   id=$(bupstash put :: "$SCRATCH/foo")
   test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
