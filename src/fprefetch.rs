@@ -20,7 +20,7 @@ cfg_if::cfg_if! {
       // Nothing is needed.
     } else {
       use std::os::unix::io::AsRawFd;
-      const NUM_PREFETCHED_BYTES: i64 = 128 * 1024 * 1024;
+      const NUM_PREFETCHED_BYTES: libc::off_t = 128 * 1024 * 1024;
     }
 }
 
