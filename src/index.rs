@@ -1,10 +1,13 @@
 use super::fsutil;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub type Xattrs = BTreeMap<std::ffi::OsString, Vec<u8>>;
+// Deprecated Xattr format for backwards compatibility.
+pub type StringXattrs = BTreeMap<String, Vec<u8>>;
+pub type Xattrs = BTreeMap<OsString, Vec<u8>>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SparseHint {
@@ -49,7 +52,7 @@ impl IndexEntryKind {
 // for snapshot diffs as well as bandwidth efficient restore.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V1IndexEntry {
-    pub path: PathBuf,
+    pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -61,10 +64,10 @@ pub struct V1IndexEntry {
     pub dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<PathBuf>,
+    pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<Xattrs>,
+    pub xattrs: Option<StringXattrs>,
     pub data_cursor: AbsoluteDataCursor,
 }
 
@@ -74,7 +77,7 @@ pub struct V1IndexEntry {
 // to relative cursors.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V2IndexEntry {
-    pub path: PathBuf,
+    pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -86,10 +89,10 @@ pub struct V2IndexEntry {
     pub norm_dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<PathBuf>,
+    pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<Xattrs>,
+    pub xattrs: Option<StringXattrs>,
     pub data_cursor: AbsoluteDataCursor,
     pub data_hash: ContentCryptoHash,
 }
@@ -98,7 +101,7 @@ pub struct V2IndexEntry {
 // Was deprecated to allow us to support sparse files.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct V3IndexEntry {
-    pub path: PathBuf,
+    pub path: String,
     pub mode: serde_bare::Uint,
     pub size: serde_bare::Uint,
     pub uid: serde_bare::Uint,
@@ -110,10 +113,10 @@ pub struct V3IndexEntry {
     pub norm_dev: serde_bare::Uint,
     pub ino: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
-    pub link_target: Option<PathBuf>,
+    pub link_target: Option<String>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
-    pub xattrs: Option<Xattrs>,
+    pub xattrs: Option<StringXattrs>,
     pub data_cursor: RelativeDataCursor,
     pub data_hash: ContentCryptoHash,
 }
@@ -644,13 +647,20 @@ pub struct CompressedIndexIterator<'a> {
     reader: lz4::Decoder<std::io::Cursor<&'a Vec<u8>>>,
 }
 
+fn migrate_string_xattrs(attrs: StringXattrs) -> Xattrs {
+    attrs
+        .into_iter()
+        .map(|(k, v)| (OsString::from(k), v))
+        .collect()
+}
+
 impl<'a> Iterator for CompressedIndexIterator<'a> {
     type Item = Result<IndexEntry, anyhow::Error>;
 
     fn next(&mut self) -> Option<Result<IndexEntry, anyhow::Error>> {
         match serde_bare::from_reader(&mut self.reader) {
             Ok(VersionedIndexEntry::V1(ent)) => Some(Ok(IndexEntry {
-                path: ent.path,
+                path: ent.path.into(),
                 mode: ent.mode,
                 size: ent.size,
                 uid: ent.uid,
@@ -662,11 +672,11 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 norm_dev: ent.dev,
                 ino: ent.ino,
                 nlink: ent.nlink,
-                link_target: ent.link_target,
+                link_target: ent.link_target.map(|x| x.into()),
                 dev_major: ent.dev_major,
                 dev_minor: ent.dev_minor,
                 sparse: false,
-                xattrs: ent.xattrs,
+                xattrs: ent.xattrs.map(migrate_string_xattrs),
                 data_cursor: RelativeDataCursor {
                     chunk_delta: serde_bare::Uint(u64::MAX),
                     start_byte_offset: serde_bare::Uint(u64::MAX),
@@ -675,7 +685,7 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 data_hash: ContentCryptoHash::None,
             })),
             Ok(VersionedIndexEntry::V2(ent)) => Some(Ok(IndexEntry {
-                path: ent.path,
+                path: ent.path.into(),
                 mode: ent.mode,
                 size: ent.size,
                 uid: ent.uid,
@@ -687,11 +697,11 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 norm_dev: ent.norm_dev,
                 ino: ent.ino,
                 nlink: ent.nlink,
-                link_target: ent.link_target,
+                link_target: ent.link_target.map(|x| x.into()),
                 dev_major: ent.dev_major,
                 dev_minor: ent.dev_minor,
                 sparse: false,
-                xattrs: ent.xattrs,
+                xattrs: ent.xattrs.map(migrate_string_xattrs),
                 data_cursor: RelativeDataCursor {
                     chunk_delta: serde_bare::Uint(u64::MAX),
                     start_byte_offset: serde_bare::Uint(u64::MAX),
@@ -700,7 +710,7 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 data_hash: ent.data_hash,
             })),
             Ok(VersionedIndexEntry::V3(ent)) => Some(Ok(IndexEntry {
-                path: ent.path,
+                path: ent.path.into(),
                 mode: ent.mode,
                 size: ent.size,
                 uid: ent.uid,
@@ -712,11 +722,11 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 norm_dev: ent.norm_dev,
                 ino: ent.ino,
                 nlink: ent.nlink,
-                link_target: ent.link_target,
+                link_target: ent.link_target.map(|x| x.into()),
                 dev_major: ent.dev_major,
                 dev_minor: ent.dev_minor,
                 sparse: false,
-                xattrs: ent.xattrs,
+                xattrs: ent.xattrs.map(migrate_string_xattrs),
                 data_cursor: ent.data_cursor,
                 data_hash: ent.data_hash,
             })),
