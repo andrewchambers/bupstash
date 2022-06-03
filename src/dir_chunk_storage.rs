@@ -5,17 +5,17 @@ use super::crypto;
 use super::hex;
 use super::protocol;
 use super::repository;
+use super::vfs;
 use super::xid;
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const MAX_READ_WORKERS: usize = 16;
-const MAX_WRITE_WORKERS: usize = 16;
+const MAX_READ_WORKERS: usize = 32;
+const MAX_WRITE_WORKERS: usize = 32;
 
 enum ReadWorkerMsg {
     GetChunk(
@@ -39,7 +39,7 @@ enum WriteWorkerMsg {
 // concurrent reading and writing from multiple instances
 // of bupstash.
 pub struct DirStorage {
-    dir_path: PathBuf,
+    fs: Arc<vfs::VFs>,
 
     // Reading
     read_worker_handles: Vec<std::thread::JoinHandle<()>>,
@@ -55,7 +55,7 @@ pub struct DirStorage {
 
 impl DirStorage {
     fn add_write_worker_thread(&mut self) {
-        let mut data_path = self.dir_path.clone();
+        let fs = self.fs.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
 
@@ -93,7 +93,7 @@ impl DirStorage {
                 // Open dir handle over duration of renames, we want
                 // to guarantee when we sync the directory, we get notified
                 // of any io errors that happen on that directory.
-                let dir_handle = worker_try!(std::fs::File::open(&data_path));
+                let mut dir_handle = worker_try!(fs.open(".", vfs::OpenFlags::RDONLY));
 
                 let mut added_chunks: u64 = 0;
                 let mut added_bytes: u64 = 0;
@@ -101,12 +101,13 @@ impl DirStorage {
                 loop {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk((addr, data))) => {
-                            data_path.push(addr.as_hex_addr().as_str());
-                            let dest = data_path.clone();
-                            data_path.pop();
+                            let addr = addr.as_hex_addr();
+                            let chunk_name = addr.as_str();
 
-                            if dest.exists() {
-                                continue;
+                            match fs.metadata(chunk_name) {
+                                Ok(_) => continue,
+                                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+                                Err(err) => worker_bail!(err),
                             }
 
                             added_chunks += 1;
@@ -118,24 +119,25 @@ impl DirStorage {
                                 hex::easy_encode_to_string(&buf[..])
                             };
 
-                            let tmp = dest
-                                .to_string_lossy()
+                            let tmp = chunk_name
                                 .chars()
                                 .chain(".".chars())
                                 .chain(random_suffix.chars())
                                 .chain(".tmp".chars())
                                 .collect::<String>();
 
-                            let mut tmp_file = worker_try!(std::fs::OpenOptions::new()
-                                .write(true)
-                                .create_new(true)
-                                .open(&tmp));
+                            let mut tmp_file = worker_try!(fs.open(
+                                &tmp,
+                                vfs::OpenFlags::TRUNC
+                                    | vfs::OpenFlags::WRONLY
+                                    | vfs::OpenFlags::CREAT
+                            ));
 
                             worker_try!(tmp_file.write_all(&data));
-                            worker_try!(tmp_file.sync_data());
-                            worker_try!(std::fs::rename(tmp, dest));
+                            worker_try!(tmp_file.flush());
+                            worker_try!(fs.rename(&tmp, chunk_name));
                         }
-                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.sync_all() {
+                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.flush() {
                             Ok(()) => {
                                 let _ = rendezvous_tx.send(Ok(protocol::FlushStats {
                                     added_chunks,
@@ -162,7 +164,7 @@ impl DirStorage {
     }
 
     fn add_read_worker_thread(&mut self) {
-        let mut data_path = self.dir_path.clone();
+        let fs = self.fs.clone();
         let read_worker_rx = self.read_worker_rx.clone();
 
         let worker = std::thread::Builder::new()
@@ -170,13 +172,17 @@ impl DirStorage {
             .spawn(move || loop {
                 match read_worker_rx.recv() {
                     Ok(ReadWorkerMsg::GetChunk((addr, result_tx))) => {
-                        data_path.push(addr.as_hex_addr().as_str());
-                        let result = std::fs::read(data_path.as_path());
-                        data_path.pop();
-                        let result = match result {
-                            Ok(data) => Ok(data),
-                            Err(err) => Err(err.into()),
-                        };
+                        let result =
+                            match fs.open(addr.as_hex_addr().as_str(), vfs::OpenFlags::RDONLY) {
+                                Ok(mut f) => {
+                                    let mut data = Vec::with_capacity(1024 * 1024);
+                                    match f.read_to_end(&mut data) {
+                                        Ok(_) => Ok(data),
+                                        Err(err) => Err(err.into()),
+                                    }
+                                }
+                                Err(err) => Err(err.into()),
+                            };
                         let _ = result_tx.send(result);
                     }
                     Ok(ReadWorkerMsg::Exit) | Err(_) => {
@@ -270,13 +276,7 @@ impl DirStorage {
         }
     }
 
-    pub fn new(dir_path: &std::path::Path) -> Result<Self, anyhow::Error> {
-        match std::fs::DirBuilder::new().create(dir_path) {
-            Ok(_) => (),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
-            Err(err) => return Err(err.into()),
-        }
-
+    pub fn new(fs: vfs::VFs) -> Result<Self, anyhow::Error> {
         let read_worker_handles = Vec::new();
         let write_worker_handles = Vec::new();
         let write_worker_tx = Vec::new();
@@ -284,7 +284,7 @@ impl DirStorage {
         let (read_worker_tx, read_worker_rx) = crossbeam_channel::bounded(0);
 
         Ok(DirStorage {
-            dir_path: dir_path.to_owned(),
+            fs: Arc::new(fs),
             read_worker_handles,
             read_worker_tx,
             read_worker_rx,
@@ -343,19 +343,18 @@ impl Engine for DirStorage {
             .checked_sub(progress_update_delay)
             .unwrap();
 
-        let mut chunk_path = self.dir_path.clone();
         let mut filtered_addresses = Vec::with_capacity(addresses.len() / 10);
 
-        for address in addresses.into_iter() {
-            chunk_path.push(address.as_hex_addr().as_str());
-            match chunk_path.metadata() {
+        for addr in addresses.into_iter() {
+            let hex_addr = addr.as_hex_addr();
+            let chunk_path = hex_addr.as_str();
+            match self.fs.metadata(chunk_path) {
                 Ok(_) => (),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    filtered_addresses.push(address)
+                    filtered_addresses.push(addr)
                 }
                 Err(err) => return Err(err.into()),
             };
-            chunk_path.pop();
             progress += 1;
             if progress % 107 == 0 && last_progress_update.elapsed() > progress_update_delay {
                 on_progress(progress)?;
@@ -368,10 +367,12 @@ impl Engine for DirStorage {
     }
 
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
-        self.dir_path.push(addr.as_hex_addr().as_str());
-        let result = std::fs::read(self.dir_path.as_path());
-        self.dir_path.pop();
-        Ok(result?)
+        let mut f = self
+            .fs
+            .open(addr.as_hex_addr().as_str(), vfs::OpenFlags::RDONLY)?;
+        let mut data = Vec::with_capacity(1024 * 1024);
+        f.read_to_end(&mut data)?;
+        Ok(data)
     }
 
     fn add_chunk(&mut self, addr: &Address, buf: Vec<u8>) -> Result<(), anyhow::Error> {
@@ -413,7 +414,7 @@ impl Engine for DirStorage {
     }
 
     fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error> {
-        Ok(std::fs::read_dir(&self.dir_path)?.count().try_into()?)
+        Ok(self.fs.read_dir(".")?.len().try_into()?)
     }
 
     fn sweep(
@@ -443,7 +444,7 @@ impl Engine for DirStorage {
         // XXX: The following steps should probably be done parallel.
         // XXX: we are slowing the gc down by doing stat operatons on each chunk for diagnostics.
 
-        for (i, e) in std::fs::read_dir(&self.dir_path)?.enumerate() {
+        for (i, e) in self.fs.read_dir(".")?.into_iter().enumerate() {
             if is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay {
                 last_progress_update = std::time::Instant::now();
                 update_progress_msg(format!(
@@ -451,26 +452,24 @@ impl Engine for DirStorage {
                     chunks_remaining, chunks_deleted
                 ))?;
             }
-
-            let e = e?;
-            match Address::from_hex_str(&e.file_name().to_string_lossy()) {
+            match Address::from_hex_str(&e.file_name) {
                 Ok(addr) if reachable.probably_has(&addr) => {
-                    if let Ok(md) = e.metadata() {
-                        bytes_remaining += md.len() as u64
+                    if let Ok(md) = self.fs.metadata(&e.file_name) {
+                        bytes_remaining += md.size
                     }
                     chunks_remaining += 1
                 }
                 _ => {
-                    if let Ok(md) = e.metadata() {
-                        bytes_deleted += md.len() as u64
+                    if let Ok(md) = self.fs.metadata(&e.file_name) {
+                        bytes_deleted += md.size
                     }
-                    to_remove.push(e.path());
+                    to_remove.push(e.file_name);
                     chunks_deleted += 1;
                 }
             }
         }
 
-        for (i, p) in to_remove.iter().enumerate() {
+        for (i, to_remove) in to_remove.iter().enumerate() {
             // Limit the number of updates, but always show the final update.
             if (is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay)
                 || ((i + 1) as u64 == chunks_deleted)
@@ -482,7 +481,7 @@ impl Engine for DirStorage {
                     chunks_deleted
                 ))?;
             }
-            std::fs::remove_file(p)?;
+            self.fs.remove_file(&to_remove)?;
         }
 
         Ok(repository::GcStats {
@@ -507,9 +506,8 @@ mod tests {
     #[test]
     fn add_and_get_chunk() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let mut path_buf = PathBuf::from(tmp_dir.path());
-        path_buf.push("data");
-        let mut storage = DirStorage::new(&path_buf).unwrap();
+        let fs = vfs::VFs::create(tmp_dir.path().to_str().unwrap()).unwrap();
+        let mut storage = DirStorage::new(fs).unwrap();
         let addr = Address::default();
         storage.add_chunk(&addr, vec![1]).unwrap();
         storage.flush().unwrap();
@@ -522,9 +520,8 @@ mod tests {
     #[test]
     fn pipelined_get_chunks() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let mut path_buf = PathBuf::from(tmp_dir.path());
-        path_buf.push("data");
-        let mut storage = DirStorage::new(&path_buf).unwrap();
+        let fs = vfs::VFs::create(tmp_dir.path().to_str().unwrap()).unwrap();
+        let mut storage = DirStorage::new(fs).unwrap();
 
         let addr = Address::default();
         storage.add_chunk(&addr, vec![1]).unwrap();

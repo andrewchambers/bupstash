@@ -47,15 +47,16 @@ nix = "0.23"
 indicatif = "0.16.2"
 rangemap = "0.1.11"
 xattr = "0.2"
-openat = "0.1"
-lazy_static = "1.4"
 walkdir = "2"
+bitflags = "1"
+uriparse = "0.6"
+urlencoding = "2"
+p92000l = { path = "../p92000" }
 
 [dev-dependencies]
 
 rand = "0.8"
 tempfile = "3"
-serial_test = "0.5"
 
 [build-dependencies]
 

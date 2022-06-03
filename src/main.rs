@@ -31,6 +31,7 @@ pub mod rollsum;
 pub mod sendlog;
 pub mod server;
 pub mod sodium;
+pub mod vfs;
 pub mod xglobset;
 pub mod xid;
 pub mod xtar;
@@ -2790,8 +2791,8 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
     };
 
-    if repo.starts_with("ssh://") {
-        anyhow::bail!("exec-with-locks does not support remote repositories.");
+    if !repo.starts_with("./") && !repo.starts_with("../") && !repo.starts_with("/") {
+        anyhow::bail!("exec-with-locks does not support remote or uri repositories.");
     }
 
     if matches.free.is_empty() {
@@ -2820,9 +2821,24 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         )?)
     };
 
-    let fstx_lock = fsutil::FileLock::exclusive_on_file(fstx::FSTX_LOCK_CTX_TAG, fstx_lock_file)?;
-    let repo_lock =
-        fsutil::FileLock::exclusive_on_file(repository::REPO_LOCK_CTX_TAG, repo_lock_file)?;
+    let lock_opts = libc::flock {
+        l_type: libc::F_WRLCK as libc::c_short,
+        l_whence: libc::SEEK_SET as libc::c_short,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+        #[cfg(target_os = "freebsd")]
+        l_sysid: 0,
+    };
+
+    nix::fcntl::fcntl(
+        fstx_lock_file.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_SETLKW(&lock_opts),
+    )?;
+    nix::fcntl::fcntl(
+        repo_lock_file.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_SETLKW(&lock_opts),
+    )?;
 
     let bin = std::ffi::CString::new(matches.free[0].clone()).unwrap();
     let args: Vec<std::ffi::CString> = matches
@@ -2833,9 +2849,9 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     nix::unistd::execvp(&bin, &args)?;
 
-    // Manually drop to ensure these are alive until after exec call.
-    std::mem::drop(fstx_lock);
-    std::mem::drop(repo_lock);
+    // Ensure these are alive until after exec call.
+    std::mem::drop(fstx_lock_file);
+    std::mem::drop(repo_lock_file);
     anyhow::bail!("exec failed");
 }
 

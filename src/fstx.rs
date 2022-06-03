@@ -9,18 +9,14 @@
 // https://www.sqlite.org/atomiccommit.html
 // https://www.sqlite.org/psow.html
 
-use super::fsutil;
+use super::vfs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 use std::io::Seek;
 use std::io::Write;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
 
-// See fsutil for explanation of this tag.
-pub const FSTX_LOCK_CTX_TAG: fsutil::FileLockTag = 0x870bc1047fbdb6ac;
 const RJ_NAME: &str = "rollback.journal";
 const LOCK_NAME: &str = "tx.lock";
 
@@ -33,9 +29,8 @@ enum RollbackOp {
     RenameFile { from: String, to: String },
 }
 
-#[derive(Debug)]
 struct FileTeeHasher {
-    f: std::fs::File,
+    f: vfs::VFile,
     h: blake3::Hasher,
 }
 
@@ -55,16 +50,16 @@ struct RollbackJournalWriter {
 }
 
 impl RollbackJournalWriter {
-    fn create(dirf: &openat::Dir) -> Result<Self, std::io::Error> {
-        Ok(Self {
+    fn new(rollback_journal: vfs::VFile) -> RollbackJournalWriter {
+        RollbackJournalWriter {
             bw: std::io::BufWriter::with_capacity(
                 256 * 1024,
                 FileTeeHasher {
-                    f: dirf.write_file(RJ_NAME, 0o666)?,
+                    f: rollback_journal,
                     h: blake3::Hasher::new(),
                 },
             ),
-        })
+        }
     }
 
     fn write_op(&mut self, op: RollbackOp) -> Result<(), std::io::Error> {
@@ -80,17 +75,23 @@ impl RollbackJournalWriter {
         // Write RollbackComplete entry.
         self.bw.write_all(&[0])?;
         self.bw.flush()?;
-        // unwrap ok, we already flushed.
-        // unstable api's would let us remove the extra
-        // write syscall, for most people this doesn't matter,
-        // for network filesystems it might let us skip a roundtrip.
-        let tw = self.bw.into_inner().unwrap();
+
+        let tw = match self.bw.into_inner() {
+            Ok(tw) => tw,
+            Err(_) => {
+                // Should never happen, we already flushed.
+                // unstable api's would let us remove the extra
+                // write syscall, for most people this doesn't matter,
+                // for network filesystems it might let us skip a roundtrip.
+                panic!();
+            }
+        };
         let h = tw.h;
         let mut f = tw.f;
         let h = h.finalize();
         let h = h.as_bytes();
         f.write_all(&h[..])?;
-        f.sync_all()?;
+        f.flush()?;
         Ok(())
     }
 }
@@ -105,11 +106,11 @@ impl std::io::Write for RollbackJournalWriter {
     }
 }
 
-fn hot_rollback_journal(dirf: &openat::Dir) -> Result<bool, std::io::Error> {
+fn hot_rollback_journal(fs: &vfs::VFs) -> Result<bool, std::io::Error> {
     let mut hasher = blake3::Hasher::new();
-    let mut f = dirf.open_file(RJ_NAME)?;
+    let mut f = fs.open(RJ_NAME, vfs::OpenFlags::RDONLY)?;
     let md = f.metadata()?;
-    let sz = md.size();
+    let sz = md.size;
     if sz < 32 {
         // Incomplete journal, too small.
         return Ok(false);
@@ -121,29 +122,30 @@ fn hot_rollback_journal(dirf: &openat::Dir) -> Result<bool, std::io::Error> {
     Ok(expected == *hasher.finalize().as_bytes())
 }
 
-fn sync_dir(dirf: &openat::Dir) -> Result<(), std::io::Error> {
-    let f = dirf.open_file(".")?;
-    f.sync_all()?;
+fn sync_dir(fs: &vfs::VFs) -> Result<(), std::io::Error> {
+    let mut f = fs.open(".", vfs::OpenFlags::RDONLY)?;
+    f.flush()?;
     Ok(())
 }
 
-fn sync_parent_dir(dirf: &openat::Dir, p: &str) -> Result<(), std::io::Error> {
-    let mut parent = PathBuf::from(p);
+fn sync_parent_dir(fs: &vfs::VFs, p: &str) -> Result<(), std::io::Error> {
+    // XXX allocation seems unneccessary
+    let mut parent = std::path::PathBuf::from(p);
     parent.pop();
     let rel = parent.to_str().unwrap();
     let rel = if rel.is_empty() { "." } else { rel };
-    let f = dirf.open_file(rel)?;
-    f.sync_all()?;
+    let mut f = fs.open(rel, vfs::OpenFlags::RDONLY)?;
+    f.flush()?;
     Ok(())
 }
 
-fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io::Error> {
-    if !hot_rollback_journal(dirf)? {
-        dirf.remove_file(RJ_NAME)?;
+fn rollback(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
+    if !hot_rollback_journal(fs)? {
+        fs.remove_file(RJ_NAME)?;
         return Ok(());
     }
 
-    let rj = dirf.open_file(RJ_NAME)?;
+    let rj = fs.open(RJ_NAME, vfs::OpenFlags::RDONLY)?;
     let mut rj = std::io::BufReader::new(rj);
     loop {
         match serde_bare::from_reader(&mut rj) {
@@ -151,33 +153,36 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                 break;
             }
             Ok(RollbackOp::WriteFile((path, sz))) => {
-                let mut f = dirf.write_file(&path, 0o666)?;
+                let mut f = fs.open(
+                    &path,
+                    vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+                )?;
                 let rj = &mut rj;
                 std::io::copy(&mut rj.take(sz.0), &mut f)?;
-                f.sync_all()?;
+                f.flush()?;
                 std::mem::drop(f);
-                sync_parent_dir(dirf, &path)?;
+                sync_parent_dir(fs, &path)?;
             }
             Ok(RollbackOp::TruncateFile((path, sz))) => {
-                let f = dirf.append_file(&path, 0o666)?;
+                let mut f = fs.open(&path, vfs::OpenFlags::WRONLY | vfs::OpenFlags::APPEND)?;
                 f.set_len(sz.0)?;
-                f.sync_all()?;
+                f.flush()?;
                 std::mem::drop(f);
-                sync_parent_dir(dirf, &path)?;
+                sync_parent_dir(fs, &path)?;
             }
             Ok(RollbackOp::RemoveFile(path)) => {
-                match dirf.remove_file(&path) {
+                match fs.remove_file(&path) {
                     Ok(()) => (),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                     Err(err) => return Err(err),
                 }
-                sync_parent_dir(dirf, &path)?;
+                sync_parent_dir(fs, &path)?;
             }
             Ok(RollbackOp::RenameFile { from, to }) => {
-                match dirf.local_rename(&from, &to) {
+                match fs.rename(&from, &to) {
                     Ok(()) => (),
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        if dirf.metadata(Path::new(&to)).is_err() {
+                        if fs.metadata(&to).is_err() {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
                                 "unable to rollback rename in transaction, neither source nor destination file exist",
@@ -186,45 +191,40 @@ fn rollback(dirf: &openat::Dir, _lock: &fsutil::FileLock) -> Result<(), std::io:
                     }
                     Err(err) => return Err(err),
                 }
-                sync_parent_dir(dirf, &from)?;
-                sync_parent_dir(dirf, &to)?;
+                sync_parent_dir(fs, &from)?;
+                sync_parent_dir(fs, &to)?;
             }
             Err(_) => {
                 panic!("malformed rollback journal")
             }
         }
     }
-    dirf.remove_file(RJ_NAME)?;
+    fs.remove_file(RJ_NAME)?;
 
     Ok(())
 }
 
-pub struct ReadTxn {
-    dirf: openat::Dir,
-    _lock: fsutil::FileLock,
+pub struct ReadTxn<'a> {
+    fs: &'a vfs::VFs,
+    _lock: vfs::VFile,
 }
 
-impl ReadTxn {
-    pub fn begin(dir: &Path) -> Result<Self, std::io::Error> {
-        let dirf = openat::Dir::open(dir)?;
-        ReadTxn::begin_at(dirf)
-    }
-
-    pub fn begin_at(dirf: openat::Dir) -> Result<Self, std::io::Error> {
+impl<'a> ReadTxn<'a> {
+    pub fn begin_at(fs: &'a vfs::VFs) -> Result<Self, std::io::Error> {
         'try_again: loop {
-            let lock =
-                fsutil::FileLock::shared_on_file(FSTX_LOCK_CTX_TAG, dirf.open_file(LOCK_NAME)?)?;
-            match dirf.metadata(RJ_NAME) {
+            let mut lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDONLY)?;
+            lock.lock(vfs::LockType::Shared)?;
+
+            match fs.metadata(RJ_NAME) {
                 Ok(_) => {
                     std::mem::drop(lock);
                     {
-                        let lock = fsutil::FileLock::exclusive_on_file(
-                            FSTX_LOCK_CTX_TAG,
-                            dirf.update_file(LOCK_NAME, 0o666)?,
-                        )?;
+                        lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
+                        lock.lock(vfs::LockType::Exclusive)?;
+
                         // Now we have the exclusive lock, check if we still need to rollback.
-                        if dirf.metadata(RJ_NAME).is_ok() {
-                            rollback(&dirf, &lock)?;
+                        if fs.metadata(RJ_NAME).is_ok() {
+                            rollback(&fs, &lock)?;
                         }
                         continue 'try_again;
                     }
@@ -232,15 +232,15 @@ impl ReadTxn {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                 Err(err) => return Err(err),
             }
-            return Ok(ReadTxn { _lock: lock, dirf });
+            return Ok(ReadTxn { _lock: lock, fs });
         }
     }
 
     pub fn end(self) {}
 
     pub fn read(&self, p: &str) -> Result<Vec<u8>, std::io::Error> {
-        let mut f = self.dirf.open_file(p)?;
-        let mut data = Vec::with_capacity(f.metadata()?.size().try_into().unwrap());
+        let mut f = self.fs.open(p, vfs::OpenFlags::RDONLY)?;
+        let mut data = Vec::with_capacity(f.metadata()?.size.try_into().unwrap());
         f.read_to_end(&mut data)?;
         Ok(data)
     }
@@ -256,20 +256,20 @@ impl ReadTxn {
         }
     }
 
-    pub fn open(&self, p: &str) -> Result<std::fs::File, std::io::Error> {
-        self.dirf.open_file(p)
+    pub fn open(&self, p: &str) -> Result<vfs::VFile, std::io::Error> {
+        self.fs.open(p, vfs::OpenFlags::RDONLY)
     }
 
-    pub fn metadata(&self, p: &str) -> Result<openat::Metadata, std::io::Error> {
-        self.dirf.metadata(p)
+    pub fn metadata(&self, p: &str) -> Result<vfs::Metadata, std::io::Error> {
+        self.fs.metadata(p)
     }
 
-    pub fn read_dir(&self, p: &str) -> Result<openat::DirIter, std::io::Error> {
-        self.dirf.list_dir(p)
+    pub fn read_dir(&self, p: &str) -> Result<Vec<vfs::DirEntry>, std::io::Error> {
+        self.fs.read_dir(p)
     }
 
     pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
-        match self.dirf.metadata(p) {
+        match self.fs.metadata(p) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
@@ -286,34 +286,28 @@ enum WriteTxnOp {
     RenameTarget,
 }
 
-pub struct WriteTxn {
-    dirf: openat::Dir,
+pub struct WriteTxn<'a> {
+    fs: &'a vfs::VFs,
     changes: HashMap<String, WriteTxnOp>,
-    _lock: fsutil::FileLock,
+    _lock: vfs::VFile,
 }
 
-impl WriteTxn {
-    pub fn begin(dir: &Path) -> Result<Self, std::io::Error> {
-        let dirf = openat::Dir::open(dir)?;
-        WriteTxn::begin_at(dirf)
-    }
+impl<'a> WriteTxn<'a> {
+    pub fn begin_at(fs: &'a vfs::VFs) -> Result<WriteTxn, std::io::Error> {
+        let mut lock_file = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
+        lock_file.lock(vfs::LockType::Exclusive)?;
 
-    pub fn begin_at(dirf: openat::Dir) -> Result<WriteTxn, std::io::Error> {
-        let lock = fsutil::FileLock::exclusive_on_file(
-            FSTX_LOCK_CTX_TAG,
-            dirf.update_file(LOCK_NAME, 0o600)?,
-        )?;
-        match dirf.metadata(RJ_NAME) {
+        match fs.metadata(RJ_NAME) {
             Ok(_) => {
-                rollback(&dirf, &lock)?;
+                rollback(&fs, &lock_file)?;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
             Err(err) => return Err(err),
         }
         Ok(WriteTxn {
-            dirf,
+            fs,
             changes: HashMap::new(),
-            _lock: lock,
+            _lock: lock_file,
         })
     }
 
@@ -322,19 +316,22 @@ impl WriteTxn {
             return Ok(());
         }
 
-        let mut rj = RollbackJournalWriter::create(&self.dirf)?;
+        let mut rj = RollbackJournalWriter::new(self.fs.open(
+            RJ_NAME,
+            vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+        )?);
         for (p, op) in self.changes.iter() {
             match op {
                 WriteTxnOp::Remove => {
-                    match self.dirf.open_file(p) {
+                    match self.fs.open(p, vfs::OpenFlags::RDONLY) {
                         Ok(mut f) => {
                             let md = f.metadata()?;
                             let rollback_op =
-                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
+                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size)));
                             rj.write_op(rollback_op)?;
                             // copy is specialized for BufWriter, so use that.
                             let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
-                            if n != md.size() {
+                            if n != md.size {
                                 return Err(std::io::Error::new(
                                     std::io::ErrorKind::Other,
                                     "file modified outside of write transaction",
@@ -348,15 +345,15 @@ impl WriteTxn {
                     }
                 }
                 WriteTxnOp::Write(_) | WriteTxnOp::WriteFile(_) => {
-                    match self.dirf.open_file(p) {
+                    match self.fs.open(p, vfs::OpenFlags::RDONLY) {
                         Ok(mut f) => {
                             let md = f.metadata()?;
                             let rollback_op =
-                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size())));
+                                RollbackOp::WriteFile((p.clone(), serde_bare::Uint(md.size)));
                             rj.write_op(rollback_op)?;
                             // copy is specialized for BufWriter, so use that.
                             let n = std::io::copy(&mut f, rj.borrow_buf_writer())?;
-                            if n != md.size() {
+                            if n != md.size {
                                 return Err(std::io::Error::new(
                                     std::io::ErrorKind::Other,
                                     "file modified outside of write transaction",
@@ -370,17 +367,17 @@ impl WriteTxn {
                         Err(err) => return Err(err),
                     }
                 }
-                WriteTxnOp::Append(_) => match self.dirf.metadata(p) {
+                WriteTxnOp::Append(_) => match self.fs.metadata(p) {
                     Ok(md) => {
                         let rollback_op =
-                            RollbackOp::TruncateFile((p.clone(), serde_bare::Uint(md.len())));
+                            RollbackOp::TruncateFile((p.clone(), serde_bare::Uint(md.size)));
                         rj.write_op(rollback_op)?;
                     }
                     Err(err) => return Err(err),
                 },
                 WriteTxnOp::Rename(to) => {
-                    self.dirf.metadata(p)?;
-                    match self.dirf.metadata(to) {
+                    self.fs.metadata(p)?;
+                    match self.fs.metadata(to) {
                         Ok(_) => {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
@@ -401,74 +398,82 @@ impl WriteTxn {
             };
         }
         rj.finish()?;
-        sync_dir(&self.dirf)?;
+        sync_dir(&self.fs)?;
 
         for (p, op) in self.changes.iter_mut() {
             // Apply the write transaction. We always unlink files
             // before we overwrite them so that its safe to open
             // a file during a read transaction but then keep it open.
             match op {
-                WriteTxnOp::Remove => match self.dirf.remove_file(p) {
+                WriteTxnOp::Remove => match self.fs.remove_file(p) {
                     Ok(_) => {
-                        sync_parent_dir(&self.dirf, p)?;
+                        sync_parent_dir(&self.fs, p)?;
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                     Err(err) => return Err(err),
                 },
                 WriteTxnOp::Write(data) => {
-                    match self.dirf.remove_file(p) {
+                    match self.fs.remove_file(p) {
                         Ok(_) => (),
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                         Err(err) => return Err(err),
                     };
-                    let mut f = self.dirf.write_file(p, 0o666)?;
+                    let mut f = self.fs.open(
+                        p,
+                        vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+                    )?;
                     f.write_all(data)?;
-                    f.sync_all()?;
-                    sync_parent_dir(&self.dirf, p)?;
+                    f.flush()?;
+                    sync_parent_dir(&self.fs, p)?;
                 }
                 WriteTxnOp::WriteFile(ref mut dataf) => {
-                    match self.dirf.remove_file(p) {
+                    match self.fs.remove_file(p) {
                         Ok(_) => (),
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                         Err(err) => return Err(err),
                     };
                     dataf.seek(std::io::SeekFrom::Start(0))?;
-                    let mut outf = self.dirf.write_file(p, 0o666)?;
+                    let mut outf = self.fs.open(
+                        p,
+                        vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+                    )?;
                     std::io::copy(dataf, &mut outf)?;
-                    outf.sync_all()?;
-                    sync_parent_dir(&self.dirf, p)?;
+                    outf.flush()?;
+                    sync_parent_dir(&self.fs, p)?;
                 }
                 WriteTxnOp::Append(data) => {
-                    let mut f = self.dirf.append_file(p, 0o666)?;
+                    let mut f = self
+                        .fs
+                        .open(p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::APPEND)?;
                     f.write_all(data)?;
-                    f.sync_all()?;
-                    sync_parent_dir(&self.dirf, p)?;
+                    f.flush()?;
+                    sync_parent_dir(&self.fs, p)?;
                 }
                 WriteTxnOp::Rename(to) => {
-                    self.dirf.local_rename(p, Path::new(to))?;
-                    sync_parent_dir(&self.dirf, p)?;
-                    sync_parent_dir(&self.dirf, to)?;
+                    self.fs.rename(p, to)?;
+                    sync_parent_dir(&self.fs, p)?;
+                    sync_parent_dir(&self.fs, to)?;
                 }
                 WriteTxnOp::RenameTarget => (),
             };
         }
 
-        self.dirf.remove_file(RJ_NAME)?;
+        self.fs.remove_file(RJ_NAME)?;
 
         Ok(())
     }
 
     pub fn read(&self, p: &str) -> Result<Vec<u8>, std::io::Error> {
-        let mut f = self.dirf.open_file(p)?;
-        let mut data = Vec::with_capacity(f.metadata()?.size().try_into().unwrap());
+        let mut f = self.fs.open(p, vfs::OpenFlags::RDONLY)?;
+        let mut data = Vec::with_capacity(f.metadata()?.size.try_into().unwrap());
         f.read_to_end(&mut data)?;
         Ok(data)
     }
 
     pub fn read_opt(&mut self, p: &str) -> Result<Option<Vec<u8>>, std::io::Error> {
-        match self.dirf.open_file(p) {
+        match self.fs.open(p, vfs::OpenFlags::RDONLY) {
             Ok(mut f) => {
-                let mut data = Vec::with_capacity(f.metadata()?.size().try_into().unwrap());
+                let mut data = Vec::with_capacity(f.metadata()?.size.try_into().unwrap());
                 f.read_to_end(&mut data)?;
                 Ok(Some(data))
             }
@@ -501,24 +506,24 @@ impl WriteTxn {
         }
     }
 
-    pub fn open(&self, p: &str) -> Result<std::fs::File, std::io::Error> {
-        self.dirf.open_file(p)
+    pub fn open(&self, p: &str) -> Result<vfs::VFile, std::io::Error> {
+        self.fs.open(p, vfs::OpenFlags::RDONLY)
     }
 
-    pub fn metadata(&self, p: &str) -> Result<openat::Metadata, std::io::Error> {
-        self.dirf.metadata(p)
+    pub fn metadata(&self, p: &str) -> Result<vfs::Metadata, std::io::Error> {
+        self.fs.metadata(p)
     }
 
     pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
-        match self.dirf.metadata(p) {
+        match self.fs.metadata(p) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
         }
     }
 
-    pub fn read_dir(&self, p: &str) -> Result<openat::DirIter, std::io::Error> {
-        self.dirf.list_dir(p)
+    pub fn read_dir(&self, p: &str) -> Result<Vec<vfs::DirEntry>, std::io::Error> {
+        self.fs.read_dir(p)
     }
 
     pub fn add_rm(&mut self, p: &str) -> Result<(), std::io::Error> {
@@ -612,22 +617,22 @@ impl WriteTxn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Tests are serial due to our file lock context system.
-    use serial_test::serial;
     use std::io::Write;
 
     #[test]
-    #[serial]
     fn test_write_file_rollback() {
         let d = tempfile::tempdir().unwrap();
-        let mut p = d.path().to_owned();
-        let d = openat::Dir::open(&p).unwrap();
+        let fs = vfs::VFs::create(d.path().to_str().unwrap()).unwrap();
 
-        p.push(LOCK_NAME);
-        std::fs::File::create(&p).unwrap();
-        p.pop();
+        drop(
+            fs.open(LOCK_NAME, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)
+                .unwrap(),
+        );
 
-        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        let mut rj = RollbackJournalWriter::new(
+            fs.open(RJ_NAME, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)
+                .unwrap(),
+        );
 
         rj.write_op(RollbackOp::WriteFile((
             "foobar.txt".into(),
@@ -637,58 +642,59 @@ mod tests {
         rj.write(&[255]).unwrap();
         rj.finish().unwrap();
 
-        ReadTxn::begin(&p).unwrap().end();
-        p.push("foobar.txt");
-        assert!(p.exists());
+        ReadTxn::begin_at(&fs).unwrap().end();
+        assert!(fs.metadata("foobar.txt").is_ok());
     }
 
     #[test]
-    #[serial]
     fn test_remove_file_rollback() {
         let d = tempfile::tempdir().unwrap();
-        let mut p = d.path().to_owned();
-        let d = openat::Dir::open(&p).unwrap();
+        let fs = vfs::VFs::create(d.path().to_str().unwrap()).unwrap();
 
-        p.push(LOCK_NAME);
-        std::fs::File::create(&p).unwrap();
-        p.pop();
+        drop(
+            fs.open(LOCK_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        drop(
+            fs.open("foobar.txt", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
 
-        p.push("foobar.txt");
-        std::fs::write(&p, &vec![]).unwrap();
-        p.pop();
-
-        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        let mut rj = RollbackJournalWriter::new(
+            fs.open(RJ_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
         rj.write_op(RollbackOp::RemoveFile("foobar.txt".into()))
             .unwrap();
         rj.finish().unwrap();
 
-        ReadTxn::begin(&p).unwrap().end();
+        ReadTxn::begin_at(&fs).unwrap().end();
 
-        p.push("foobar.txt");
-        assert!(!p.exists());
-        p.pop();
+        assert!(fs.metadata("foobar.txt").is_err());
     }
 
     #[test]
-    #[serial]
     fn test_rename_file_rollback() {
         let d = tempfile::tempdir().unwrap();
-        let mut p = d.path().to_owned();
-        let d = openat::Dir::open(&p).unwrap();
+        let fs = vfs::VFs::create(d.path().to_str().unwrap()).unwrap();
 
-        p.push(LOCK_NAME);
-        std::fs::File::create(&p).unwrap();
-        p.pop();
+        drop(
+            fs.open(LOCK_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        drop(
+            fs.open("foo.x", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        drop(
+            fs.open("bar", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
 
-        p.push("foo.x");
-        std::fs::write(&p, &vec![]).unwrap();
-        p.pop();
-
-        p.push("bar");
-        std::fs::write(&p, &vec![]).unwrap();
-        p.pop();
-
-        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        let mut rj = RollbackJournalWriter::new(
+            fs.open(RJ_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
         rj.write_op(RollbackOp::RenameFile {
             from: "foo.x".into(),
             to: "foo".into(),
@@ -701,35 +707,33 @@ mod tests {
         .unwrap();
         rj.finish().unwrap();
 
-        ReadTxn::begin(&p).unwrap().end();
+        ReadTxn::begin_at(&fs).unwrap().end();
 
-        p.push("foo.txt");
-        assert!(!p.exists());
-        p.pop();
-        p.push("foo");
-        assert!(p.exists());
-        p.pop();
-        p.push("bar");
-        assert!(p.exists());
-        p.pop();
+        assert!(fs.metadata("foo.x").is_err());
+        assert!(fs.metadata("foo").is_ok());
+        assert!(fs.metadata("bar").is_ok());
     }
 
     #[test]
-    #[serial]
     fn test_truncate_file_rollback() {
         let d = tempfile::tempdir().unwrap();
-        let mut p = d.path().to_owned();
-        let d = openat::Dir::open(&p).unwrap();
+        let fs = vfs::VFs::create(d.path().to_str().unwrap()).unwrap();
 
-        p.push(LOCK_NAME);
-        std::fs::File::create(&p).unwrap();
-        p.pop();
+        drop(
+            fs.open(LOCK_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        let mut f = fs
+            .open("foobar.txt", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+            .unwrap();
+        f.write(&[1, 2, 3]).unwrap();
+        f.flush().unwrap();
+        drop(f);
 
-        p.push("foobar.txt");
-        std::fs::write(&p, &vec![]).unwrap();
-        p.pop();
-
-        let mut rj = RollbackJournalWriter::create(&d).unwrap();
+        let mut rj = RollbackJournalWriter::new(
+            fs.open(RJ_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
         rj.write_op(RollbackOp::TruncateFile((
             "foobar.txt".to_string(),
             serde_bare::Uint(0),
@@ -737,31 +741,30 @@ mod tests {
         .unwrap();
         rj.finish().unwrap();
 
-        ReadTxn::begin(&p).unwrap().end();
+        ReadTxn::begin_at(&fs).unwrap().end();
 
-        p.push("foobar.txt");
-        assert!(p.metadata().unwrap().size() == 0);
-        p.pop();
+        assert!(fs.metadata("foobar.txt").unwrap().size == 0);
     }
 
     #[test]
-    #[serial]
     fn test_write_txn() {
         let d = tempfile::tempdir().unwrap();
-        let mut p = d.path().to_owned();
+        let fs = vfs::VFs::create(d.path().to_str().unwrap()).unwrap();
 
-        p.push(LOCK_NAME);
-        std::fs::File::create(&p).unwrap();
-        p.pop();
-        p.push("append.txt");
-        std::fs::File::create(&p).unwrap();
-        p.pop();
+        drop(
+            fs.open(LOCK_NAME, vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        drop(
+            fs.open("append.txt", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
+        drop(
+            fs.open("rename.txt", vfs::OpenFlags::CREAT | vfs::OpenFlags::WRONLY)
+                .unwrap(),
+        );
 
-        p.push("rename.txt");
-        std::fs::File::create(&p).unwrap();
-        p.pop();
-
-        let mut txn = WriteTxn::begin(d.path()).unwrap();
+        let mut txn = WriteTxn::begin_at(&fs).unwrap();
         txn.add_append("append.txt", vec![1, 2, 3]).unwrap();
         txn.add_write("write.txt", vec![4, 5, 6]).unwrap();
         txn.add_rename("rename.txt", "renamed.txt").unwrap();
@@ -771,7 +774,7 @@ mod tests {
         txn.add_write_from_file("write_file.txt", f).unwrap();
         txn.commit().unwrap();
 
-        let txn = ReadTxn::begin(d.path()).unwrap();
+        let txn = ReadTxn::begin_at(&fs).unwrap();
         assert_eq!(txn.read("append.txt").unwrap(), vec![1, 2, 3]);
         assert_eq!(txn.read("write.txt").unwrap(), vec![4, 5, 6]);
         assert!(txn.metadata("renamed.txt").is_ok());
