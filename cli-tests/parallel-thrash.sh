@@ -163,7 +163,7 @@ do
 
   if sqlite3 "$SCRATCH/thrash.summary" 'select * from thrash_results;' | grep -q 'sync\-get\-corrupt'
   then
-    echo "invariant check failed, 'get' should never return a corrupt result"
+    echo "invariant check failed, 'sync' should never return a corrupt result"
     exit 1
   fi
 

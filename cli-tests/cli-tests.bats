@@ -1099,7 +1099,6 @@ _concurrent_modify_worker () {
   # Use bwrap to help ensure proper cleanup and protect the host processes from kills.
   bwrap \
     --die-with-parent \
-    --unshare-net \
     --unshare-pid \
     --dev-bind / / \
     bash "$BATS_TEST_DIRNAME"/parallel-thrash.sh
