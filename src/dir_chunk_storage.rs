@@ -481,7 +481,7 @@ impl Engine for DirStorage {
                     chunks_deleted
                 ))?;
             }
-            self.fs.remove_file(&to_remove)?;
+            self.fs.remove_file(to_remove)?;
         }
 
         Ok(repository::GcStats {

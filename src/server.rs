@@ -194,7 +194,7 @@ fn recv(
                             - chrono::Utc::now().timestamp_millis();
                         const MAX_SKEW_MINS: i64 = 15;
                         const MAX_SKEW_MILLIS: i64 = MAX_SKEW_MINS * 60 * 1000;
-                        if item_skew > MAX_SKEW_MILLIS || item_skew < -MAX_SKEW_MILLIS {
+                        if !(-MAX_SKEW_MILLIS..=MAX_SKEW_MILLIS).contains(&item_skew) {
                             // This check prevents the client from spoofing times without also controlling the server.
                             // The client is protected from server spoofed times by the metadata hash.
                             anyhow::bail!("added item has timestamp skew larger than {} minutes, refusing new item.", MAX_SKEW_MINS);

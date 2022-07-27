@@ -22,13 +22,13 @@ use std::path::{Path, PathBuf};
 use uriparse::uri;
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub enum StorageEngineSpec {
     DirStore,
     ExternalStore { socket_path: String, path: String },
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct GcStats {
     pub chunks_deleted: Option<u64>,
     pub bytes_deleted: Option<u64>,
@@ -36,7 +36,7 @@ pub struct GcStats {
     pub bytes_remaining: Option<u64>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum RepoLockMode {
     None,
     Shared,
@@ -108,7 +108,7 @@ impl Repo {
             };
 
             let parent_path = {
-                let mut p = path.clone();
+                let mut p = path;
                 p.pop();
                 p
             };
@@ -191,12 +191,12 @@ impl Repo {
         let schema = CURRENT_SCHEMA_VERSION.to_string();
         write_file(
             format!("{}/meta/schema_version", tmp_path),
-            &schema.as_bytes(),
+            schema.as_bytes(),
         )?;
         let gc_generation = format!("{:x}", Xid::new());
         write_file(
             format!("{}/meta/gc_generation", &tmp_path),
-            &gc_generation.as_bytes(),
+            gc_generation.as_bytes(),
         )?;
         let storage_engine_bytes = serde_json::to_vec_pretty(&storage_engine)?;
         write_file(
@@ -216,7 +216,7 @@ impl Repo {
     pub fn open(repo_path: &Path, initial_lock_mode: RepoLockMode) -> Result<Repo, anyhow::Error> {
         let repo_path = repo_path.to_str().unwrap(); // TODO fix unwrap.
 
-        let repo_vfs = match vfs::VFs::create(&repo_path) {
+        let repo_vfs = match vfs::VFs::create(repo_path) {
             Ok(fs) => fs,
             Err(err) => anyhow::bail!("unable to open repository at {}: {}", repo_path, err),
         };

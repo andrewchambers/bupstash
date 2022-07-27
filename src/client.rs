@@ -57,7 +57,7 @@ pub fn open_repository(
             let clock_skew = (resp.unix_now_millis as i64) - chrono::Utc::now().timestamp_millis();
             const MAX_SKEW_MINS: i64 = 15;
             const MAX_SKEW_MILLIS: i64 = MAX_SKEW_MINS * 60 * 1000;
-            if clock_skew > MAX_SKEW_MILLIS || clock_skew < -MAX_SKEW_MILLIS {
+            if !(-MAX_SKEW_MILLIS..=MAX_SKEW_MILLIS).contains(&clock_skew) {
                 // This helps protect against inaccurate item timestamps, which protects users from unintentionally
                 // deleting important backups when deleting based on timestamp queries. Instead they will be notified
                 // of the clock mismatch as soon as we know about it.

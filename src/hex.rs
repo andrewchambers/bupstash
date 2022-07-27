@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HexError {
     #[error("invalid character in hex input")]
     InvalidCharacter,
@@ -37,8 +37,7 @@ pub fn decode_string(from: &str, to: &mut [u8]) -> Result<(), HexError> {
 
 pub fn easy_decode_string(from: &str) -> Result<Vec<u8>, HexError> {
     let n = from.len() / 2;
-    let mut v = Vec::<u8>::with_capacity(n);
-    v.resize(v.capacity(), 0);
+    let mut v = vec![0; n];
     match decode_string(from, &mut v) {
         Ok(()) => Ok(v),
         Err(e) => Err(e),

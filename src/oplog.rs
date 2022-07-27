@@ -7,14 +7,14 @@ pub const MAX_TAG_SET_SIZE: usize = 32 * 1024;
 // Tags plus some leeway, we can adjust this if we need to.
 pub const MAX_METADATA_SIZE: usize = MAX_TAG_SET_SIZE + 2048;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub struct HTreeMetadata {
     pub height: serde_bare::Uint,
     pub data_chunk_count: serde_bare::Uint,
     pub address: Address,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V1PlainTextItemMetadata {
     pub primary_key_id: Xid,
     pub data_tree: HTreeMetadata,
@@ -29,7 +29,7 @@ impl V1PlainTextItemMetadata {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V2PlainTextItemMetadata {
     pub primary_key_id: Xid,
     pub unix_timestamp_millis: u64,
@@ -45,7 +45,7 @@ impl V2PlainTextItemMetadata {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V3PlainTextItemMetadata {
     pub primary_key_id: Xid,
     pub unix_timestamp_millis: u64,
@@ -63,7 +63,7 @@ impl V3PlainTextItemMetadata {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V1SecretItemMetadata {
     pub plain_text_hash: [u8; crypto::HASH_BYTES],
     pub send_key_id: Xid,
@@ -75,7 +75,7 @@ pub struct V1SecretItemMetadata {
     pub index_size: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V2SecretItemMetadata {
     pub plain_text_hash: [u8; crypto::HASH_BYTES],
     pub send_key_id: Xid,
@@ -86,7 +86,7 @@ pub struct V2SecretItemMetadata {
     pub index_size: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V3SecretItemMetadata {
     pub plain_text_hash: [u8; crypto::HASH_BYTES],
     pub send_key_id: Xid,
@@ -97,26 +97,26 @@ pub struct V3SecretItemMetadata {
     pub index_size: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V1ItemMetadata {
     pub plain_text_metadata: V1PlainTextItemMetadata,
     pub encrypted_metadata: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V2ItemMetadata {
     pub plain_text_metadata: V2PlainTextItemMetadata,
     pub encrypted_metadata: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub struct V3ItemMetadata {
     pub plain_text_metadata: V3PlainTextItemMetadata,
     pub encrypted_metadata: Vec<u8>,
 }
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone)]
 pub enum VersionedItemMetadata {
     V1(V1ItemMetadata), // Note, we are considering removing this version in the future and removing support.
     V2(V2ItemMetadata),
@@ -125,7 +125,7 @@ pub enum VersionedItemMetadata {
 
 // This type is the result of decrypting and validating either V1 metadata or V2 metadata
 // It is the lowest common denominator of all metadata.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub struct DecryptedItemMetadata {
     pub primary_key_id: Xid,
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -250,7 +250,7 @@ impl VersionedItemMetadata {
 }
 
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub enum LogOp {
     AddItem((Xid, VersionedItemMetadata)),
     // Note: There is an asymmetry here in that we can delete many items with one log op.

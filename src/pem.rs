@@ -10,6 +10,7 @@ use once_cell::sync::Lazy;
 use regex::bytes::{Captures, Regex};
 use std::error::Error;
 use std::fmt;
+use std::fmt::Write;
 use std::str;
 
 /// The `pem` error type.
@@ -79,7 +80,7 @@ pub struct EncodeConfig {
 }
 
 /// A representation of Pem-encoded data
-#[derive(PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug)]
 pub struct Pem {
     /// The tag extracted from the Pem-encoded data
     pub tag: String,
@@ -309,12 +310,11 @@ pub fn encode_config(pem: &Pem, config: EncodeConfig) -> String {
         base64::encode(&pem.contents)
     };
 
-    output.push_str(&format!("-----BEGIN {}-----{}", pem.tag, line_ending));
+    write!(output, "-----BEGIN {}-----{}", pem.tag, line_ending).unwrap();
     for c in contents.as_bytes().chunks(LINE_WRAP) {
-        output.push_str(&format!("{}{}", str::from_utf8(c).unwrap(), line_ending));
+        write!(output, "{}{}", str::from_utf8(c).unwrap(), line_ending).unwrap();
     }
-    output.push_str(&format!("-----END {}-----{}", pem.tag, line_ending));
-
+    write!(output, "-----END {}-----{}", pem.tag, line_ending).unwrap();
     output
 }
 

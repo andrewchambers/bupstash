@@ -136,7 +136,7 @@ impl VFs {
         let path = u.path().to_string();
 
         match u.scheme().as_str() {
-            "file" => VFs::create_from_local_path(&Path::new(&path)),
+            "file" => VFs::create_from_local_path(Path::new(&path)),
             scheme => Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("unknown uri repository scheme: '{}'", scheme),
@@ -279,8 +279,8 @@ impl OsDir {
             nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_CLOEXEC,
             nix::sys::stat::Mode::from_bits_truncate(0o644),
         )?;
-        let dot = ['.' as u8];
-        let dotdot = ['.' as u8, '.' as u8];
+        let dot = [b'.'];
+        let dotdot = [b'.', b'.'];
         for ent in d.iter() {
             let ent = ent?;
             let fname_bytes = ent.file_name().to_bytes();

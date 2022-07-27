@@ -224,7 +224,7 @@ impl<'a> ReadTxn<'a> {
 
                         // Now we have the exclusive lock, check if we still need to rollback.
                         if fs.metadata(RJ_NAME).is_ok() {
-                            rollback(&fs, &lock)?;
+                            rollback(fs, &lock)?;
                         }
                         continue 'try_again;
                     }
@@ -299,7 +299,7 @@ impl<'a> WriteTxn<'a> {
 
         match fs.metadata(RJ_NAME) {
             Ok(_) => {
-                rollback(&fs, &lock_file)?;
+                rollback(fs, &lock_file)?;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
             Err(err) => return Err(err),
@@ -398,7 +398,7 @@ impl<'a> WriteTxn<'a> {
             };
         }
         rj.finish()?;
-        sync_dir(&self.fs)?;
+        sync_dir(self.fs)?;
 
         for (p, op) in self.changes.iter_mut() {
             // Apply the write transaction. We always unlink files
@@ -407,7 +407,7 @@ impl<'a> WriteTxn<'a> {
             match op {
                 WriteTxnOp::Remove => match self.fs.remove_file(p) {
                     Ok(_) => {
-                        sync_parent_dir(&self.fs, p)?;
+                        sync_parent_dir(self.fs, p)?;
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                     Err(err) => return Err(err),
@@ -424,7 +424,7 @@ impl<'a> WriteTxn<'a> {
                     )?;
                     f.write_all(data)?;
                     f.flush()?;
-                    sync_parent_dir(&self.fs, p)?;
+                    sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::WriteFile(ref mut dataf) => {
                     match self.fs.remove_file(p) {
@@ -439,7 +439,7 @@ impl<'a> WriteTxn<'a> {
                     )?;
                     std::io::copy(dataf, &mut outf)?;
                     outf.flush()?;
-                    sync_parent_dir(&self.fs, p)?;
+                    sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::Append(data) => {
                     let mut f = self
@@ -447,12 +447,12 @@ impl<'a> WriteTxn<'a> {
                         .open(p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::APPEND)?;
                     f.write_all(data)?;
                     f.flush()?;
-                    sync_parent_dir(&self.fs, p)?;
+                    sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::Rename(to) => {
                     self.fs.rename(p, to)?;
-                    sync_parent_dir(&self.fs, p)?;
-                    sync_parent_dir(&self.fs, to)?;
+                    sync_parent_dir(self.fs, p)?;
+                    sync_parent_dir(self.fs, to)?;
                 }
                 WriteTxnOp::RenameTarget => (),
             };

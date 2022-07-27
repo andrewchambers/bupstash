@@ -77,7 +77,7 @@ impl Default for BoxNonce {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct BoxSecretKey {
     pub bytes: [u8; BOX_SECRETKEYBYTES],
 }
@@ -92,7 +92,7 @@ impl Drop for BoxSecretKey {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct BoxPublicKey {
     pub bytes: [u8; BOX_PUBLICKEYBYTES as usize],
 }
@@ -316,7 +316,7 @@ impl DecryptionContext {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct PartialHashKey {
     pub bytes: [u8; 32],
 }
@@ -349,7 +349,7 @@ impl Drop for PartialHashKey {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct BoxPreSharedKey {
     pub bytes: [u8; 32],
 }
@@ -386,7 +386,7 @@ pub fn derive_hash_key(part1: &PartialHashKey, part2: &PartialHashKey) -> HashKe
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone)]
 pub struct HashKey {
     pub part1: PartialHashKey,
     pub part2: PartialHashKey,
@@ -399,7 +399,7 @@ impl Drop for HashKey {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct RollsumKey {
     pub bytes: [u8; RANDOM_SEED_BYTES],
 }

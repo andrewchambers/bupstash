@@ -21,7 +21,7 @@ pub fn repo_upgrade_to_5_to_6(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
     eprintln!("getting exclusive repository lock for upgrade...");
     lock_file.lock(vfs::LockType::Exclusive)?;
 
-    let mut fstx = fstx::WriteTxn::begin_at(&repo_fs)?;
+    let mut fstx = fstx::WriteTxn::begin_at(repo_fs)?;
     let schema_version = fstx.read_string("meta/schema_version")?;
     if schema_version != "5" {
         anyhow::bail!(
@@ -45,7 +45,7 @@ pub fn repo_upgrade_to_6_to_7(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
     eprintln!("getting exclusive repository lock for upgrade...");
     lock_file.lock(vfs::LockType::Exclusive)?;
 
-    let mut txn = fstx::WriteTxn::begin_at(&repo_fs)?;
+    let mut txn = fstx::WriteTxn::begin_at(repo_fs)?;
 
     let mut active_items: HashSet<xid::Xid> = HashSet::new();
     for item in txn.read_dir("items")? {

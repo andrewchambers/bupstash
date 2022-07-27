@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 pub type StringXattrs = BTreeMap<String, Vec<u8>>;
 pub type Xattrs = BTreeMap<OsString, Vec<u8>>;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SparseHint {
     NotSparse,
     Sparse { min_hole_size: u64 },
@@ -197,7 +197,7 @@ impl IndexEntry {
 // Deprecated, kept around for backwards compatibility.
 // It was a mistake to keep absolute data cursors as they
 // encode the entry position which degrades deduplication.
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone, Copy)]
 pub struct AbsoluteDataCursor {
     pub chunk_start_idx: serde_bare::Uint,
     pub chunk_end_idx: serde_bare::Uint,
@@ -205,14 +205,14 @@ pub struct AbsoluteDataCursor {
     pub end_byte_offset: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone, Copy)]
 pub struct RelativeDataCursor {
     pub chunk_delta: serde_bare::Uint,
     pub start_byte_offset: serde_bare::Uint,
     pub end_byte_offset: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone, Copy)]
 pub enum ContentCryptoHash {
     None,
     Blake3([u8; 32]),
@@ -344,7 +344,7 @@ impl IndexEntry {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Eq, PartialEq)]
 pub struct HTreeDataRange {
     pub start_idx: serde_bare::Uint,
     pub end_idx: serde_bare::Uint,

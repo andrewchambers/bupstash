@@ -12,14 +12,14 @@ use thiserror::Error;
 pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "13";
 pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpenMode {
     Read,
     ReadWrite,
     Gc,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct TOpenRepository {
     // Open mode can be used by server implementations for load balancing purposes.
     // An example of why this is useful is that garbage collection can be extremely
@@ -29,111 +29,111 @@ pub struct TOpenRepository {
     pub protocol_version: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct ROpenRepository {
     pub unix_now_millis: u64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Chunk {
     pub address: Address,
     pub data: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct TBeginSend {
     pub delta_id: Option<Xid>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RBeginSend {
     pub item_id: Xid,
     pub gc_generation: Xid,
     pub has_delta_id: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct TRequestMetadata {
     pub id: Xid,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RRequestMetadata {
     pub metadata: Option<oplog::VersionedItemMetadata>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RequestData {
     pub id: Xid,
     pub partial: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RequestIndex {
     pub id: Xid,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct TGc {}
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RGc {
     pub stats: repository::GcStats,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct TRequestOpLogSync {
     pub after: Option<serde_bare::Uint>,
     pub gc_generation: Option<Xid>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RRequestOpLogSync {
     pub gc_generation: Xid,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct StorageConnect {
     pub protocol: String,
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct AddItem {
     pub item: oplog::VersionedItemMetadata,
 }
 
 pub const ABORT_CODE_SERVER_UNAVAILABLE: u64 = 0x9cf5c3ce325d27a6;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct Abort {
     pub message: String,
     pub code: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RRecoverRemoved {
     pub n_recovered: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RBeginItemSyncPush {
     pub gc_generation: Xid,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct RStorageEstimateCount {
     pub count: serde_bare::Uint,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct FlushStats {
     pub added_chunks: u64,
     pub added_bytes: u64,
 }
 
 #[non_exhaustive]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Packet {
     TOpenRepository(TOpenRepository),
     ROpenRepository(ROpenRepository),

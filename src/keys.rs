@@ -6,7 +6,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Eq, PartialEq, Clone)]
 pub struct PrimaryKey {
     pub id: Xid,
     /* key used to make the rollsum unique to this key. */

@@ -2791,7 +2791,7 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
     };
 
-    if !repo.starts_with("./") && !repo.starts_with("../") && !repo.starts_with("/") {
+    if !repo.starts_with("./") && !repo.starts_with("../") && !repo.starts_with('/') {
         anyhow::bail!("exec-with-locks does not support remote or uri repositories.");
     }
 

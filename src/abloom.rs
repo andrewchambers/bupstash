@@ -6,7 +6,7 @@ use std::convert::TryInto;
 //
 // See https://en.wikipedia.org/wiki/Bloom_filter
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ABloom {
     nbits: u64,
     bytes: Vec<u8>,
