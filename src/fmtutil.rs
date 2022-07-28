@@ -1,5 +1,6 @@
 use super::hex;
 use super::index;
+use std::os::unix::ffi::OsStrExt;
 
 pub fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>, utc_timestamps: bool) -> String {
     let tsfmt = "%Y/%m/%d %T";
@@ -95,7 +96,7 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
             format_args!(",\"path\":{}", serde_json::to_string(path)?),
         )?,
         None => {
-            let path = ent.path.as_os_str();
+            let path = ent.path.as_os_str().as_bytes();
             std::fmt::write(
                 &mut result,
                 format_args!(",\"path\":{}", serde_json::to_string(path)?),
@@ -194,15 +195,27 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
     } else {
         result.push_str(",\"xattrs\":null");
     }
+
     std::fmt::write(&mut result, format_args!(",\"sparse\": {}", ent.sparse))?;
+
     if let Some(ref link_target) = ent.link_target {
-        std::fmt::write(
-            &mut result,
-            format_args!(",\"link_target\":{}", serde_json::to_string(link_target)?),
-        )?;
+        match link_target.to_str() {
+            Some(path) => std::fmt::write(
+                &mut result,
+                format_args!(",\"link_target\":{}", serde_json::to_string(path)?),
+            )?,
+            None => {
+                let link_target = link_target.as_os_str().as_bytes();
+                std::fmt::write(
+                    &mut result,
+                    format_args!(",\"link_target\":{}", serde_json::to_string(link_target)?),
+                )?
+            }
+        }
     } else {
         result.push_str(",\"link_target\":null");
     }
+
     match ent.data_hash {
         index::ContentCryptoHash::None => result.push_str(",\"data_hash\":null"),
         index::ContentCryptoHash::Blake3(h) => std::fmt::write(

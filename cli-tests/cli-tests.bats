@@ -379,6 +379,21 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
+@test "put and list non-utf8 paths" {
+  if test $(uname) = "Darwin"
+  then
+    skip "Darwin utilities cannot handle test paths"
+  fi
+  mkdir "$SCRATCH/d"
+  ln -s $(echo -ne "\xe2\x28\xa1") $(echo -ne "$SCRATCH/d/\xe2\x28\xa1")
+  id="$(bupstash put "$SCRATCH/d")"
+  bupstash list-contents --format=jsonl1 id="$id"
+  p=$(bupstash list-contents --format=jsonl1 id="$id" | tail -n 1 | jq -c .path)
+  l=$(bupstash list-contents --format=jsonl1 id="$id" | tail -n 1 | jq -c .link_target)
+  test "$p" = "[226,40,161]"
+  test "$l" = "[226,40,161]"
+}
+
 @test "exclusions" {
   mkdir "$SCRATCH/foo"
   touch "$SCRATCH/foo/bang"
