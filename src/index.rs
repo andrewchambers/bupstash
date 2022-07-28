@@ -1,8 +1,9 @@
 use super::fsutil;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io::Write;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 // Deprecated Xattr format for backwards compatibility.
@@ -121,8 +122,52 @@ pub struct V3IndexEntry {
     pub data_hash: ContentCryptoHash,
 }
 
+fn serialize_index_path<S>(p: &PathBuf, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    s.serialize_bytes(p.as_os_str().as_bytes())
+}
+
+fn deserialize_index_path<'de, D>(d: D) -> Result<PathBuf, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let buf: Vec<u8> = Deserialize::deserialize(d)?;
+    // XXX: error on embedded null?
+    Ok(PathBuf::from(OsString::from_vec(buf)))
+}
+
+fn serialize_opt_index_path<S>(p: &Option<PathBuf>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match p {
+        Some(p) => s.serialize_some(p),
+        None => s.serialize_none(),
+    }
+}
+
+fn deserialize_opt_index_path<'de, D>(d: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Option<Vec<u8>> = Deserialize::deserialize(d)?;
+    match v {
+        Some(v) => {
+            // XXX: error on embedded null?
+            Ok(Some(PathBuf::from(OsString::from_vec(v))))
+        }
+        None => Ok(None),
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct IndexEntry {
+    // The following serialize helpers are needed to work around serde failing on
+    // PathBuf types that are not valid utf8 (which are valid).
+    #[serde(serialize_with = "serialize_index_path")]
+    #[serde(deserialize_with = "deserialize_index_path")]
     pub path: PathBuf,
     pub size: serde_bare::Uint,
     pub mtime: serde_bare::Uint,
@@ -137,6 +182,9 @@ pub struct IndexEntry {
     pub uid: serde_bare::Uint,
     pub gid: serde_bare::Uint,
     pub nlink: serde_bare::Uint,
+    // Same as above.
+    #[serde(serialize_with = "serialize_opt_index_path")]
+    #[serde(deserialize_with = "deserialize_opt_index_path")]
     pub link_target: Option<PathBuf>,
     pub dev_major: serde_bare::Uint,
     pub dev_minor: serde_bare::Uint,
