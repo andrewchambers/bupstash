@@ -122,7 +122,7 @@ pub struct V3IndexEntry {
     pub data_hash: ContentCryptoHash,
 }
 
-fn serialize_index_path<S>(p: &PathBuf, s: S) -> Result<S::Ok, S::Error>
+fn serialize_index_path<S>(p: &Path, s: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -143,7 +143,7 @@ where
     S: Serializer,
 {
     match p {
-        Some(p) => s.serialize_some(p),
+        Some(p) => s.serialize_some(p.as_os_str().as_bytes()),
         None => s.serialize_none(),
     }
 }
