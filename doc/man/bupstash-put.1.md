@@ -227,10 +227,10 @@ With possible types:
   Path to the send log, overridden by --send-log. See the section 'Incremental backups'
   for a description of how to use send logging for efficient incremental uploads.
 
-* BUPSTASH_CHECKPOINT_BYTES:
-  When send logging is enabled, bupstash will checkpoint the log every BUPSTASH_CHECKPOINT_BYTES
-  of data that is sent. If an upload is interrupted after a successful checkpoint, data will not need
-  to be resent over the network. The default value of this option is 21474836480, which is 20 GiB.
+* BUPSTASH_CHECKPOINT_SECONDS:
+  When send logging is enabled, bupstash will checkpoint approximately every BUPSTASH_CHECKPOINT_SECONDS.
+  If an upload is interrupted after a successful checkpoint, data will not need
+  to be resent over the network. The default value of this option is 600, which is 10 minutes.
 
 ## EXAMPLES
 

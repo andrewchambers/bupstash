@@ -455,8 +455,10 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 @test "checkpoint plain data" {
   # Excercise the checkpointing code, does not check
   # cache invalidation, that is covered via unit tests.
-  n=32000000
-  export BUPSTASH_CHECKPOINT_BYTES=1
+  
+  # Big enough for multiple chunks
+  n=100000000
+  export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possible
   head -c $n /dev/urandom > "$SCRATCH/rand.dat"
   id="$(bupstash put :: "$SCRATCH/rand.dat")"
   bupstash get id=$id > "$SCRATCH/got.dat"
@@ -469,14 +471,16 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   # cache invalidation, that is covered via unit tests.
 
   mkdir "$SCRATCH/foo"
-  mkdir "$SCRATCH/foo/bar"
-  mkdir "$SCRATCH/foo/bar/baz"
-  touch "$SCRATCH/foo/bang"
-
-  export BUPSTASH_CHECKPOINT_BYTES=1
-
+  # There currently is at least one chunk per directory, create many
+  # to ensure there are enough chunks to trigger a few checkpoints.
+  for i in `seq 50`
+  do
+    mkdir "$SCRATCH/foo/bar$i"
+    echo foo > "$SCRATCH/foo/bar$i/data"
+  done
+  export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possible
   id=$(bupstash put :: "$SCRATCH/foo")
-  test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  test 101 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "rm from stdin" {
