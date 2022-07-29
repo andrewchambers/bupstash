@@ -100,6 +100,7 @@ pub struct SendContext {
     pub want_xattrs: bool,
     pub use_stat_cache: bool,
     pub one_file_system: bool,
+    pub ignore_permission_errors: bool,
     pub file_action_log_fn: Option<FileActionLogFn>,
 }
 
@@ -323,6 +324,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 want_xattrs: self.ctx.want_xattrs,
                 want_sparseness: true,
                 want_hash: false,
+                ignore_permission_errors: self.ctx.ignore_permission_errors,
                 exclusions,
                 exclusion_markers,
             },
@@ -442,6 +444,14 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                                     smear_detected = true;
                                     continue 'add_dir_ents;
                                 }
+
+                                (_, Err(err))
+                                    if self.ctx.ignore_permission_errors
+                                        && err.kind() == std::io::ErrorKind::PermissionDenied =>
+                                {
+                                    continue 'add_dir_ents;
+                                }
+
                                 (ent_path, Err(err)) => {
                                     anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
                                 }
@@ -1453,6 +1463,7 @@ pub fn restore_to_local_dir(
                 want_xattrs: false,
                 want_hash: true,
                 one_file_system: false,
+                ignore_permission_errors: false,
             },
         )? {
             let indexed_dir = indexed_dir?;

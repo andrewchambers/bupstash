@@ -182,6 +182,9 @@ With possible types:
   Compression algorithm, one of 'none', 'lz4' or 'zstd[:$level]'.
   Defaults to 'zstd:3'.
 
+* --ignore-permission-errors:
+  Ignore permission denied errors, skipping those files or directories.
+
 * --one-file-system:
   Do not traverse mount points in the file system.
 
