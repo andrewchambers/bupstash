@@ -29,6 +29,7 @@ struct FsMetadataFetcherOptions {
     want_xattrs: bool,
     want_sparseness: bool,
     want_hash: bool,
+    ignore_permission_errors: bool,
 }
 
 impl Drop for FsMetadataFetcher {
@@ -120,11 +121,17 @@ fn get_metadata(path: &Path, opts: &FsMetadataFetcherOptions) -> std::io::Result
                         }
                         Ok(None) => (), // The file had it's xattr removed, assume it never had it.
                         Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume it never had this xattr.
+                        Err(err)
+                            if opts.ignore_permission_errors
+                                && err.kind() == std::io::ErrorKind::PermissionDenied => {}
                         Err(err) => return Err(err),
                     }
                 }
             }
             Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume no xattrs for what we have.
+            Err(err)
+                if opts.ignore_permission_errors
+                    && err.kind() == std::io::ErrorKind::PermissionDenied => {}
             Err(err) => return Err(err),
         }
     }
@@ -142,6 +149,12 @@ fn get_metadata(path: &Path, opts: &FsMetadataFetcherOptions) -> std::io::Result
         match probe_sparse(path, &stat) {
             Ok(sparse) => sparse,
             Err(err) if fsutil::likely_smear_error(&err) => false,
+            Err(err)
+                if opts.ignore_permission_errors
+                    && err.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                false
+            }
             Err(err) => return Err(err),
         }
     } else {
@@ -320,6 +333,7 @@ pub struct FsIndexerOptions {
     pub want_sparseness: bool,
     pub want_hash: bool,
     pub one_file_system: bool,
+    pub ignore_permission_errors: bool,
 }
 
 pub struct BackgroundFsIndexer {
@@ -459,6 +473,7 @@ impl FsIndexer {
             want_xattrs: opts.want_xattrs,
             want_sparseness: opts.want_sparseness,
             want_hash: opts.want_hash,
+            ignore_permission_errors: opts.ignore_permission_errors,
         };
 
         Ok(FsIndexer {
@@ -481,7 +496,11 @@ impl FsIndexer {
                         let dir_ents: Result<Vec<_>, _> = dir_ents.collect();
                         dir_ents?
                     }
-                    Err(err) if fsutil::likely_smear_error(&err) => {
+                    Err(err)
+                        if fsutil::likely_smear_error(&err)
+                            || (self.opts.ignore_permission_errors
+                                && err.kind() == std::io::ErrorKind::PermissionDenied) =>
+                    {
                         return Ok(IndexedDir {
                             dir_path,
                             ent_paths: vec![],
@@ -572,6 +591,12 @@ impl FsIndexer {
                     ) {
                         Ok(index_ent) => index_ent,
                         Err(err) if fsutil::likely_smear_error(&err) => continue 'process_dir_ents,
+                        Err(err)
+                            if self.opts.ignore_permission_errors
+                                && err.kind() == std::io::ErrorKind::PermissionDenied =>
+                        {
+                            continue 'process_dir_ents
+                        }
                         Err(err) => {
                             return Err(anyhow::format_err!(
                                 "error creating index entry for {:?}: {}",
@@ -591,6 +616,9 @@ impl FsIndexer {
                     index_ents.push(index_ent);
                 }
                 Err(err) if fsutil::likely_smear_error(&err) => (),
+                Err(err)
+                    if self.opts.ignore_permission_errors
+                        && err.kind() == std::io::ErrorKind::PermissionDenied => {}
                 Err(err) => {
                     return Err(anyhow::format_err!(
                         "error reading {:?}: {}",

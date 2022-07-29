@@ -920,6 +920,11 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
     opts.optflag(
         "",
+        "ignore-permission-errors",
+        "Ignore permission denied errors, skipping those files or directories.",
+    );
+    opts.optflag(
+        "",
         "one-file-system",
         "Do not cross mount points when traversing the file system.",
     );
@@ -958,6 +963,13 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     let want_xattrs = matches.opt_present("xattrs");
+    let ignore_permission_errors = matches.opt_present("ignore-permission-errors");
+    let one_file_system = matches.opt_present("one-file-system");
+    let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
+    let print_file_actions =
+        matches.opt_present("print-file-actions") || matches.opt_present("verbose");
+    let use_stat_cache =
+        !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
     let compression = {
         let scheme = matches
@@ -965,13 +977,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             .unwrap_or_else(|| "zstd:3".to_string());
         compression::parse_scheme(&scheme)?
     };
-
-    let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
-    let print_file_actions =
-        matches.opt_present("print-file-actions") || matches.opt_present("verbose");
-
-    let use_stat_cache =
-        !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
     let mut exclusions = globset::GlobSetBuilder::new();
     for mut e in matches.opt_strs("exclude") {
@@ -1030,8 +1035,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         .drain(..)
         .map(std::ffi::OsString::from)
         .collect();
-
-    let one_file_system = matches.opt_present("one-file-system");
 
     let checkpoint_seconds: u64 = match std::env::var("BUPSTASH_CHECKPOINT_SECONDS") {
         Ok(v) => match v.parse() {
@@ -1256,6 +1259,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         want_xattrs,
         one_file_system,
         file_action_log_fn,
+        ignore_permission_errors,
     };
 
     let (id, stats) = client::send(
@@ -1834,6 +1838,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     want_sparseness: false,
                     want_hash: true,
                     one_file_system: false,
+                    ignore_permission_errors: false,
                 },
             )? {
                 let indexed_dir = indexed_dir?;
