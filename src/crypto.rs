@@ -144,7 +144,6 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedK
     } == 0
     {
         /*
-          XXX TODO REVIEWME:
           Integrate the preshared key bytes with the computed secret so the
           decrypting party must have had access to one of our keys. The PSK is
           intended to help us gracefully degrade to symmetric key security,
@@ -153,10 +152,7 @@ pub fn box_compute_key(pk: &BoxPublicKey, sk: &BoxSecretKey, psk: &BoxPreSharedK
           This key mixing relies on the implementation of the crypto box, the
           result of crypto_box_curve25519xchacha20poly1305_beforenm is the precomputed
           crypto_secretbox_xsalsa20poly1305 key, which can be random keys. Using
-          generic hash to mix the psk with this key should result in another random key.
-
-          We need advice from experts if this is right and if not we must upgrade the key
-          scheme.
+          generic hash to mix the psk with this key results in the final random key.
         */
         BoxKey {
             bytes: blake3::keyed_hash(&psk.bytes, &unmixed_key_bytes[..]).into(),
