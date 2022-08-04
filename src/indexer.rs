@@ -1,5 +1,6 @@
 use super::fsutil;
 use super::index;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
@@ -114,7 +115,7 @@ fn get_metadata(path: &Path, opts: &FsMetadataFetcherOptions) -> std::io::Result
                             }
                             match xattrs {
                                 Some(ref mut xattrs) => {
-                                    xattrs.insert(attr, value);
+                                    xattrs.insert(attr.into_vec(), value);
                                 }
                                 _ => unreachable!(),
                             }

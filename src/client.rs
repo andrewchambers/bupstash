@@ -22,6 +22,7 @@ use itertools::Itertools;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
+use std::ffi::OsStr;
 use std::fmt::Write as FmtWrite;
 use std::io::{Read, Seek, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -387,7 +388,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         )?;
                         index_ent.data_hash = cache_entry.hashes[i];
                         index_ent.data_cursor = cache_entry.data_cursors[i];
-                        self.write_idx_ent(&index::VersionedIndexEntry::V4(index_ent))?;
+                        self.write_idx_ent(&index::VersionedIndexEntry::V5(index_ent))?;
                     }
                 }
                 None => {
@@ -499,7 +500,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             content_hashes.push(index_ent.data_hash)
                         }
 
-                        self.write_idx_ent(&index::VersionedIndexEntry::V4(index_ent))?;
+                        self.write_idx_ent(&index::VersionedIndexEntry::V5(index_ent))?;
                     }
 
                     if self.send_log_session.is_some() && use_stat_cache && !smear_detected {
@@ -1726,11 +1727,11 @@ pub fn restore_to_local_dir(
             }
             if let Some(ref xattrs) = ent.xattrs {
                 for (attr, value) in xattrs.iter() {
-                    match xattr::set(to_ch, attr, value) {
+                    match xattr::set(to_ch, OsStr::from_bytes(attr), value) {
                         Ok(()) => (),
                         Err(err) => anyhow::bail!(
                             "failed to list remove xattr {} from {}: {}",
-                            attr.to_string_lossy(),
+                            String::from_utf8_lossy(attr),
                             to_ch.display(),
                             err
                         ),

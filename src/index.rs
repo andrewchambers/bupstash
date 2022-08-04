@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 // Deprecated Xattr format for backwards compatibility.
 pub type StringXattrs = BTreeMap<String, Vec<u8>>;
-pub type Xattrs = BTreeMap<OsString, Vec<u8>>;
+pub type OsStringXattrs = BTreeMap<OsString, Vec<u8>>;
+pub type Xattrs = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SparseHint {
@@ -22,7 +23,16 @@ pub enum VersionedIndexEntry {
     V1(V1IndexEntry),
     V2(V2IndexEntry),
     V3(V3IndexEntry),
-    V4(IndexEntry),
+    V4(V4IndexEntry),
+    V5(IndexEntry),
+    // Forward compatibiltiy stubs to improve error messages.
+    V6,
+    V7,
+    V8,
+    V9,
+    V10,
+    V11,
+    V12,
 }
 
 const CURRENT_INDEX_ENTRY_KIND: u8 = 3;
@@ -160,6 +170,38 @@ where
         }
         None => Ok(None),
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct V4IndexEntry {
+    // The following serialize helpers are needed to work around serde failing on
+    // PathBuf types that are not valid utf8 (which are valid).
+    #[serde(serialize_with = "serialize_index_path")]
+    #[serde(deserialize_with = "deserialize_index_path")]
+    pub path: PathBuf,
+    pub size: serde_bare::Uint,
+    pub mtime: serde_bare::Uint,
+    pub mtime_nsec: serde_bare::Uint,
+    pub ctime: serde_bare::Uint,
+    pub ctime_nsec: serde_bare::Uint,
+    pub ino: serde_bare::Uint,
+    // Group some items together that don't change
+    // much in between files to aid in compression.
+    pub norm_dev: serde_bare::Uint,
+    pub mode: serde_bare::Uint,
+    pub uid: serde_bare::Uint,
+    pub gid: serde_bare::Uint,
+    pub nlink: serde_bare::Uint,
+    // Same as above.
+    #[serde(serialize_with = "serialize_opt_index_path")]
+    #[serde(deserialize_with = "deserialize_opt_index_path")]
+    pub link_target: Option<PathBuf>,
+    pub dev_major: serde_bare::Uint,
+    pub dev_minor: serde_bare::Uint,
+    pub sparse: bool,
+    pub xattrs: Option<OsStringXattrs>,
+    pub data_cursor: RelativeDataCursor,
+    pub data_hash: ContentCryptoHash,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -701,7 +743,14 @@ pub struct CompressedIndexIterator<'a> {
 fn migrate_string_xattrs(attrs: StringXattrs) -> Xattrs {
     attrs
         .into_iter()
-        .map(|(k, v)| (OsString::from(k), v))
+        .map(|(k, v)| (k.as_bytes().to_vec(), v))
+        .collect()
+}
+
+fn migrate_os_string_xattrs(attrs: OsStringXattrs) -> Xattrs {
+    attrs
+        .into_iter()
+        .map(|(k, v)| (k.as_bytes().to_vec(), v))
         .collect()
 }
 
@@ -781,7 +830,31 @@ impl<'a> Iterator for CompressedIndexIterator<'a> {
                 data_cursor: ent.data_cursor,
                 data_hash: ent.data_hash,
             })),
-            Ok(VersionedIndexEntry::V4(ent)) => Some(Ok(ent)),
+            Ok(VersionedIndexEntry::V4(ent)) => Some(Ok(IndexEntry {
+                path: ent.path,
+                mode: ent.mode,
+                size: ent.size,
+                uid: ent.uid,
+                gid: ent.gid,
+                mtime: ent.mtime,
+                mtime_nsec: ent.mtime_nsec,
+                ctime: ent.ctime,
+                ctime_nsec: ent.ctime_nsec,
+                norm_dev: ent.norm_dev,
+                ino: ent.ino,
+                nlink: ent.nlink,
+                link_target: ent.link_target,
+                dev_major: ent.dev_major,
+                dev_minor: ent.dev_minor,
+                sparse: false,
+                xattrs: ent.xattrs.map(migrate_os_string_xattrs),
+                data_cursor: ent.data_cursor,
+                data_hash: ent.data_hash,
+            })),
+            Ok(VersionedIndexEntry::V5(ent)) => Some(Ok(ent)),
+            Ok(_) => Some(Err(anyhow::format_err!(
+                "index entry seems to be from a future version of bupstash"
+            ))),
             Err(serde_bare::error::Error::Io(err))
                 if err.kind() == std::io::ErrorKind::UnexpectedEof =>
             {

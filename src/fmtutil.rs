@@ -169,7 +169,7 @@ pub fn format_jsonl1_content_listing(ent: &index::IndexEntry) -> Result<String, 
         result.push_str(",\"xattrs\":{");
         let mut first = true;
         for (k, v) in xattrs.iter() {
-            let k = if let Some(k) = k.to_str() {
+            let k = if let Ok(k) = std::str::from_utf8(k) {
                 serde_json::to_string(k)?
             } else {
                 serde_json::to_string(k)?
