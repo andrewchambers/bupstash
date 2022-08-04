@@ -121,7 +121,7 @@ pub fn index_entry_to_tarheader(
             for (k, v) in xattrs.iter() {
                 key_bytes.truncate(0);
                 key_bytes.extend_from_slice(b"SCHILY.xattr.");
-                key_bytes.extend_from_slice(k.as_bytes());
+                key_bytes.extend_from_slice(k);
                 pax_ext_records.extend_from_slice(&format_pax_extended_record(&key_bytes, v));
             }
         }
