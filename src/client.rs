@@ -312,10 +312,11 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
         paths: Vec<std::path::PathBuf>,
         exclusions: globset::GlobSet,
         exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
+        max_num_preopened_files: usize,
     ) -> Result<(), anyhow::Error> {
         let use_stat_cache = self.ctx.use_stat_cache;
 
-        let mut file_opener = fprefetch::ReadaheadFileOpener::new();
+        let mut file_opener = fprefetch::ReadaheadFileOpener::new(max_num_preopened_files);
 
         let indexer = indexer::FsIndexer::new(
             &paths,
@@ -636,6 +637,7 @@ pub fn send(
     mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: DataSource,
+    max_num_preopened_files: usize,
 ) -> Result<(Xid, SendStats), anyhow::Error> {
     let start_time = chrono::Utc::now();
 
@@ -718,7 +720,12 @@ pub fn send(
             exclusions,
             exclusion_markers,
         } => {
-            session.send_dir(paths, exclusions, exclusion_markers)?;
+            session.send_dir(
+                paths,
+                exclusions,
+                exclusion_markers,
+                max_num_preopened_files,
+            )?;
         }
     }
 

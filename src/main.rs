@@ -917,6 +917,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
   or `.no-backup`.",
         "FILENAME",
     );
+    opts.optopt(
+        "",
+        "parallel",
+        "Read this many files in parallel. (The implementation may use use sequential readaheads for OS-level parallelism instead of threaded reads.)",
+        "N",
+    );
     opts.optflag(
         "",
         "one-file-system",
@@ -1100,6 +1106,18 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let data_source: client::DataSource;
 
+    let max_num_preopened_files: usize = {
+        match matches.opt_get_default("parallel", 3) {
+            Err(err) => anyhow::bail!("--parallel flag is not an integer: {}", err),
+            Ok(v) => {
+                if v < 1 {
+                    anyhow::bail!("--parallel flag must be >= 1, not {}", v);
+                }
+                v
+            }
+        }
+    };
+
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner()
@@ -1264,6 +1282,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         send_log,
         tags,
         data_source,
+        max_num_preopened_files,
     )?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;

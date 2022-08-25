@@ -24,12 +24,11 @@ cfg_if::cfg_if! {
     }
 }
 
-const NUM_PREOPENED_FILES: usize = 3;
-
 #[derive(Default)]
 pub struct ReadaheadFileOpener {
     unopened: VecDeque<PathBuf>,
     opened: VecDeque<(PathBuf, std::io::Result<File>)>,
+    max_num_preopened_files: usize,
 }
 
 fn open_file_for_streaming(fpath: &std::path::Path) -> std::io::Result<File> {
@@ -104,10 +103,11 @@ fn open_file_for_streaming(fpath: &std::path::Path) -> std::io::Result<File> {
 }
 
 impl ReadaheadFileOpener {
-    pub fn new() -> ReadaheadFileOpener {
+    pub fn new(max_num_preopened_files: usize) -> ReadaheadFileOpener {
         ReadaheadFileOpener {
             unopened: VecDeque::new(),
             opened: VecDeque::new(),
+            max_num_preopened_files: max_num_preopened_files,
         }
     }
 
@@ -116,7 +116,7 @@ impl ReadaheadFileOpener {
     }
 
     pub fn next_file(&mut self) -> Option<(PathBuf, std::io::Result<File>)> {
-        while !self.unopened.is_empty() && self.opened.len() < NUM_PREOPENED_FILES {
+        while !self.unopened.is_empty() && self.opened.len() < self.max_num_preopened_files {
             let p = self.unopened.pop_front().unwrap();
             let r = open_file_for_streaming(&p);
             self.opened.push_back((p, r))
