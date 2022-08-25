@@ -28,10 +28,14 @@ repo
 │   ├── gc_dirty
 │   ├── schema_version
 │   └── storage_engine
+├── wal
+│   ├── ...
+│   └── 00000000N.wal
 ├── repo.oplog
 ├── repo.lock
 ├── tx.lock
-└── rollback.journal
+├── tx.seq
+└── tx.wal
 
 ```
 
@@ -95,42 +99,72 @@ during operations that modify the repository.
 
 ### tx.lock
 
-Bupstash uses `tx.lock` and `rollback.journal` to coordinate crash safe edits across multiple files.
+Bupstash uses `tx.lock` and `tx.wal` to coordinate crash safe edits across multiple files.
 
-### rollback.journal
+### tx.wal
 
-This file is a [bare](https://baremessages.org/) encoded rollback log with the following schema:
+This file is a [bare](https://baremessages.org/) encoded WAL (write ahead log) with the following schema:
 
 ```
 
-type RollbackOp = RollbackComplete | RemoveFile | WriteFile | TruncateFile | RenameFile;
+type WalOp = Begin | End | CreateFile | WriteFileAt | Remove | Rename | Mkdir;
 
-type RollbackComplete {};
-
-type RemoveFile {
-  path: String,
+type Begin {
+  sequence_number: u64,
 };
 
-// This entry is trailed by size bytes of data to write.
-type WriteFile {
+type End {};
+
+type CreateFile {
   path: String,
-  size: Uint,
+  data_size: Uint,
 };
 
-type TruncateFile {
-  path: String,
-  size: Uint,
+type WriteFileAt {
+    path: String,
+    offset: Uint,
+    data_size: Uint,
 };
 
-type RenameFile {
-  from: String,
+type Remove {
+    path: String,
+};
+
+type Rename {
+  path: String,
   to: String,
 };
+  
+type Mkdir {
+  path: String,
+};
+
 ```
 
-The final 32 bytes of the rollback log are the blake3 hash of the previous file contents.
+The final 32 bytes of the write ahead log are the blake3 hash of the previous file contents.
 
-Do not delete a rollback journal if find one, it is critical for data integrity.
+When bupstash needs to modify repository metadata, it first writes a wal file and flushes it to disk, then performs the given operations in sequence. On crash the operations
+will be replayed again preventing data loss.
+
+Do not delete a write ahead log if you see one, it is critical for data integrity.
+
+### tx.seq
+
+A file containing a sequence number used for numbering WAL files.
+
+### data/
+
+This directory contains a set of encrypted and deduplicated data chunks.
+The name of the file corresponds to the an HMAC hash of the unencrypted contents, as such
+if two chunks are added to the repository with the same hmac, they only need to be stored once.
+
+This directory is not used when the repository is configured for storage engines other than "Dir" storage.
+
+### items/
+
+This directory contains one file for each item, where the contents of the file is an encoded
+`VersionedItemMetadata` as described in the repo.oplog section. When an item is removed and is 
+pending garbage collection it is given the .removed suffix.
 
 ### meta/storage_engine
 
@@ -152,20 +186,11 @@ client side caches.
 This file marks if a garbage collection was interrupted prematurely and is used for crash
 recovery. This file not always present.
 
+### wal/
 
-### items/
+When the BUPSTASH_KEEP_WAL=1 env var is set for the `bupstash serve` process, this
+directory contains the historic WAL files that can be used for point in time recovery.
 
-This directory contains one file for each item, where the contents of the file is an encoded
-`VersionedItemMetadata` as described in the repo.oplog section. When an item is removed and is 
-pending garbage collection it is given the .removed suffix.
-
-### data/
-
-This directory contains a set of encrypted and deduplicated data chunks.
-The name of the file corresponds to the an HMAC hash of the unencrypted contents, as such
-if two chunks are added to the repository with the same hmac, they only need to be stored once.
-
-This directory is not used when the repository is configured for storage engines other than "Dir" storage.
 
 ## The hash tree structure
 

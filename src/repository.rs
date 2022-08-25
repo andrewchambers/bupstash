@@ -5,7 +5,7 @@ use super::chunk_storage;
 use super::compression;
 use super::dir_chunk_storage;
 use super::external_chunk_storage;
-use super::fstx;
+use super::fstx2;
 use super::fsutil;
 use super::htree;
 use super::migrate;
@@ -71,7 +71,7 @@ pub enum OpLogSyncEvent {
     End,
 }
 
-pub const CURRENT_SCHEMA_VERSION: &str = "7";
+pub const CURRENT_SCHEMA_VERSION: &str = "8";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 0xffffffff; // Current plugin protocol uses 32 bits.
 
@@ -165,50 +165,57 @@ impl Repo {
             Err(err) => return Err(err.into()),
         };
 
-        let touch = |p: String| -> Result<(), std::io::Error> {
-            fs.open(&p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
+        let touch = |p: &str| -> Result<(), std::io::Error> {
+            fs.open(p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
             Ok(())
         };
 
-        let write_file = |p: String, data| -> Result<(), std::io::Error> {
-            let mut f = fs.open(&p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
+        let write_file = |p: &str, data| -> Result<(), std::io::Error> {
+            let mut f = fs.open(p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
             f.write_all(data)?;
             f.flush()
         };
 
-        let sync_dir = |p: String| -> Result<(), std::io::Error> {
-            let mut f = fs.open(&p, vfs::OpenFlags::RDONLY)?;
+        let sync_dir = |p: &str| -> Result<(), std::io::Error> {
+            let mut f = fs.open(p, vfs::OpenFlags::RDONLY)?;
             f.flush()
         };
 
         fs.mkdir(&tmp_path)?;
-        touch(format!("{}/repo.lock", &tmp_path))?;
-        touch(format!("{}/tx.lock", &tmp_path))?;
-        touch(format!("{}/repo.oplog", &tmp_path))?;
-        fs.mkdir(&format!("{}/items", &tmp_path))?;
-        fs.mkdir(&format!("{}/data", &tmp_path))?;
-        fs.mkdir(&format!("{}/meta", &tmp_path))?;
-        let schema = CURRENT_SCHEMA_VERSION.to_string();
-        write_file(
-            format!("{}/meta/schema_version", tmp_path),
-            schema.as_bytes(),
-        )?;
-        let gc_generation = format!("{:x}", Xid::new());
-        write_file(
-            format!("{}/meta/gc_generation", &tmp_path),
-            gc_generation.as_bytes(),
-        )?;
-        let storage_engine_bytes = serde_json::to_vec_pretty(&storage_engine)?;
-        write_file(
-            format!("{}/meta/storage_engine", &tmp_path),
-            &storage_engine_bytes,
-        )?;
 
-        // Sync directories to ensure metadata is persisted.
-        sync_dir(format!("{}/meta", &tmp_path))?;
-        sync_dir(tmp_path.clone())?;
+        // Bootstrap the fstx module and locks so we can
+        // just use fstx to create the initial files.
+        touch(&format!("{}/{}", &tmp_path, fstx2::LOCK_NAME))?;
+        write_file(
+            &format!("{}/{}", tmp_path, fstx2::SEQ_NUM_NAME),
+            &[0, 0, 0, 0, 0, 0, 0, 0][..],
+        )?;
+        sync_dir(".")?;
+
+        let repo_fs = fs.sub_fs(&tmp_path)?;
+        let mut tx = fstx2::WriteTxn::begin_at(&repo_fs)?;
+        {
+            tx.add_mkdir("items")?;
+            tx.add_mkdir("data")?;
+            tx.add_mkdir("meta")?;
+            tx.add_mkdir("wal")?;
+            tx.add_write("repo.lock", vec![])?;
+            tx.add_write("repo.oplog", vec![])?;
+            tx.add_write(
+                "meta/schema_version",
+                CURRENT_SCHEMA_VERSION.to_string().into(),
+            )?;
+            tx.add_write("meta/gc_generation", format!("{:x}", Xid::new()).into())?;
+            tx.add_write(
+                "meta/storage_engine",
+                serde_json::to_vec_pretty(&storage_engine)?,
+            )?;
+        }
+        tx.commit()?;
+        drop(repo_fs);
+
         fs.rename(&tmp_path, &repo_path)?;
-        sync_dir(".".to_string())?;
+        sync_dir(".")?;
 
         Ok(())
     }
@@ -244,7 +251,7 @@ impl Repo {
         let mut txn;
 
         loop {
-            txn = fstx::ReadTxn::begin_at(&repo_vfs)?;
+            txn = fstx2::ReadTxn::begin_at(&repo_vfs)?;
             let mut schema_version = txn.read_string("meta/schema_version")?;
             if schema_version != CURRENT_SCHEMA_VERSION {
                 txn.end();
@@ -258,8 +265,12 @@ impl Repo {
                     migrate::repo_upgrade_to_6_to_7(&repo_vfs)?;
                     continue;
                 }
+                if schema_version == "7" {
+                    migrate::repo_upgrade_to_7_to_8(&repo_vfs)?;
+                    continue;
+                }
                 // restart read transaction we cancelled...
-                txn = fstx::ReadTxn::begin_at(&repo_vfs)?;
+                txn = fstx2::ReadTxn::begin_at(&repo_vfs)?;
                 schema_version = txn.read_string("meta/schema_version")?;
                 if schema_version != CURRENT_SCHEMA_VERSION {
                     anyhow::bail!(
@@ -277,9 +288,18 @@ impl Repo {
             let mut buf = Vec::with_capacity(128);
             f.read_to_end(&mut buf)?;
             let spec: StorageEngineSpec = serde_json::from_slice(&buf)?;
+
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let data_fs = repo_vfs.sub_fs("data")?;
+                    let data_fs = match repo_vfs.sub_fs("data") {
+                        Ok(data_fs) => data_fs,
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                            // Old repositories created this lazily, so we must too.
+                            repo_vfs.mkdir("data")?;
+                            repo_vfs.sub_fs("data")?
+                        }
+                        Err(err) => return Err(err.into()),
+                    };
                     Box::new(dir_chunk_storage::DirStorage::new(data_fs)?)
                 }
                 StorageEngineSpec::ExternalStore {
@@ -389,7 +409,7 @@ impl Repo {
                 // need the tx lock to check if gc_dirty exists.
                 match self.repo_vfs.metadata("meta/gc_dirty") {
                     Ok(_) => {
-                        let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+                        let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
                         {
                             let gc_dirty: Option<Xid> =
                                 match txn.read_opt_string("meta/gc_dirty")? {
@@ -425,7 +445,7 @@ impl Repo {
         items: Vec<(Xid, oplog::VersionedItemMetadata)>,
     ) -> Result<(), anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
-        let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+        let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
         for (id, item) in items.into_iter() {
             if txn.file_exists(&format!("items/{:x}.removed", id))? {
                 continue;
@@ -451,7 +471,7 @@ impl Repo {
     ) -> Result<Xid, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+        let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
         {
             let serialized_md = oplog::checked_serialize_metadata(&item)?;
             let item_path = format!("items/{:x}", id);
@@ -470,7 +490,7 @@ impl Repo {
     pub fn remove_items(&mut self, mut items: Vec<Xid>) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+        let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
 
         let mut removed_items = Vec::with_capacity(items.len());
 
@@ -499,7 +519,7 @@ impl Repo {
         Ok(n_removed)
     }
 
-    fn open_item_for_reading(txn: &fstx::ReadTxn, id: &Xid) -> std::io::Result<vfs::VFile> {
+    fn open_item_for_reading(txn: &fstx2::ReadTxn, id: &Xid) -> std::io::Result<vfs::VFile> {
         let f = match txn.open(&format!("items/{:x}", id)) {
             Ok(f) => f,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -514,7 +534,7 @@ impl Repo {
         &mut self,
         ids: &[Xid],
     ) -> Result<Vec<oplog::VersionedItemMetadata>, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
         let mut all_metadata = Vec::with_capacity(ids.len());
         let mut buf = Vec::with_capacity(1024);
         for id in ids {
@@ -537,7 +557,7 @@ impl Repo {
         &mut self,
         id: &Xid,
     ) -> Result<Option<oplog::VersionedItemMetadata>, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
         let r = match Repo::open_item_for_reading(&txn, id) {
             Ok(mut f) => {
                 let mut buf = Vec::with_capacity(1024);
@@ -552,7 +572,7 @@ impl Repo {
     }
 
     pub fn has_complete_data(&mut self, id: &Xid) -> Result<bool, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
         let r = txn.file_exists(&format!("items/{:x}", id))?
             || txn.file_exists(&format!("items/{:x}.removed", id))?;
         txn.end();
@@ -564,7 +584,7 @@ impl Repo {
         on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
         ids: Vec<Xid>,
     ) -> Result<Vec<Xid>, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
         let mut missing = Vec::new();
         let mut progress: u64 = 0;
         let mut last_progress_update = std::time::Instant::now();
@@ -595,7 +615,7 @@ impl Repo {
         start_gc_generation: Option<Xid>,
         on_sync_event: &mut dyn FnMut(OpLogSyncEvent) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
 
         let current_gc_generation: Xid = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
         let after = match start_gc_generation {
@@ -654,7 +674,7 @@ impl Repo {
     pub fn recover_removed(&mut self) -> Result<u64, anyhow::Error> {
         self.alter_lock_mode(RepoLockMode::Shared)?;
 
-        let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+        let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
 
         let mut n_restored = 0;
 
@@ -682,7 +702,7 @@ impl Repo {
     }
 
     pub fn gc_generation(&mut self) -> Result<Xid, anyhow::Error> {
-        let txn = fstx::ReadTxn::begin_at(&self.repo_vfs)?;
+        let txn = fstx2::ReadTxn::begin_at(&self.repo_vfs)?;
         let gc_generation = Xid::parse(&txn.read_string("meta/gc_generation")?)?;
         txn.end();
         Ok(gc_generation)
@@ -754,7 +774,7 @@ impl Repo {
              update_progress_msg: &mut dyn FnMut(String) -> Result<(), anyhow::Error>,
              storage_engine: &mut dyn chunk_storage::Engine|
              -> Result<(), anyhow::Error> {
-                let txn = fstx::ReadTxn::begin_at(repo_vfs)?;
+                let txn = fstx2::ReadTxn::begin_at(repo_vfs)?;
 
                 let mut items_dir_ents = txn.read_dir("items")?;
                 let mut reachable_items = HashSet::with_capacity(items_dir_ents.len());
@@ -839,7 +859,7 @@ impl Repo {
 
         update_progress_msg("compacting repository log...".to_string())?;
         {
-            let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+            let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
 
             // We cycle the gc generation here to invalidate client caches.
             txn.add_write(
@@ -937,7 +957,7 @@ impl Repo {
 
         // We are now done and can stop, mark the gc as complete.
         {
-            let mut txn = fstx::WriteTxn::begin_at(&self.repo_vfs)?;
+            let mut txn = fstx2::WriteTxn::begin_at(&self.repo_vfs)?;
 
             let gc_dirty: Option<Xid> = match txn.read_opt_string("meta/gc_dirty")? {
                 Some(s) => Some(Xid::parse(&s)?),
