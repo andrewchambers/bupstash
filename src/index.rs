@@ -470,6 +470,18 @@ fn add_ent_to_data_map(
         }
     }
 
+    if ent.data_cursor.start_byte_offset.0 == 0 && cur_chunk_idx > 0 {
+        let prev_chunk_idx = cur_chunk_idx - 1;
+        if let Some(range_set) = incomplete_data_chunks.get(&prev_chunk_idx) {
+            if range_set.contains(&0) && range_set.iter().count() == 1 {
+                // The current entry starts at 0 and the previous chunk
+                // only has a single range which starts at 0,
+                // this means the previous chunk must be complete.
+                incomplete_data_chunks.remove(&prev_chunk_idx);
+            }
+        }
+    }
+
     if let Some(range_set) = incomplete_data_chunks.get(&cur_chunk_idx) {
         if let Some(range) = range_set.get(&(usize::MAX - 1)) {
             if range.start == 0 {
