@@ -413,6 +413,7 @@ fn add_ent_to_data_map(
     if ent.size.0 == 0 {
         return;
     }
+
     // Either coalesce the existing range or insert a new range.
     if !data_chunk_ranges.is_empty()
         && ((data_chunk_ranges.last().unwrap().end_idx.0 == cur_chunk_idx)

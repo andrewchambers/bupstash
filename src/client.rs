@@ -30,6 +30,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 // These chunk parameters could be investigated and tuned.
+
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
 pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 
@@ -1168,7 +1169,7 @@ fn receive_partial_htree(
     let mut range_groups = data_map
         .data_chunk_ranges
         // Test harsher range splits in debug mode.
-        .chunks(if cfg!(debug_assertions) { 1 } else { 100000 });
+        .chunks(if cfg!(debug_assertions) { 2 } else { 100000 });
 
     let mut ranges = range_groups.next().unwrap();
     write_request_data_ranges(w, ranges)?;
@@ -1236,10 +1237,12 @@ fn receive_partial_htree(
                 }
             };
 
-            // Fast forward until we are at the correct data chunk boundary.
             loop {
-                let num_skipped = tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
-                current_data_chunk_idx += num_skipped;
+                if current_data_chunk_idx < range.start_idx.0 {
+                    let num_skipped =
+                        tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
+                    current_data_chunk_idx += num_skipped;
+                }
                 if let Some(height) = tr.current_height() {
                     if height == 0 && current_data_chunk_idx >= range.start_idx.0 {
                         break;
@@ -1251,10 +1254,6 @@ fn receive_partial_htree(
                 } else {
                     anyhow::bail!("hash tree ended before requested range");
                 }
-            }
-
-            if current_data_chunk_idx != range.start_idx.0 {
-                anyhow::bail!("requested data ranges do not match hash tree accounting, seek overshoot detected")
             }
 
             while current_data_chunk_idx + (data_addresses.len() as u64) <= range.end_idx.0 {

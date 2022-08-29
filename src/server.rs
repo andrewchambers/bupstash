@@ -376,10 +376,11 @@ fn send_partial_htree(
             }
         };
 
-        // Fast forward until we are at the correct data chunk boundary.
         loop {
-            let num_skipped = tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
-            current_data_chunk_idx += num_skipped;
+            if current_data_chunk_idx < range.start_idx.0 {
+                let num_skipped = tr.fast_forward(range.start_idx.0 - current_data_chunk_idx)?;
+                current_data_chunk_idx += num_skipped;
+            }
             if let Some(height) = tr.current_height() {
                 if height == 0 && current_data_chunk_idx >= range.start_idx.0 {
                     break;
@@ -393,12 +394,6 @@ fn send_partial_htree(
             } else {
                 anyhow::bail!("hash tree ended before requested range");
             }
-        }
-
-        if current_data_chunk_idx != range.start_idx.0 {
-            anyhow::bail!(
-                "requested data ranges do not match hash tree accounting, seek overshoot detected"
-            )
         }
 
         while current_data_chunk_idx + (data_addresses.len() as u64) <= range.end_idx.0 {
