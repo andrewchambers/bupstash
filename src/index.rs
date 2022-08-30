@@ -410,83 +410,73 @@ fn add_ent_to_data_map(
     data_chunk_ranges: &mut Vec<HTreeDataRange>,
     incomplete_data_chunks: &mut HashMap<u64, rangemap::RangeSet<usize>>,
 ) {
-    if ent.size.0 == 0 {
-        return;
-    }
-
-    // Either coalesce the existing range or insert a new range.
-    if !data_chunk_ranges.is_empty()
-        && ((data_chunk_ranges.last().unwrap().end_idx.0 == cur_chunk_idx)
-            || (data_chunk_ranges.last().unwrap().end_idx.0 + 1 == cur_chunk_idx))
-    {
-        data_chunk_ranges.last_mut().unwrap().end_idx.0 =
-            cur_chunk_idx + ent.data_cursor.chunk_delta.0
-    } else {
-        data_chunk_ranges.push(HTreeDataRange {
-            start_idx: serde_bare::Uint(cur_chunk_idx),
-            end_idx: serde_bare::Uint(cur_chunk_idx + ent.data_cursor.chunk_delta.0),
-        })
+    if ent.size.0 > 0 {
+        // Either coalesce the existing range or insert a new range.
+        if !data_chunk_ranges.is_empty()
+            && ((data_chunk_ranges.last().unwrap().end_idx.0 == cur_chunk_idx)
+                || (data_chunk_ranges.last().unwrap().end_idx.0 + 1 == cur_chunk_idx))
+        {
+            data_chunk_ranges.last_mut().unwrap().end_idx.0 =
+                cur_chunk_idx + ent.data_cursor.chunk_delta.0
+        } else {
+            data_chunk_ranges.push(HTreeDataRange {
+                start_idx: serde_bare::Uint(cur_chunk_idx),
+                end_idx: serde_bare::Uint(cur_chunk_idx + ent.data_cursor.chunk_delta.0),
+            })
+        }
     }
 
     if ent.data_cursor.chunk_delta.0 == 0 {
-        let range = ent.data_cursor.start_byte_offset.0 as usize
-            ..ent.data_cursor.end_byte_offset.0 as usize;
-
-        match incomplete_data_chunks.get_mut(&cur_chunk_idx) {
-            Some(range_set) => {
-                range_set.insert(range);
-            }
-            None => {
-                let mut range_set = rangemap::RangeSet::new();
-                range_set.insert(range);
-                incomplete_data_chunks.insert(cur_chunk_idx, range_set);
+        if ent.size.0 > 0 {
+            let range = ent.data_cursor.start_byte_offset.0 as usize
+                ..ent.data_cursor.end_byte_offset.0 as usize;
+            match incomplete_data_chunks.get_mut(&cur_chunk_idx) {
+                Some(range_set) => {
+                    range_set.insert(range);
+                }
+                None => {
+                    let mut range_set = rangemap::RangeSet::new();
+                    range_set.insert(range);
+                    incomplete_data_chunks.insert(cur_chunk_idx, range_set);
+                }
             }
         }
     } else {
         let start_range = ent.data_cursor.start_byte_offset.0 as usize..usize::MAX;
-        let end_range = 0..ent.data_cursor.end_byte_offset.0 as usize;
-
         match incomplete_data_chunks.get_mut(&cur_chunk_idx) {
             Some(range_set) => {
                 range_set.insert(start_range);
             }
             None => {
+                if ent.size.0 > 0 {
+                    let mut range_set = rangemap::RangeSet::new();
+                    range_set.insert(start_range);
+                    incomplete_data_chunks.insert(cur_chunk_idx, range_set);
+                }
+            }
+        }
+
+        if ent.size.0 > 0 {
+            if ent.data_cursor.end_byte_offset.0 != 0 {
+                let end_range = 0..ent.data_cursor.end_byte_offset.0 as usize;
                 let mut range_set = rangemap::RangeSet::new();
-                range_set.insert(start_range);
-                incomplete_data_chunks.insert(cur_chunk_idx, range_set);
+                range_set.insert(end_range);
+                let old = incomplete_data_chunks
+                    .insert(cur_chunk_idx + ent.data_cursor.chunk_delta.0, range_set);
+                // Because our end chunk is a never before seen index, this
+                // range set must be none.
+                assert!(old.is_none());
+            } else {
+                data_chunk_ranges.last_mut().unwrap().end_idx.0 -= 1;
             }
         }
 
-        if ent.data_cursor.end_byte_offset.0 != 0 {
-            let mut range_set = rangemap::RangeSet::new();
-            range_set.insert(end_range);
-            let old = incomplete_data_chunks
-                .insert(cur_chunk_idx + ent.data_cursor.chunk_delta.0, range_set);
-            // Because our end chunk is a never before seen index, this
-            // range set must be none.
-            assert!(old.is_none());
-        } else {
-            data_chunk_ranges.last_mut().unwrap().end_idx.0 -= 1;
-        }
-    }
-
-    if ent.data_cursor.start_byte_offset.0 == 0 && cur_chunk_idx > 0 {
-        let prev_chunk_idx = cur_chunk_idx - 1;
-        if let Some(range_set) = incomplete_data_chunks.get(&prev_chunk_idx) {
-            if range_set.contains(&0) && range_set.iter().count() == 1 {
-                // The current entry starts at 0 and the previous chunk
-                // only has a single range which starts at 0,
-                // this means the previous chunk must be complete.
-                incomplete_data_chunks.remove(&prev_chunk_idx);
-            }
-        }
-    }
-
-    if let Some(range_set) = incomplete_data_chunks.get(&cur_chunk_idx) {
-        if let Some(range) = range_set.get(&(usize::MAX - 1)) {
-            if range.start == 0 {
-                // The range completely covers the chunk, it is no longer incomplete.
-                incomplete_data_chunks.remove(&cur_chunk_idx);
+        if let Some(range_set) = incomplete_data_chunks.get(&cur_chunk_idx) {
+            if let Some(range) = range_set.get(&(usize::MAX - 1)) {
+                if range.start == 0 {
+                    // The range completely covers the chunk, it is no longer incomplete.
+                    incomplete_data_chunks.remove(&cur_chunk_idx);
+                }
             }
         }
     }

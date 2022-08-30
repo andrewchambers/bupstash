@@ -877,7 +877,45 @@ _concurrent_modify_worker () {
   done
 }
 
-@test "restore torture" {
+@test "incremental restore fuzz torture" {
+  
+  rand_dir="$SCRATCH/random_dir"
+  restore_dir="$SCRATCH/restore_dir"
+
+  mkdir "$restore_dir"
+
+  for i in $(seq 50)
+  do
+    rm -rf "$rand_dir"
+    "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
+
+    # Put twice so we test caching code paths.
+    id1=$(bupstash put :: "$rand_dir")
+    id2=$(bupstash put :: "$rand_dir")
+
+    for id in $(echo $id1 $id2)
+    do
+      bupstash restore --into "$restore_dir" "id=$id"
+      test 0 = "$(bupstash diff --relaxed "$rand_dir" :: "$restore_dir" | expr $(wc -l))"
+
+      for i in $(seq 3)
+      do
+        for to_delete in $(find "$restore_dir" -type f | shuf -n "$i")
+        do
+          rm "$to_delete"
+        done
+        bupstash restore --into "$restore_dir" "id=$id"
+        test 0 = "$(bupstash diff --relaxed "$rand_dir" :: "$restore_dir" | expr $(wc -l))"
+      done
+
+      bupstash rm id=$id
+    done
+
+    bupstash gc
+  done
+}
+
+@test "restore pick torture" {
   
   if test -z "$BUPSTASH_TORTURE_DIR"
   then
@@ -912,7 +950,7 @@ _concurrent_modify_worker () {
   done
 }
 
-@test "restore fuzz torture" {
+@test "restore pick fuzz torture" {
   
   rand_dir="$SCRATCH/random_dir"
   restore_dir="$SCRATCH/restore_dir"
