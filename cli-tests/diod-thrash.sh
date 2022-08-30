@@ -5,11 +5,11 @@ export N_WORKERS=8
 export DIOD_PORT=1888
 
 cleanup () {
-    for i in $(seq $(($N_WORKERS-1)))
+    for m in $(ls $SCRATCH/mnt/)
     do
-      if mountpoint -q "$SCRATCH/mnt/$i"
+      if mountpoint -q "$SCRATCH/mnt/$m"
       then
-        sudo umount "$SCRATCH/mnt/$i"
+        sudo umount "$SCRATCH/mnt/$m"
       fi
     done
     killall bupstash
