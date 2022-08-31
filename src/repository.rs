@@ -291,15 +291,7 @@ impl Repo {
 
             match spec {
                 StorageEngineSpec::DirStore => {
-                    let data_fs = match repo_vfs.sub_fs("data") {
-                        Ok(data_fs) => data_fs,
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                            // Old repositories created this lazily, so we must too.
-                            repo_vfs.mkdir("data")?;
-                            repo_vfs.sub_fs("data")?
-                        }
-                        Err(err) => return Err(err.into()),
-                    };
+                    let data_fs = repo_vfs.sub_fs("data")?;
                     Box::new(dir_chunk_storage::DirStorage::new(data_fs)?)
                 }
                 StorageEngineSpec::ExternalStore {
