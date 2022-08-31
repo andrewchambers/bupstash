@@ -6,6 +6,7 @@ use super::xid;
 
 pub trait Engine {
     // Get many chunks in an efficient pipeline.
+    #[allow(clippy::type_complexity)]
     fn pipelined_get_chunks(
         &mut self,
         addresses: &[Address],

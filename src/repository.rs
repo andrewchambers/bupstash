@@ -323,6 +323,7 @@ impl Repo {
         })
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn pipelined_get_chunks(
         &mut self,
         addresses: &[Address],
