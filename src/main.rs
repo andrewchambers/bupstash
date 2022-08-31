@@ -42,6 +42,7 @@ use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
@@ -1112,15 +1113,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let file_action_log_fn = if print_file_actions {
-        let log_fn: std::rc::Rc<dyn Fn(&str) -> Result<(), anyhow::Error>> = if progress.is_hidden()
-        {
-            std::rc::Rc::new(Box::new(move |ln: &str| {
+        let log_fn: Rc<client::FileActionLogFn> = if progress.is_hidden() {
+            Rc::new(Box::new(move |ln: &str| {
                 writeln!(std::io::stderr(), "{}", ln)?;
                 Ok(())
             }))
         } else {
             let progress = progress.clone();
-            std::rc::Rc::new(Box::new(move |ln: &str| {
+            Rc::new(Box::new(move |ln: &str| {
                 progress.println(ln);
                 Ok(())
             }))

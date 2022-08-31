@@ -29,6 +29,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 // These chunk parameters could be investigated and tuned.
 
@@ -84,7 +85,7 @@ pub fn init_repository(
     }
 }
 
-type FileActionLogFn = std::rc::Rc<dyn Fn(&str) -> Result<(), anyhow::Error>>;
+pub type FileActionLogFn = dyn Fn(&str) -> Result<(), anyhow::Error>;
 
 #[derive(Clone)]
 pub struct SendContext {
@@ -103,7 +104,7 @@ pub struct SendContext {
     pub use_stat_cache: bool,
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
-    pub file_action_log_fn: Option<FileActionLogFn>,
+    pub file_action_log_fn: Option<Rc<FileActionLogFn>>,
 }
 
 struct SendSession<'a, 'b, 'c> {
