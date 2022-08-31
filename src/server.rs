@@ -200,8 +200,10 @@ fn recv(
                             anyhow::bail!("added item has timestamp skew larger than {} minutes, refusing new item.", MAX_SKEW_MINS);
                         }
                     }
-
-                    _ => anyhow::bail!("server refusing new item with outdated metadata version"),
+                    oplog::VersionedItemMetadata::V1(_) | oplog::VersionedItemMetadata::V2(_) => {
+                        anyhow::bail!("server refusing new item with outdated metadata version")
+                    }
+                    _ => anyhow::bail!("server refusing new item with unknown metadata version"),
                 }
 
                 repo.add_item(item_id, add_item.item)?;

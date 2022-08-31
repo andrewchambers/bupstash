@@ -121,6 +121,10 @@ pub enum VersionedItemMetadata {
     V1(V1ItemMetadata), // Note, we are considering removing this version in the future and removing support.
     V2(V2ItemMetadata),
     V3(V3ItemMetadata),
+    // Forward compatibility.
+    Reserved1,
+    Reserved2,
+    Reserved3,
 }
 
 // This type is the result of decrypting and validating either V1 metadata or V2 metadata
@@ -146,6 +150,7 @@ impl VersionedItemMetadata {
             VersionedItemMetadata::V1(ref md) => &md.plain_text_metadata.primary_key_id,
             VersionedItemMetadata::V2(ref md) => &md.plain_text_metadata.primary_key_id,
             VersionedItemMetadata::V3(ref md) => &md.plain_text_metadata.primary_key_id,
+            _ => panic!("item metadata is from a future version of bupstash"),
         }
     }
 
@@ -154,6 +159,7 @@ impl VersionedItemMetadata {
             VersionedItemMetadata::V1(ref md) => md.plain_text_metadata.index_tree.as_ref(),
             VersionedItemMetadata::V2(ref md) => md.plain_text_metadata.index_tree.as_ref(),
             VersionedItemMetadata::V3(ref md) => md.plain_text_metadata.index_tree.as_ref(),
+            _ => panic!("item metadata is from a future version of bupstash"),
         }
     }
 
@@ -162,6 +168,7 @@ impl VersionedItemMetadata {
             VersionedItemMetadata::V1(ref md) => &md.plain_text_metadata.data_tree,
             VersionedItemMetadata::V2(ref md) => &md.plain_text_metadata.data_tree,
             VersionedItemMetadata::V3(ref md) => &md.plain_text_metadata.data_tree,
+            _ => panic!("item metadata is from a future version of bupstash"),
         }
     }
 
@@ -245,6 +252,7 @@ impl VersionedItemMetadata {
                     index_size: emd.index_size,
                 })
             }
+            _ => panic!("item metadata is from a future version of bupstash"),
         }
     }
 }
@@ -256,8 +264,10 @@ pub enum LogOp {
     // Note: There is an asymmetry here in that we can delete many items with one log op.
     // This is because batch deleting is possible, but batch add makes less sense.
     RemoveItems(Vec<Xid>),
-
     RecoverRemoved,
+    Reserved1,
+    Reserved2,
+    Reserved3,
 }
 
 pub fn checked_serialize_metadata(md: &VersionedItemMetadata) -> Result<Vec<u8>, anyhow::Error> {

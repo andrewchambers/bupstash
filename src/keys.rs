@@ -67,12 +67,17 @@ pub struct SubKey {
 pub enum Key {
     PrimaryKeyV1(PrimaryKey),
     SubKeyV1(SubKey),
+    Reserved1,
+    Reserved2,
+    Reserved3,
+    Reserved4,
 }
 
 fn pem_tag(k: &Key) -> &str {
     match k {
         Key::PrimaryKeyV1(_) => "BUPSTASH KEY",
         Key::SubKeyV1(_) => "BUPSTASH SUB KEY",
+        _ => unreachable!(),
     }
 }
 
@@ -103,6 +108,7 @@ impl Key {
                     format!("# is-list-contents-key={}\n", self.is_list_contents_key()).as_bytes(),
                 )?;
             }
+            _ => unreachable!(),
         }
         f.write_all("\n".to_string().as_bytes())?;
 
@@ -120,6 +126,13 @@ impl Key {
     pub fn from_slice(pem_data: &[u8]) -> Result<Key, anyhow::Error> {
         let pem_data = pem::parse(pem_data)?;
         let k: Key = serde_bare::from_slice(&pem_data.contents)?;
+
+        match k {
+            Key::PrimaryKeyV1(_) => (),
+            Key::SubKeyV1(_) => (),
+            _ => anyhow::bail!("unable to load key from a future version of bupstash"),
+        }
+
         if pem_tag(&k) != pem_data.tag {
             anyhow::bail!("key type does not match pem tag")
         }
@@ -141,6 +154,7 @@ impl Key {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
             Key::SubKeyV1(k) => k.primary_key_id,
+            _ => panic!("key is from a future version of bupstash"),
         }
     }
 
@@ -148,6 +162,7 @@ impl Key {
         match self {
             Key::PrimaryKeyV1(k) => k.id,
             Key::SubKeyV1(k) => k.id,
+            _ => panic!("key is from a future version of bupstash"),
         }
     }
 
@@ -167,6 +182,7 @@ impl Key {
                     && k.metadata_pk.is_some()
                     && k.metadata_psk.is_some()
             }
+            _ => false,
         }
     }
 
@@ -176,6 +192,7 @@ impl Key {
             Key::SubKeyV1(k) => {
                 k.metadata_pk.is_some() && k.metadata_sk.is_some() && k.metadata_psk.is_some()
             }
+            _ => false,
         }
     }
 
@@ -191,6 +208,7 @@ impl Key {
                     && k.metadata_sk.is_some()
                     && k.metadata_psk.is_some()
             }
+            _ => false,
         }
     }
 
@@ -198,6 +216,7 @@ impl Key {
         match self {
             Key::PrimaryKeyV1(_) => true,
             Key::SubKeyV1(_) => false,
+            _ => false,
         }
     }
 }

@@ -284,6 +284,7 @@ impl<'a> QueryCacheTx<'a> {
                     }
                 }
             }
+            _ => anyhow::bail!("log operation is from a future version of bupstash"),
         }
         Ok(())
     }
