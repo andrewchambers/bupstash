@@ -1978,7 +1978,7 @@ pub fn repo_sync(
     progress.set_length(all_missing_chunks.len().try_into().unwrap());
     progress.set_style(
         indicatif::ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {msg} [{wide_bar}] {pos:>7}/{len:7}")
+            .template("[{elapsed_precise}] {msg} [{wide_bar}] {pos:>10}/{len}")
             .progress_chars("=> "),
     );
 
