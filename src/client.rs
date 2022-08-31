@@ -1972,12 +1972,16 @@ pub fn repo_sync(
 
     std::mem::drop(all_chunks);
 
+    // XXX The progress.clone() can go away when we upgrade indicatif.
+    let original_progress_style = progress.clone().style();
+
     progress.set_message("copying chunks");
     progress.set_position(0);
     progress.set_length(all_missing_chunks.len().try_into().unwrap());
     progress.set_style(
         indicatif::ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {msg} [{wide_bar}] {pos:>7}/{len:7}")
+            .template("[{elapsed_precise}] {msg} [{wide_bar}] {pos:>10}/{len}")
+            .unwrap()
             .progress_chars("=> "),
     );
 
@@ -2023,11 +2027,7 @@ pub fn repo_sync(
     })
     .unwrap()?;
 
-    // XXX indicatif doesn't provide a way to save and then restore the previous style,
-    // so we just use our knowledge of what it was to reset it.
-    progress.set_style(
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
-    );
+    progress.set_style(original_progress_style);
 
     write_packet(dest_serve_in, &Packet::TFlush)?;
     match read_packet(dest_serve_out, DEFAULT_MAX_PACKET_SIZE)? {

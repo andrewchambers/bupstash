@@ -535,7 +535,7 @@ fn cli_to_progress_bar(
         && atty::is(atty::Stream::Stderr)
         && atty::is(atty::Stream::Stdout);
     let progress = indicatif::ProgressBar::with_draw_target(
-        u64::MAX,
+        Some(u64::MAX),
         if want_visible_progress {
             indicatif::ProgressDrawTarget::stderr()
         } else {
@@ -545,7 +545,7 @@ fn cli_to_progress_bar(
     progress.set_style(style);
     progress.set_message("connecting...");
     if want_visible_progress {
-        progress.enable_steady_tick(250)
+        progress.enable_steady_tick(std::time::Duration::from_millis(250))
     };
     progress.tick();
     progress
@@ -591,7 +591,9 @@ fn init_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut serve_proc = cli_to_serve_process(&matches, &progress, ServeProcessCliOpts::default())?;
@@ -682,7 +684,9 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut query_cache = cli_to_query_cache(&matches)?;
@@ -1111,7 +1115,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let progress = cli_to_progress_bar(
         &matches,
         indicatif::ProgressStyle::default_spinner()
-            .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
+            .template("[{elapsed_precise}] {wide_msg} [{bytes} processed]")
+            .unwrap(),
     );
 
     let file_action_log_fn = if print_file_actions {
@@ -1360,7 +1365,9 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
@@ -1550,7 +1557,9 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let (id, query) = cli_to_id_and_query(&matches)?;
@@ -1816,7 +1825,9 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut serve_proc = cli_to_opened_serve_process(
@@ -2038,7 +2049,9 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let n_removed;
@@ -2192,7 +2205,9 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut ids = Vec::new();
@@ -2331,7 +2346,9 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut serve_proc = cli_to_opened_serve_process(
@@ -2378,7 +2395,9 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let mut serve_proc = cli_to_opened_serve_process(
@@ -2547,7 +2566,9 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let progress = cli_to_progress_bar(
         &matches,
-        indicatif::ProgressStyle::default_spinner().template("[{elapsed_precise}] {wide_msg}"),
+        indicatif::ProgressStyle::default_spinner()
+            .template("[{elapsed_precise}] {wide_msg}")
+            .unwrap(),
     );
 
     let into_dir: PathBuf = if let Some(into) = matches.opt_str("into") {

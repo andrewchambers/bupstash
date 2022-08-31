@@ -44,7 +44,7 @@ chrono = { version = "0.4", features = ["serde"]}
 cfg-if = "0.1"
 shlex = "0.1"
 nix = "0.23"
-indicatif = "0.16.2"
+indicatif = "0.17.0"
 rangemap = "0.1.11"
 xattr = "0.2"
 walkdir = "2"
