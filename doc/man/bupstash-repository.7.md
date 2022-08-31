@@ -191,7 +191,6 @@ recovery. This file not always present.
 When the BUPSTASH_KEEP_WAL=1 env var is set for the `bupstash serve` process, this
 directory contains the historic WAL files that can be used for point in time recovery.
 
-
 ## The hash tree structure
 
 Bupstash stores arbitrary streams of data in the repository by splitting the stream into chunks,
