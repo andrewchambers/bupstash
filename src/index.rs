@@ -26,13 +26,9 @@ pub enum VersionedIndexEntry {
     V4(V4IndexEntry),
     V5(IndexEntry),
     // Forward compatibiltiy stubs to improve error messages.
-    V6,
-    V7,
-    V8,
-    V9,
-    V10,
-    V11,
-    V12,
+    Reserved1,
+    Reserved2,
+    Reserved3,
 }
 
 const CURRENT_INDEX_ENTRY_KIND: u8 = 3;

@@ -655,6 +655,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 keys::Key::SubKeyV1(k) => {
                     crypto::DecryptionContext::new(k.metadata_sk.unwrap(), k.metadata_psk.unwrap())
                 }
+                _ => unreachable!(),
             };
 
             (Some(primary_key_id), Some(metadata_dctx))
@@ -801,6 +802,7 @@ fn list_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                         oplog::VersionedItemMetadata::V3(ref metadata) => {
                             Some(metadata.plain_text_metadata.unix_timestamp_millis)
                         }
+                        _ => anyhow::bail!("metadata is from a future version of bupstash"),
                     };
                     if let Some(unix_timestamp_millis) = unix_timestamp_millis {
                         write!(out, ",\"unix_timestamp_millis\":{}", unix_timestamp_millis)?;
@@ -1099,6 +1101,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                 idx_ectx,
             )
         }
+        _ => unreachable!(),
     };
 
     let default_tags = !matches.opt_present("no-default-tags");
@@ -1542,6 +1545,7 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let idx_dctx = crypto::DecryptionContext::new(k.idx_sk.unwrap(), k.idx_psk.unwrap());
             (idx_hash_key_part_1, metadata_dctx, idx_dctx)
         }
+        _ => unreachable!(),
     };
 
     let progress = cli_to_progress_bar(
@@ -1807,6 +1811,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             let idx_dctx = crypto::DecryptionContext::new(k.idx_sk.unwrap(), k.idx_psk.unwrap());
             (idx_hash_key_part_1, metadata_dctx, idx_dctx)
         }
+        _ => unreachable!(),
     };
 
     let progress = cli_to_progress_bar(
@@ -2102,6 +2107,7 @@ fn remove_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                                 k.metadata_sk.unwrap(),
                                 k.metadata_psk.unwrap(),
                             ),
+                            _ => unreachable!(),
                         };
 
                         (Some(primary_key_id), Some(metadata_dctx))
@@ -2242,6 +2248,7 @@ fn sync_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                                 k.metadata_sk.unwrap(),
                                 k.metadata_psk.unwrap(),
                             ),
+                            _ => unreachable!(),
                         };
 
                         (Some(primary_key_id), Some(metadata_dctx))
