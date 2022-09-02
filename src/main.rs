@@ -21,6 +21,7 @@ pub mod hex;
 pub mod htree;
 pub mod index;
 pub mod indexer;
+pub mod indexer2;
 pub mod ioutil;
 pub mod keys;
 pub mod migrate;
@@ -2925,6 +2926,29 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     anyhow::bail!("exec failed");
 }
 
+fn test_walk(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let opts = default_cli_opts();
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let dirs: Vec<PathBuf> = matches.free.iter().map(|x| PathBuf::from(x)).collect();
+
+    let walker_opts = indexer2::FsWalkerOptions {
+        exclusions: globset::GlobSetBuilder::new().build().unwrap(),
+        exclusion_markers: std::collections::HashSet::new(),
+        one_file_system: false,
+        ignore_permission_errors: false,
+    };
+
+    let (_, fs_walker) = indexer2::FsWalker::new(&dirs, walker_opts).unwrap();
+
+    for p in fs_walker {
+        let p = p?;
+        print!("{}\n", p.to_string_lossy());
+    }
+
+    Ok(())
+}
+
 fn main() {
     crypto::init();
     cksumvfs::register_cksumvfs();
@@ -2956,6 +2980,7 @@ fn main() {
         "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
         "rollsum-benchmark" => rollsum_benchmark(args),
+        "test-walk" => test_walk(args),
         "sync" => sync_main(args),
         "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {
