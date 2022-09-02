@@ -311,6 +311,8 @@ _concurrent_send_test_worker () {
   # Test again to excercise stat caching.
   id=$(bupstash put :: "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
+  id=$(bupstash put :: "$SCRATCH/foo/a.txt" "$SCRATCH/foo/b.txt")
+  test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "send directory no stat cache" {

@@ -62,6 +62,10 @@ more information on the query cache.
 * --{left,right}-pick PATH:
   Perform diff on a sub-directory of the left/right query.
 
+* --indexer-threads N:
+  Number of processor threads to use for pipelined parallel file hashing and metadata reads.
+  Defaults to the number of processors.
+
 * --xattrs:
   Fetch xattrs when indexing a local directories.
 

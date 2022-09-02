@@ -6,6 +6,8 @@ use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
+pub type FileActionLogFn = dyn Fn(char, char, &Path) -> Result<(), anyhow::Error> + Send + Sync;
+
 // Deprecated Xattr format for backwards compatibility.
 pub type StringXattrs = BTreeMap<String, Vec<u8>>;
 pub type OsStringXattrs = BTreeMap<OsString, Vec<u8>>;
@@ -31,7 +33,7 @@ pub enum VersionedIndexEntry {
     Reserved3,
 }
 
-const CURRENT_INDEX_ENTRY_KIND: u8 = 3;
+const CURRENT_INDEX_ENTRY_KIND: u8 = 4;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum IndexEntryKind {

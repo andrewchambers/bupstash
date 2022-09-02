@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "bupstash"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "anyhow",
  "atty",
@@ -118,9 +118,11 @@ dependencies = [
  "libc",
  "lz4",
  "nix",
+ "num_cpus",
  "once_cell",
  "path-clean",
  "pkg-config",
+ "plmap",
  "rand",
  "rangemap",
  "regex",
@@ -522,6 +524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num_cpus"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
+dependencies = [
+ "hermit-abi",
+ "libc",
+]
+
+[[package]]
 name = "number_prefix"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -544,6 +556,16 @@ name = "pkg-config"
 version = "0.3.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
+
+[[package]]
+name = "plmap"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b059a8177143e9da9d124d505feb5b5b0b03e296c9b4b09f87b82b0981e81e4c"
+dependencies = [
+ "crossbeam-channel",
+ "crossbeam-utils",
+]
 
 [[package]]
 name = "ppv-lite86"

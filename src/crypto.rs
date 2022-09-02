@@ -1,5 +1,4 @@
 use super::address::*;
-use super::compression;
 use super::hex;
 use super::rollsum;
 use super::sodium;
@@ -54,7 +53,6 @@ pub fn memzero(buf: &mut [u8]) {
     }
 }
 
-#[derive(Clone)]
 pub struct BoxNonce {
     pub bytes: [u8; BOX_NONCEBYTES as usize],
 }
@@ -71,9 +69,17 @@ impl BoxNonce {
     }
 }
 
+// Cloning a nonce always creates a new one to protect
+// against accidental reuse.
+impl Clone for BoxNonce {
+    fn clone(&self) -> BoxNonce {
+        BoxNonce::new()
+    }
+}
+
 impl Default for BoxNonce {
     fn default() -> Self {
-        Self::new()
+        BoxNonce::new()
     }
 }
 
@@ -210,22 +216,11 @@ pub fn box_decrypt(pt: &mut [u8], bt: &[u8], bk: &BoxKey) -> bool {
     true
 }
 
+#[derive(Clone)]
 pub struct EncryptionContext {
     nonce: BoxNonce,
     ephemeral_pk: BoxPublicKey,
     ephemeral_bk: BoxKey,
-}
-
-impl Clone for EncryptionContext {
-    fn clone(&self) -> Self {
-        Self {
-            // We don't want to accidentally reuse a nonce
-            // by cloning an encryption context.
-            nonce: BoxNonce::new(),
-            ephemeral_pk: self.ephemeral_pk.clone(),
-            ephemeral_bk: self.ephemeral_bk.clone(),
-        }
-    }
 }
 
 impl EncryptionContext {
@@ -241,8 +236,7 @@ impl EncryptionContext {
     }
 
     #[allow(clippy::uninit_vec)]
-    pub fn encrypt_data(&mut self, pt: Vec<u8>, compression: compression::Scheme) -> Vec<u8> {
-        let pt = compression::compress(compression, pt);
+    pub fn encrypt_data(&mut self, pt: Vec<u8>) -> Vec<u8> {
         let ct_len = pt.len() + BOX_NONCEBYTES + BOX_MACBYTES + self.ephemeral_pk.bytes.len();
         let mut ct = Vec::with_capacity(ct_len);
         unsafe { ct.set_len(ct_len) };
@@ -308,7 +302,7 @@ impl DecryptionContext {
             anyhow::bail!("data corrupt");
         }
 
-        compression::decompress(pt)
+        Ok(pt)
     }
 }
 
@@ -493,14 +487,10 @@ mod tests {
         let psk = BoxPreSharedKey::new();
         let pt1 = vec![1, 2, 3];
         let mut ectx1 = EncryptionContext::new(&pk, &psk);
-        let mut ectx2 = EncryptionContext::new(&pk, &psk);
-        let ct1 = ectx1.encrypt_data(pt1.clone(), compression::Scheme::None);
-        let ct2 = ectx2.encrypt_data(pt1.clone(), compression::Scheme::Lz4);
+        let ct1 = ectx1.encrypt_data(pt1.clone());
         let mut dctx = DecryptionContext::new(sk, psk);
         let pt2 = dctx.decrypt_data(ct1).unwrap();
-        let pt3 = dctx.decrypt_data(ct2).unwrap();
         assert_eq!(pt1, pt2);
-        assert_eq!(pt1, pt3);
     }
 
     #[test]
@@ -521,6 +511,14 @@ mod tests {
         for b in nonce.bytes.iter() {
             assert_eq!(*b, 0);
         }
+    }
+
+    #[test]
+    fn cloned_nonce_is_new() {
+        init();
+        let nonce1 = BoxNonce::new();
+        let nonce2 = nonce1.clone();
+        assert!(nonce1.bytes != nonce2.bytes);
     }
 
     #[test]

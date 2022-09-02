@@ -59,6 +59,10 @@ with the correct checksum in order to recreate it as sparse.
 * --xattrs:
   Set xattrs.
 
+* --indexer-threads N:
+  Number of processor threads to use for pipelined parallel file hashing and metadata reads.
+  Defaults to the number of processors.
+
 * --query-cache PATH:
   Path to the query-cache file, defaults to one of the following, in order, provided
   the appropriate environment variables are set, `$BUPSTASH_QUERY_CACHE`,

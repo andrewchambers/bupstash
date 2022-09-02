@@ -192,10 +192,19 @@ With possible types:
   Save directory entry xattrs, only used when saving a directory.
 
 * --print-file-actions:
-  Print file actions in the form '$a $t $path' to stderr when processing directories, the section 'File Actions' for details.
+  Print file actions in the form '$a $t $path' to stderr when processing directories,
+  see the section 'File Actions' for details.
 
 * --print-stats:
   Print put statistics to stderr on completion.
+
+* --indexer-threads N:
+  Number of processor threads to use for pipelined parallel file metadata reads.
+  Defaults to 1.
+
+* --threads N:
+  Number of processor threads to use for pipelined parallel reading, hashing, compression
+  and encryption. Defaults to the number of processors.
 
 * --no-progress:
   Suppress progress indicators (Progress indicators are also suppressed when stderr

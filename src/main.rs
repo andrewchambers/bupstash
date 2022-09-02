@@ -27,6 +27,7 @@ pub mod migrate;
 pub mod oplog;
 pub mod pem;
 pub mod protocol;
+pub mod put;
 pub mod query;
 pub mod querycache;
 pub mod repository;
@@ -39,12 +40,13 @@ pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
+use plmap::PipelineMap;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
@@ -934,6 +936,18 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "one-file-system",
         "Do not cross mount points when traversing the file system.",
     );
+    opts.optopt(
+        "",
+        "indexer-threads",
+        "Number of processor threads to use for pipelined parallel file metadata reads. Defaults to 1.",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "threads",
+        "Number of processor threads to use for pipelined parallel reading, hashing, compression and encryption. Defaults to the number of processors.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args);
 
@@ -976,6 +990,24 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         matches.opt_present("print-file-actions") || matches.opt_present("verbose");
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
+
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(1))?;
+
+    let threads = matches
+        .opt_str("threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let compression = {
         let scheme = matches
@@ -1118,15 +1150,26 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
 
     let file_action_log_fn = if print_file_actions {
-        let log_fn: Rc<client::FileActionLogFn> = if progress.is_hidden() {
-            Rc::new(Box::new(move |ln: &str| {
-                writeln!(std::io::stderr(), "{}", ln)?;
+        let log_fn: Arc<index::FileActionLogFn> = if progress.is_hidden() {
+            Arc::new(Box::new(move |action: char, ty: char, path: &Path| {
+                writeln!(
+                    std::io::stderr(),
+                    "{} {} {}",
+                    action,
+                    ty,
+                    path.as_os_str().to_string_lossy()
+                )?;
                 Ok(())
             }))
         } else {
             let progress = progress.clone();
-            Rc::new(Box::new(move |ln: &str| {
-                progress.println(ln);
+            Arc::new(Box::new(move |action: char, ty: char, path: &Path| {
+                progress.println(format!(
+                    "{} {} {}",
+                    action,
+                    ty,
+                    path.as_os_str().to_string_lossy()
+                ));
                 Ok(())
             }))
         };
@@ -1249,7 +1292,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    let ctx = client::SendContext {
+    let ctx = client::PutContext {
         progress: progress.clone(),
         compression,
         checkpoint_seconds,
@@ -1266,16 +1309,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         one_file_system,
         file_action_log_fn,
         ignore_permission_errors,
+        send_log,
+        indexer_threads,
+        threads,
     };
 
-    let (id, stats) = client::send(
-        ctx,
-        &mut serve_out,
-        &mut serve_in,
-        send_log,
-        tags,
-        data_source,
-    )?;
+    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -1725,6 +1764,12 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Output format, valid values are 'human' or 'jsonl'.",
         "FORMAT",
     );
+    opts.optopt(
+        "",
+        "indexer-threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to the number of processors.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
     let utc_timestamps = matches.opt_present("utc-timestamps");
@@ -1736,6 +1781,15 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         None => ListFormat::Human,
     };
+
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let mut diff_mask = index::INDEX_COMPARE_MASK_DATA_CURSORS;
 
@@ -1837,7 +1891,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         if !query.is_empty() && (query[0].starts_with("./") || query[0].starts_with('/')) {
             let paths: Vec<PathBuf> = query.iter().map(PathBuf::from).collect();
             let mut ciw = index::CompressedIndexWriter::new();
-            for indexed_dir in indexer::FsIndexer::new(
+            for ent in indexer::FsIndexer::new(
                 &paths,
                 indexer::FsIndexerOptions {
                     exclusions: globset::GlobSet::empty(),
@@ -1847,12 +1901,11 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     want_hash: true,
                     one_file_system: false,
                     ignore_permission_errors: false,
+                    file_action_log_fn: None,
+                    threads: indexer_threads,
                 },
             )? {
-                let indexed_dir = indexed_dir?;
-                for index_ent in indexed_dir.index_ents {
-                    ciw.add(&index_ent);
-                }
+                ciw.add(&ent?.1);
             }
             to_diff.push(ciw.finish())
         } else {
@@ -2370,7 +2423,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn recover_removed_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("", "no-progress", "Suppress progress indicators.");
     opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
@@ -2403,31 +2456,62 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    opts.optflag("", "chunk", "Do rollsum chunking.");
-    opts.optflag("", "compress", "Compress chunks.");
+    opts.optopt("", "compression", "Compression algorithm.", "ALGO");
+    opts.optflag("", "compress", "Do chunk compression.");
     opts.optflag("", "address", "Compute chunk content addresses.");
     opts.optflag("", "encrypt", "Encrypt chunks.");
     opts.optflag("", "print", "Print data to stdout.");
+    opts.optflag("", "pipelining", "Do parallel pipelining.");
     opts.optflag("", "print-chunk-size", "Print chunk sizes.");
+    opts.optopt(
+        "",
+        "address-threads",
+        "Number of processor threads to use for computing addresses, Defaults to 0.",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "compress-threads",
+        "Number of processor threads to use for compression, Defaults to 0.",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "encrypt-threads",
+        "Number of processor threads to use for encryption, Defaults to 0.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let do_chunking = matches.opt_present("chunk");
+    let compression_scheme = {
+        let scheme = matches
+            .opt_str("compression")
+            .unwrap_or_else(|| "zstd:3".to_string());
+        compression::parse_scheme(&scheme)?
+    };
+
+    let mut threads = HashMap::new();
+
+    for kind in ["address-threads", "compress-threads", "encrypt-threads"] {
+        let n_threads = matches
+            .opt_str(kind)
+            .as_deref()
+            .map(|n| {
+                n.parse::<usize>()
+                    .map_err(|err| anyhow::format_err!("error parsing --{}: {}", kind, err))
+            })
+            .unwrap_or_else(|| Ok(0))?;
+
+        threads.insert(kind, n_threads);
+    }
+
     let do_compress = matches.opt_present("compress");
     let do_address = matches.opt_present("address");
     let do_encrypt = matches.opt_present("encrypt");
     let do_print = matches.opt_present("print");
-    let do_print_chunk_size = matches.opt_present("print-chunk-size");
-
-    let min_size = client::CHUNK_MIN_SIZE;
-    let max_size = client::CHUNK_MAX_SIZE;
-
-    let mut chunker =
-        chunker::RollsumChunker::new(crypto::GearHashKey::new().gear_tab(), min_size, max_size);
-
-    let mut buf = vec![0; 1024 * 1024];
 
     let (pk, _) = crypto::box_keypair();
     let psk = crypto::BoxPreSharedKey::new();
@@ -2445,57 +2529,54 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     {
         let mut outf = outf.lock();
 
-        let mut process_data = move |mut data: Vec<u8>| -> Result<(), anyhow::Error> {
-            if do_print_chunk_size {
-                writeln!(outf, "{}", data.len())?;
-            }
+        let chunker = chunker::RollsumChunker::new(
+            crypto::GearHashKey::new().gear_tab(),
+            put::CHUNK_MIN_SIZE,
+            put::CHUNK_MAX_SIZE,
+        );
 
-            if do_compress {
-                data = compression::compress(compression::Scheme::Lz4, data);
-            }
+        let chunks = put::ChunkIter::new(chunker, &mut inf);
 
-            if do_address {
-                let address = crypto::keyed_content_address(&data, &hk);
-                // use address to ensure compiler can't eliminate it.
-                if address.bytes[0] == 0 {
-                    data[0] = 0;
-                }
-            }
+        let chunks = chunks.map(|chunk| chunk.unwrap());
 
-            if do_encrypt {
-                data = ectx.encrypt_data(data, compression::Scheme::None);
-            }
-
-            if do_print {
-                outf.write_all(&data)?;
-            }
-
-            Ok(())
-        };
-
-        loop {
-            match inf.read(&mut buf)? {
-                0 => break,
-                n_read => {
-                    if do_chunking {
-                        let mut tot_n_chunked: usize = 0;
-                        while tot_n_chunked != n_read {
-                            let (n_chunked, data) = chunker.add_bytes(&buf[tot_n_chunked..n_read]);
-                            tot_n_chunked += n_chunked;
-
-                            if let Some(data) = data {
-                                process_data(data)?;
-                            }
-                        }
-                    } else {
-                        process_data(buf[0..n_read].to_vec())?;
+        let chunks = chunks.plmap(
+            *threads.get("address-threads").unwrap(),
+            move |mut chunk: Vec<u8>| {
+                if do_address {
+                    let address = crypto::keyed_content_address(&chunk, &hk);
+                    // use address to ensure compiler can't eliminate it.
+                    if address.bytes[0] == 0 {
+                        chunk[0] = 0;
                     }
                 }
-            }
-        }
+                chunk
+            },
+        );
 
-        if do_chunking {
-            process_data(chunker.finish())?;
+        let chunks = chunks.plmap(
+            *threads.get("compress-threads").unwrap(),
+            move |mut chunk: Vec<u8>| {
+                if do_compress {
+                    chunk = compression::compress(compression_scheme, chunk);
+                }
+                chunk
+            },
+        );
+
+        let chunks = chunks.plmap(
+            *threads.get("encrypt-threads").unwrap(),
+            move |mut chunk: Vec<u8>| {
+                if do_encrypt {
+                    chunk = ectx.encrypt_data(chunk);
+                }
+                chunk
+            },
+        );
+
+        for chunk in chunks {
+            if do_print {
+                outf.write_all(&chunk)?;
+            }
         }
     }
 
@@ -2504,7 +2585,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn rollsum_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn rollsum_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -2559,6 +2640,54 @@ fn rollsum_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+fn indexer_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    opts.optflag("", "one-file-system", "Don't traverse mount points.");
+    opts.optflag("", "want-hash", "Want hash.");
+    opts.optflag("", "sparseness", "Want spareness.");
+    opts.optflag("", "xattrs", "Want xattrs.");
+    opts.optflag("", "hash", "Want hash.");
+    opts.optflag("", "ignore-permission-errors", "Ignore permission errors.");
+    opts.optopt(
+        "",
+        "threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to 0.",
+        "N",
+    );
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let indexer_threads = matches
+        .opt_str("threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(0))?;
+
+    let indexer_opts = indexer::FsIndexerOptions {
+        exclusions: globset::GlobSetBuilder::new().build().unwrap(),
+        exclusion_markers: std::collections::HashSet::new(),
+        one_file_system: matches.opt_present("one-file-system"),
+        ignore_permission_errors: matches.opt_present("ignore-permission-errors"),
+        want_hash: matches.opt_present("hash"),
+        want_sparseness: matches.opt_present("sparseness"),
+        want_xattrs: matches.opt_present("xattrs"),
+        threads: indexer_threads,
+        file_action_log_fn: None,
+    };
+
+    let dirs: Vec<PathBuf> = matches.free.iter().map(PathBuf::from).collect();
+
+    let indexer = indexer::FsIndexer::new(&dirs, indexer_opts).unwrap();
+
+    for ent in indexer {
+        println!("{}", ent?.0.display());
+    }
+
+    Ok(())
+}
+
 fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     repo_cli_opts(&mut opts);
@@ -2578,8 +2707,23 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Directory to restore files into, defaults to BUPSTASH_RESTORE_DIR.",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "indexer-threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to the number of processors.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
+
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
@@ -2719,6 +2863,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             },
             restore_ownership: matches.opt_present("ownership"),
             restore_xattrs: matches.opt_present("xattrs"),
+            indexer_threads,
         },
         content_index,
         matches.opt_str("pick").map(|x| x.into()),
@@ -2953,9 +3098,10 @@ fn main() {
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
-        "recover-removed" => recover_removed(args),
-        "put-benchmark" => put_benchmark(args),
-        "rollsum-benchmark" => rollsum_benchmark(args),
+        "recover-removed" => recover_removed_main(args),
+        "put-benchmark" => put_benchmark_main(args),
+        "rollsum-benchmark" => rollsum_benchmark_main(args),
+        "indexer-benchmark" => indexer_benchmark_main(args),
         "sync" => sync_main(args),
         "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {
