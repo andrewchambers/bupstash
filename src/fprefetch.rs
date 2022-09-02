@@ -24,7 +24,7 @@ cfg_if::cfg_if! {
     }
 }
 
-const NUM_PREOPENED_FILES: usize = 3;
+const NUM_PREOPENED_FILES: usize = 1;
 
 #[derive(Default)]
 pub struct ReadaheadFileOpener {
@@ -116,7 +116,7 @@ impl ReadaheadFileOpener {
     }
 
     pub fn next_file(&mut self) -> Option<(PathBuf, std::io::Result<File>)> {
-        while !self.unopened.is_empty() && self.opened.len() < NUM_PREOPENED_FILES {
+        while !self.unopened.is_empty() && self.opened.len() < NUM_PREOPENED_FILES + 1 {
             let p = self.unopened.pop_front().unwrap();
             let r = open_file_for_streaming(&p);
             self.opened.push_back((p, r))

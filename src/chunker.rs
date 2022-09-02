@@ -1,5 +1,6 @@
 use super::rollsum::{FastGearHasher, GearTab, RollsumSplitter};
 
+#[derive(Clone)]
 pub struct RollsumChunker {
     rs: FastGearHasher,
     min_sz: usize,
@@ -100,6 +101,7 @@ impl RollsumChunker {
     }
 
     pub fn take_buffered(&mut self) -> Vec<u8> {
+        self.rs.reset();
         let mut v = Vec::new();
         std::mem::swap(&mut self.cur_vec, &mut v);
         v

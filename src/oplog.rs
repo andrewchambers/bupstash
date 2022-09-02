@@ -1,4 +1,5 @@
 use super::address::*;
+use super::compression;
 use super::crypto;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
@@ -179,7 +180,8 @@ impl VersionedItemMetadata {
     ) -> Result<DecryptedItemMetadata, anyhow::Error> {
         match self {
             VersionedItemMetadata::V1(ref md) => {
-                let data = dctx.decrypt_data(md.encrypted_metadata.clone())?;
+                let data =
+                    compression::decompress(dctx.decrypt_data(md.encrypted_metadata.clone())?)?;
                 let emd: V1SecretItemMetadata = serde_bare::from_slice(&data)?;
                 if md.plain_text_metadata.hash() != emd.plain_text_hash {
                     anyhow::bail!("item metadata is corrupt or tampered with");
@@ -199,7 +201,8 @@ impl VersionedItemMetadata {
                 })
             }
             VersionedItemMetadata::V2(ref md) => {
-                let data = dctx.decrypt_data(md.encrypted_metadata.clone())?;
+                let data =
+                    compression::decompress(dctx.decrypt_data(md.encrypted_metadata.clone())?)?;
                 let emd: V2SecretItemMetadata = serde_bare::from_slice(&data)?;
                 if md.plain_text_metadata.hash() != emd.plain_text_hash {
                     anyhow::bail!("item metadata is corrupt or tampered with");
@@ -226,7 +229,8 @@ impl VersionedItemMetadata {
                 })
             }
             VersionedItemMetadata::V3(ref md) => {
-                let data = dctx.decrypt_data(md.encrypted_metadata.clone())?;
+                let data =
+                    compression::decompress(dctx.decrypt_data(md.encrypted_metadata.clone())?)?;
                 let emd: V2SecretItemMetadata = serde_bare::from_slice(&data)?;
                 if md.plain_text_metadata.hash(item_id) != emd.plain_text_hash {
                     anyhow::bail!("item metadata is corrupt or tampered with");
