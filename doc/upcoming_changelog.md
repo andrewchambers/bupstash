@@ -8,7 +8,7 @@ format, the network protocol remains unchanged and interoperable.
 
 - Added a new --ignore-permission-errors option to `bupstash put`.
 - Added a new advanced environment variable BUPSTASH_KEEP_WAL=1 for 
- 'bupstash serve' See WAL section below.
+ 'bupstash serve' (See WAL section below).
 
 ## Notable Bug fixes
 
@@ -39,7 +39,7 @@ For now this feature is only for advanced users with specialist use cases.
 ## Signed releases
 
 From this point on git tags and downloads will be signed by a gpg key from developers at the
-bupstash.io domain.  The PGP signing keys can be found at https://bupstash.io/doc/man/bupstash-authors.html
+bupstash.io domain. The PGP signing keys can be found at https://bupstash.io/doc/man/bupstash-authors.html
 or via the source code repository itself in the file `doc/man/bupstash-authors.7.md`.
 
 ## Supporting bupstash
