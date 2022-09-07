@@ -12,6 +12,7 @@ cd release/src
 cargo vendor > .cargo/config
 
 tar -cvf - . | gzip -9 > ../../bupstash-$1-src+deps.tar.gz
+gpg -a --sign --detach-sig --default-key ac@bupstash.io ../../bupstash-$1-src+deps.tar.gz
 
 cd ..
 mkdir man
@@ -21,3 +22,4 @@ ronn -r *.md
 rm *.md
 
 tar -cvf - . | gzip -9 > ../../bupstash-$1-man.tar.gz
+gpg -a --sign --detach-sig --default-key ac@bupstash.io ../../bupstash-$1-man.tar.gz

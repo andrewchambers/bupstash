@@ -21,7 +21,7 @@ in
         sqlite
         rust-bindgen
         jq
-        ronn
+        (pkgs.callPackage ./ronn {})
         hyperfine
       ];
 
