@@ -10,7 +10,7 @@ The bupstash authors, how to contact them, and their bupstash specific PGP publi
 ### About
 
 Andrew is an an experienced programmer with a masters degree in computer systems engineering 
-from the university of Auckland in New Zealand. He is the creator and primary author of bupstash
+from the University of Auckland in New Zealand. He is the creator and primary author of bupstash
 and bupstash.io.
 
 ### Contact
