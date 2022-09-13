@@ -1,17 +1,16 @@
 use super::acache;
 use super::address::*;
-use super::chunker;
 use super::compression;
 use super::crypto;
-use super::fprefetch;
 use super::fsutil;
 use super::fsutil::likely_smear_error;
 use super::htree;
 use super::index;
-use super::indexer;
+use super::indexer2;
 use super::ioutil;
 use super::oplog;
 use super::protocol::*;
+use super::putpipeline;
 use super::querycache;
 use super::repository;
 use super::rollsum;
@@ -19,7 +18,6 @@ use super::sendlog;
 use super::xid::*;
 use super::xtar;
 use itertools::Itertools;
-use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::ffi::OsStr;
@@ -30,6 +28,7 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 // These chunk parameters could be investigated and tuned.
 
@@ -86,6 +85,8 @@ pub fn init_repository(
 }
 
 pub type FileActionLogFn = dyn Fn(&str) -> Result<(), anyhow::Error>;
+
+/*
 
 #[derive(Clone)]
 pub struct SendContext {
@@ -320,9 +321,9 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
 
         let mut file_opener = fprefetch::ReadaheadFileOpener::new();
 
-        let indexer = indexer::FsIndexer::new(
+        let indexer = indexer2::FsIndexer::new(
             &paths,
-            indexer::FsIndexerOptions {
+            indexer2::FsIndexerOptions {
                 one_file_system: self.ctx.one_file_system,
                 want_xattrs: self.ctx.want_xattrs,
                 want_sparseness: true,
@@ -331,40 +332,32 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                 exclusions,
                 exclusion_markers,
             },
-        )?
-        .background();
+        )?;
 
-        for indexed_dir in indexer {
-            let mut indexed_dir = indexed_dir?;
+        for file_batch in putpipeline::EntBatcher::new(indexer) {
+            let mut file_batch = file_batch?;
 
             self.ctx
                 .progress
-                .set_message(indexed_dir.dir_path.to_string_lossy().to_string());
+                .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
 
-            for excluded in indexed_dir.excluded_paths.drain(..) {
-                self.log_file_action('x', '-', &excluded)?;
-            }
+            let mut stat_cache_key = None;
 
-            let mut hash_state = crypto::HashState::new(Some(&self.ctx.idx_hash_key));
-
-            if use_stat_cache {
-                // Incorporate the absolute dir in our cache key.
-                hash_state.update(indexed_dir.dir_path.as_os_str().as_bytes());
-                // Null byte marks the end of path in the hash space.
-                hash_state.update(&[0]);
-                for ent in indexed_dir.index_ents.iter() {
-                    hash_state.update(&serde_bare::to_vec(ent).unwrap());
+            let cache_lookup = if use_stat_cache && self.send_log_session.is_some() {
+                let mut hash_state = crypto::HashState::new(Some(&self.ctx.idx_hash_key));
+                let mut hash_buf = Vec::with_capacity(1024);
+                for (path, ent) in file_batch.iter() {
+                    hash_buf.truncate(0);
+                    hash_buf.write_all(path.as_os_str().as_bytes()).unwrap();
+                    serde_bare::to_writer(&mut hash_buf, ent).unwrap();
+                    hash_state.update(&hash_buf);
                 }
-            }
-
-            let hash = hash_state.finish();
-
-            let cache_lookup = if self.send_log_session.is_some() && use_stat_cache {
+                stat_cache_key = Some(hash_state.finish());
                 self.send_log_session
                     .as_ref()
                     .unwrap()
                     .borrow_mut()
-                    .stat_cache_lookup(&hash)?
+                    .stat_cache_lookup(&stat_cache_key.unwrap())?
             } else {
                 None
             };
@@ -379,14 +372,8 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                     self.data_size += cache_entry.total_size;
                     self.ctx.progress.inc(cache_entry.total_size);
 
-                    assert!(cache_entry.hashes.len() == indexed_dir.index_ents.len());
-
-                    for (i, mut index_ent) in indexed_dir.index_ents.drain(..).enumerate() {
-                        self.log_file_action(
-                            '~',
-                            index_ent.type_display_char(),
-                            &indexed_dir.ent_paths[i],
-                        )?;
+                    for (i, (path, mut index_ent)) in file_batch.drain(..).enumerate() {
+                        self.log_file_action('~', index_ent.type_display_char(), &path)?;
                         index_ent.data_hash = cache_entry.hashes[i];
                         index_ent.data_cursor = cache_entry.data_cursors[i];
                         self.write_idx_ent(&index::VersionedIndexEntry::V5(index_ent))?;
@@ -404,7 +391,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         }
                     };
 
-                    let n_idx_ents = indexed_dir.index_ents.len();
+                    let n_idx_ents = file_batch.len();
 
                     let cache_vec_capacity = if use_stat_cache { n_idx_ents } else { 0 };
 
@@ -415,22 +402,14 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                         Vec::with_capacity(cache_vec_capacity);
 
                     // Setup the file readahead immediately.
-                    for (_, ent_path) in indexed_dir
-                        .index_ents
-                        .iter()
-                        .zip(indexed_dir.ent_paths.iter())
-                        .filter(|x| x.0.is_file())
-                    {
-                        file_opener.add_to_queue(ent_path.to_path_buf());
+                    for (path, _) in file_batch.iter().filter(|x| x.1.is_file()) {
+                        file_opener.add_to_queue(path.to_path_buf());
                     }
 
-                    'add_dir_ents: for (i, (mut index_ent, index_ent_path)) in indexed_dir
-                        .index_ents
-                        .drain(..)
-                        .zip(indexed_dir.ent_paths.drain(..))
-                        .enumerate()
+                    'add_dir_ents: for (i, (path, mut index_ent)) in
+                        file_batch.drain(..).enumerate()
                     {
-                        self.log_file_action('+', index_ent.type_display_char(), &index_ent_path)?;
+                        self.log_file_action('+', index_ent.type_display_char(), &path)?;
 
                         let ent_data_chunk_start_idx =
                             self.data_tw.get_mut().as_ref().unwrap().data_chunk_count();
@@ -510,7 +489,7 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
                             .unwrap()
                             .borrow_mut()
                             .add_stat_cache_data(
-                                &hash[..],
+                                &stat_cache_key.unwrap()[..],
                                 &sendlog::StatCacheEntry {
                                     addresses,
                                     data_cursors,
@@ -608,6 +587,8 @@ impl<'a, 'b, 'c> SendSession<'a, 'b, 'c> {
     }
 }
 
+*/
+
 pub enum DataSource {
     Subprocess(Vec<String>),
     Readable {
@@ -621,38 +602,34 @@ pub enum DataSource {
     },
 }
 
-pub struct SendStats {
-    // send start time.
-    pub start_time: chrono::DateTime<chrono::Utc>,
-    // send end time.
-    pub end_time: chrono::DateTime<chrono::Utc>,
-    // Total number of chunks processed.
-    pub total_chunks: u64,
-    // Size of uncompressed index stream.
-    pub uncompressed_index_size: u64,
-    // Size of uncompressed data stream.
-    pub uncompressed_data_size: u64,
-    // Number of chunks actually sent to the remote after caching.
-    pub transferred_chunks: u64,
-    // Data actually sent after compression/caching.
-    pub transferred_bytes: u64,
-    // Number of chunks added to the remote server.
-    pub added_chunks: u64,
-    // Number of bytes added to the remote server.
-    pub added_bytes: u64,
+pub struct SendContext {
+    pub progress: indicatif::ProgressBar,
+    pub compression: compression::Scheme,
+    pub primary_key_id: Xid,
+    pub send_key_id: Xid,
+    pub data_hash_key: crypto::HashKey,
+    pub data_ectx: crypto::EncryptionContext,
+    pub idx_hash_key: crypto::HashKey,
+    pub idx_ectx: crypto::EncryptionContext,
+    pub metadata_ectx: crypto::EncryptionContext,
+    pub gear_tab: rollsum::GearTab,
+    pub checkpoint_seconds: u64,
+    pub want_xattrs: bool,
+    pub use_stat_cache: bool,
+    pub one_file_system: bool,
+    pub ignore_permission_errors: bool,
+    pub send_log: Option<sendlog::SendLog>,
+    pub file_action_log_fn: Option<Rc<FileActionLogFn>>,
 }
 
 pub fn send(
     mut ctx: SendContext,
     r: &mut dyn Read,
     w: &mut dyn Write,
-    mut send_log: Option<sendlog::SendLog>,
     tags: BTreeMap<String, String>,
     data: DataSource,
-) -> Result<(Xid, SendStats), anyhow::Error> {
-    let start_time = chrono::Utc::now();
-
-    let send_id = match send_log {
+) -> Result<(Xid, putpipeline::SendStats), anyhow::Error> {
+    let send_id = match ctx.send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
         None => None,
     };
@@ -664,44 +641,36 @@ pub fn send(
         _ => anyhow::bail!("protocol error, expected begin ack packet"),
     };
 
-    let mut send_log_session = match send_log {
-        Some(ref mut send_log) => Some(RefCell::new(send_log.session(ack.gc_generation)?)),
+    let send_log_session = match ctx.send_log {
+        Some(ref mut send_log) => Some(Arc::new(Mutex::new(send_log.session(ack.gc_generation)?))),
         None => None,
     };
 
     if let Some(ref send_log_session) = send_log_session {
         send_log_session
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .perform_cache_invalidations(ack.has_delta_id)?;
     }
 
-    let min_size = CHUNK_MIN_SIZE;
-    let max_size = CHUNK_MAX_SIZE;
-
-    let mut session = SendSession {
-        ctx: ctx.clone(),
-        start_time,
-        next_sync: std::time::Instant::now()
-            + std::time::Duration::from_secs(ctx.checkpoint_seconds),
-        transferred_bytes: 0,
-        transferred_chunks: 0,
-        added_chunks: 0,
-        added_bytes: 0,
-        send_log_session: &mut send_log_session,
-        acache: acache::ACache::new(32768),
-        data_chunker: chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size),
-        data_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
-        idx_chunker: chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size),
-        idx_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
-        idx_size: 0,
-        data_size: 0,
-        w,
-        r,
-        scratch_buf: vec![0; 512 * 1024],
-        log_msg_buf: String::new(),
+    let send_pipeline_ctx = putpipeline::SendContext {
+        progress: ctx.progress.clone(),
+        compression: ctx.compression,
+        data_hash_key: ctx.data_hash_key.clone(),
+        data_ectx: ctx.data_ectx.clone(),
+        idx_hash_key: ctx.idx_hash_key.clone(),
+        idx_ectx: ctx.idx_ectx.clone(),
+        gear_tab: ctx.gear_tab.clone(),
+        checkpoint_seconds: ctx.checkpoint_seconds,
+        want_xattrs: ctx.want_xattrs,
+        use_stat_cache: ctx.use_stat_cache,
+        one_file_system: ctx.one_file_system,
+        ignore_permission_errors: ctx.ignore_permission_errors,
+        send_log_session: send_log_session.clone(),
+        file_action_log_fn: ctx.file_action_log_fn.clone(),
     };
 
-    match data {
+    let (data_tree, index_tree, stats) = match data {
         DataSource::Subprocess(args) => {
             let quoted_args: Vec<String> =
                 args.iter().map(|x| shlex::quote(x).to_string()).collect();
@@ -713,30 +682,35 @@ pub fn send(
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
                 .spawn()?;
+
             let mut data = child.stdout.as_mut().unwrap();
-            session.write_data(&mut data, &mut |_: &Address, _: usize| {})?;
+
+            let (data_tree, stats) = putpipeline::send_data(send_pipeline_ctx, r, w, &mut data)?;
+
             let status = child.wait()?;
             if !status.success() {
                 anyhow::bail!("child failed with status {}", status.code().unwrap());
             }
+
+            (data_tree, None, stats)
         }
         DataSource::Readable {
             description,
             mut data,
         } => {
             ctx.progress.set_message(description);
-            session.write_data(&mut data, &mut |_: &Address, _: usize| {})?;
+            let (data_tree, stats) = putpipeline::send_data(send_pipeline_ctx, r, w, &mut data)?;
+            (data_tree, None, stats)
         }
         DataSource::Filesystem {
             paths,
             exclusions,
             exclusion_markers,
         } => {
-            session.send_dir(paths, exclusions, exclusion_markers)?;
+            todo!();
+            // session.send_dir(paths, exclusions, exclusion_markers)?;
         }
-    }
-
-    let (data_tree, index_tree, stats) = session.finish()?;
+    };
 
     let plain_text_metadata = oplog::V3PlainTextItemMetadata {
         primary_key_id: ctx.primary_key_id,
@@ -771,8 +745,8 @@ pub fn send(
 
     match read_packet(r, DEFAULT_MAX_PACKET_SIZE)? {
         Packet::RAddItem => {
-            if let Some(send_log_session) = send_log_session {
-                send_log_session.into_inner().commit(&ack.item_id)?;
+            if let Some(ref send_log_session) = send_log_session {
+                send_log_session.lock().unwrap().commit(&ack.item_id)?;
             }
             Ok((ack.item_id, stats))
         }
@@ -1455,9 +1429,9 @@ pub fn restore_to_local_dir(
     let to_dir_index = {
         progress.set_message(format!("indexing {}...", to_dir.to_string_lossy()));
         let mut ciw = index::CompressedIndexWriter::new();
-        for indexed_dir in indexer::FsIndexer::new(
+        for ent in indexer2::FsIndexer::new(
             &[to_dir.to_owned()],
-            indexer::FsIndexerOptions {
+            indexer2::FsIndexerOptions {
                 exclusions: globset::GlobSet::empty(),
                 exclusion_markers: HashSet::new(),
                 want_sparseness: false,
@@ -1467,10 +1441,7 @@ pub fn restore_to_local_dir(
                 ignore_permission_errors: false,
             },
         )? {
-            let indexed_dir = indexed_dir?;
-            for index_ent in indexed_dir.index_ents {
-                ciw.add(&index_ent);
-            }
+            ciw.add(&ent?.1);
         }
         ciw.finish()
     };

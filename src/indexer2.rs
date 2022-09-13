@@ -1,226 +1,12 @@
 use super::fsutil;
 use super::index;
 use std::collections::{HashMap, VecDeque};
-// use std::os::unix::ffi::OsStringExt;
+use std::ffi::OsString;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
-// use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-
-/*
-
-#[cfg(any(
-    target_os = "dragonfly",
-    target_os = "freebsd",
-    target_os = "illumos",
-    target_os = "linux",
-    target_os = "solaris"
-))]
-fn probe_sparse(path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
-    use std::os::unix::io::AsRawFd;
-
-    // Heuristic that filters away expensive check.
-    if (stat.blocks() * 512) >= stat.size() {
-        return Ok(false);
-    }
-
-    // Use lseek to confirm that there is a hole.
-
-    let mut offset = 0;
-    let f = std::fs::File::open(path)?;
-
-    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekHole) {
-        Ok(next) => offset = next,
-        Err(_) => return Ok(false),
-    }
-
-    let hole_start = offset;
-
-    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekData) {
-        Ok(next) => offset = next,
-        Err(nix::Error::ENXIO) => {
-            /* There is no more data, seek to the end. */
-            match nix::unistd::lseek(f.as_raw_fd(), 0, nix::unistd::Whence::SeekEnd) {
-                Ok(next) => offset = next,
-                Err(err) => return Err(err.into()),
-            }
-        }
-        Err(_) => return Ok(false),
-    }
-
-    let hole_size = offset - hole_start;
-
-    Ok(hole_size != 0)
-}
-
-#[cfg(not(any(
-    target_os = "dragonfly",
-    target_os = "freebsd",
-    target_os = "illumos",
-    target_os = "linux",
-    target_os = "solaris"
-)))]
-fn probe_sparse(_path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
-    Ok((stat.blocks() * 512) < stat.size())
-}
-
-fn index_entry_from_fs(base_path: &Path, path: &Path, opts: &FsIndexerOptions) -> std::io::Result<CombinedMetadata> {
-
-    let mut xattrs = None;
-
-    let stat = path.symlink_metadata()?;
-
-    if opts.want_xattrs && (stat.is_file() || stat.is_dir()) {
-        match xattr::list(path) {
-            Ok(attrs) => {
-                for attr in attrs {
-                    match xattr::get(path, &attr) {
-                        Ok(Some(value)) => {
-                            if xattrs.is_none() {
-                                xattrs = Some(index::Xattrs::new())
-                            }
-                            match xattrs {
-                                Some(ref mut xattrs) => {
-                                    xattrs.insert(attr.into_vec(), value);
-                                }
-                                _ => unreachable!(),
-                            }
-                        }
-                        Ok(None) => (), // The file had it's xattr removed, assume it never had it.
-                        Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume it never had this xattr.
-                        Err(err)
-                            if opts.ignore_permission_errors
-                                && err.kind() == std::io::ErrorKind::PermissionDenied => {}
-                        Err(err) => return Err(err),
-                    }
-                }
-            }
-            Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume no xattrs for what we have.
-            Err(err)
-                if opts.ignore_permission_errors
-                    && err.kind() == std::io::ErrorKind::PermissionDenied => {}
-            Err(err) => return Err(err),
-        }
-    }
-
-    let data_hash = if stat.is_file() && opts.want_hash {
-        let mut hasher = blake3::Hasher::new();
-        let mut f = std::fs::File::open(path)?;
-        std::io::copy(&mut f, &mut hasher)?;
-        index::ContentCryptoHash::Blake3(hasher.finalize().into())
-    } else {
-        index::ContentCryptoHash::None
-    };
-
-    let sparse = if opts.want_sparseness && stat.is_file() {
-        match probe_sparse(path, &stat) {
-            Ok(sparse) => sparse,
-            Err(err) if fsutil::likely_smear_error(&err) => false,
-            Err(err)
-                if opts.ignore_permission_errors
-                    && err.kind() == std::io::ErrorKind::PermissionDenied =>
-            {
-                false
-            }
-            Err(err) => return Err(err),
-        }
-    } else {
-        false
-    };
-
-    let ft = stat.file_type();
-    let (dev_major, dev_minor) = if ft.is_block_device() || ft.is_char_device() {
-        (
-            fsutil::dev_major(metadata.rdev()),
-            fsutil::dev_minor(metadata.rdev()),
-        )
-    } else {
-        (0, 0)
-    };
-
-    let link_target = if ft.is_symlink() {
-            Some(std::fs::read_link(path)?)
-        } else {
-            None
-        };
-
-    index::IndexEntry {
-        path: index_path.to_owned(),
-        size: serde_bare::Uint(if stat.is_file() {
-            stat.size()
-        } else {
-            0
-        }),
-        uid: serde_bare::Uint(stat.uid() as u64),
-        gid: serde_bare::Uint(stat.gid() as u64),
-        mode: serde_bare::Uint(stat.permissions().mode() as u64),
-        ctime: serde_bare::Uint(stat.ctime() as u64),
-        ctime_nsec: serde_bare::Uint(stat.ctime_nsec() as u64),
-        mtime: serde_bare::Uint(stat.mtime() as u64),
-        mtime_nsec: serde_bare::Uint(stat.mtime_nsec() as u64),
-        nlink: serde_bare::Uint(stat.nlink()),
-        dev_major: serde_bare::Uint(dev_major as u64),
-        dev_minor: serde_bare::Uint(dev_minor as u64),
-        // To be normalized later in the pipeline.
-        norm_dev: serde_bare::Uint(metadata.dev()),
-        ino: serde_bare::Uint(metadata.ino()),
-        // Dummy value, set by caller.
-        data_cursor: index::RelativeDataCursor {
-            chunk_delta: serde_bare::Uint(0),
-            start_byte_offset: serde_bare::Uint(0),
-            end_byte_offset: serde_bare::Uint(0),
-        },
-        sparse,
-        xattrs,
-        link_target,
-        data_hash,
-    }
-
-    Ok(CombinedMetadata {
-        stat,
-        xattrs,
-        sparse,
-        data_hash,
-    })
-}
-*/
-
-#[derive(Default)]
-pub struct DevNormalizer {
-    count: u64,
-    tab: HashMap<u64, u64>,
-}
-
-impl DevNormalizer {
-    pub fn new() -> Self {
-        DevNormalizer {
-            count: 0,
-            tab: HashMap::new(),
-        }
-    }
-
-    pub fn normalize(&mut self, dev: u64) -> u64 {
-        match self.tab.get(&dev) {
-            Some(nd) => *nd,
-            None => {
-                let nd = self.count;
-                self.count += 1;
-                self.tab.insert(dev, nd);
-                nd
-            }
-        }
-    }
-}
-
-pub struct FsIndexerOptions {
-    pub exclusions: globset::GlobSet,
-    pub exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
-    pub want_xattrs: bool,
-    pub want_sparseness: bool,
-    pub want_hash: bool,
-    pub one_file_system: bool,
-    pub ignore_permission_errors: bool,
-}
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 pub struct FsWalkerOptions {
     pub exclusions: globset::GlobSet,
@@ -257,7 +43,7 @@ impl FsWalker {
         }
 
         if absolute_paths.len() == 1 {
-            match absolute_paths[0].metadata() {
+            match absolute_paths[0].symlink_metadata() {
                 Ok(stat) => {
                     if !stat.is_dir() {
                         // Special case walking a single file,
@@ -277,7 +63,7 @@ impl FsWalker {
             };
         }
 
-        absolute_paths.sort();
+        absolute_paths.sort_by(|l, r| index::path_cmp(&l, &r));
         absolute_paths.dedup();
 
         // Prune away paths that encapsulate eachother, for example
@@ -309,28 +95,27 @@ impl FsWalker {
         // So if a user puts a/b and a/c, then a is a filler.
         let mut filler_dirs = std::collections::HashSet::new();
 
-        let mut prefilled_children = HashMap::<PathBuf, Vec<(PathBuf, std::fs::FileType)>>::new();
-
         if root_paths.len() > 1 {
             // We have more than one root_path so
             // base must be a filler dir by definition.
             filler_dirs.insert(base.clone());
 
             for p in root_paths.iter() {
-                dbg!(&p);
                 let mut p = p.clone();
                 p.pop();
                 while p != base {
-                    dbg!(&p);
                     filler_dirs.insert(p.clone());
                     p.pop();
                 }
             }
         }
 
-        // Build a prepopulated table of filler directory children.
+        let mut prefilled_children = HashMap::<PathBuf, Vec<(PathBuf, std::fs::FileType)>>::new();
+
+        // Build a prepopulated table of filler directories and their children
+        // which are either filler dirs or root paths.
         for p in filler_dirs.drain().chain(root_paths.drain(..)) {
-            let stat = match p.metadata() {
+            let stat = match p.symlink_metadata() {
                 Ok(stat) => stat,
                 Err(err) => anyhow::bail!("unable to stat {:?}: {}", p, err),
             };
@@ -359,7 +144,7 @@ impl FsWalker {
         let start_dir = if let Some(base_parent) = base.parent() {
             base_parent.to_owned()
         } else {
-            // Special case for the parent of /.
+            // Special case for the parent of '/'.
             "".into()
         };
 
@@ -369,9 +154,9 @@ impl FsWalker {
             "/".into()
         };
 
-        let start_md = match start_md_dir.metadata() {
+        let start_md = match start_md_dir.symlink_metadata() {
             Ok(md) => md,
-            Err(err) => anyhow::bail!("error reading {:?}: {}", start_md_dir, err),
+            Err(err) => anyhow::bail!("unable to stat {:?}: {}", start_md_dir, err),
         };
 
         Ok((
@@ -490,6 +275,279 @@ impl Iterator for FsWalker {
                 }
                 None => return None,
             }
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "linux",
+    target_os = "solaris"
+))]
+fn probe_sparse(path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::io::AsRawFd;
+
+    // Heuristic that filters away expensive check.
+    if (stat.blocks() * 512) >= stat.size() {
+        return Ok(false);
+    }
+
+    // Use lseek to confirm that there is a hole.
+
+    let mut offset = 0;
+    let f = std::fs::File::open(path)?;
+
+    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekHole) {
+        Ok(next) => offset = next,
+        Err(_) => return Ok(false),
+    }
+
+    let hole_start = offset;
+
+    match nix::unistd::lseek(f.as_raw_fd(), offset, nix::unistd::Whence::SeekData) {
+        Ok(next) => offset = next,
+        Err(nix::Error::ENXIO) => {
+            /* There is no more data, seek to the end. */
+            match nix::unistd::lseek(f.as_raw_fd(), 0, nix::unistd::Whence::SeekEnd) {
+                Ok(next) => offset = next,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(_) => return Ok(false),
+    }
+
+    let hole_size = offset - hole_start;
+
+    Ok(hole_size != 0)
+}
+
+#[cfg(not(any(
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "linux",
+    target_os = "solaris"
+)))]
+fn probe_sparse(_path: &Path, stat: &std::fs::Metadata) -> std::io::Result<bool> {
+    Ok((stat.blocks() * 512) < stat.size())
+}
+
+fn index_entry_from_fs(
+    base_path: &Path,
+    path: &Path,
+    opts: &FsIndexerOptions,
+) -> std::io::Result<index::IndexEntry> {
+    let mut xattrs = None;
+
+    let stat = path.symlink_metadata()?;
+
+    if opts.want_xattrs && (stat.is_file() || stat.is_dir()) {
+        match xattr::list(path) {
+            Ok(attrs) => {
+                for attr in attrs {
+                    match xattr::get(path, &attr) {
+                        Ok(Some(value)) => {
+                            if xattrs.is_none() {
+                                xattrs = Some(index::Xattrs::new())
+                            }
+                            match xattrs {
+                                Some(ref mut xattrs) => {
+                                    xattrs.insert(attr.into_vec(), value);
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                        Ok(None) => (), // The file had it's xattr removed, assume it never had it.
+                        Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume it never had this xattr.
+                        Err(err)
+                            if opts.ignore_permission_errors
+                                && err.kind() == std::io::ErrorKind::PermissionDenied => {}
+                        Err(err) => return Err(err),
+                    }
+                }
+            }
+            Err(err) if fsutil::likely_smear_error(&err) => (), // The file was modified, assume no xattrs for what we have.
+            Err(err)
+                if opts.ignore_permission_errors
+                    && err.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    let data_hash = if stat.is_file() && opts.want_hash {
+        let mut hasher = blake3::Hasher::new();
+        let mut f = std::fs::File::open(path)?;
+        std::io::copy(&mut f, &mut hasher)?;
+        index::ContentCryptoHash::Blake3(hasher.finalize().into())
+    } else {
+        index::ContentCryptoHash::None
+    };
+
+    let sparse = if opts.want_sparseness && stat.is_file() {
+        match probe_sparse(path, &stat) {
+            Ok(sparse) => sparse,
+            Err(err) if fsutil::likely_smear_error(&err) => false,
+            Err(err)
+                if opts.ignore_permission_errors
+                    && err.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                false
+            }
+            Err(err) => return Err(err),
+        }
+    } else {
+        false
+    };
+
+    let ft = stat.file_type();
+    let (dev_major, dev_minor) = if ft.is_block_device() || ft.is_char_device() {
+        (
+            fsutil::dev_major(stat.rdev()),
+            fsutil::dev_minor(stat.rdev()),
+        )
+    } else {
+        (0, 0)
+    };
+
+    let link_target = if ft.is_symlink() {
+        Some(std::fs::read_link(path)?)
+    } else {
+        None
+    };
+
+    let index_path = {
+        let base_path_bytes = base_path.as_os_str().as_bytes();
+        let path_bytes = path.as_os_str().as_bytes();
+
+        if base_path_bytes.len() == path_bytes.len() {
+            if ft.is_dir() {
+                PathBuf::from(".")
+            } else {
+                PathBuf::from(path.file_name().unwrap())
+            }
+        } else {
+            PathBuf::from(OsString::from_vec(
+                path_bytes[base_path_bytes.len() + 1..].to_vec(),
+            ))
+        }
+    };
+
+    Ok(index::IndexEntry {
+        path: index_path,
+        size: serde_bare::Uint(if stat.is_file() { stat.size() } else { 0 }),
+        uid: serde_bare::Uint(stat.uid() as u64),
+        gid: serde_bare::Uint(stat.gid() as u64),
+        mode: serde_bare::Uint(stat.permissions().mode() as u64),
+        ctime: serde_bare::Uint(stat.ctime() as u64),
+        ctime_nsec: serde_bare::Uint(stat.ctime_nsec() as u64),
+        mtime: serde_bare::Uint(stat.mtime() as u64),
+        mtime_nsec: serde_bare::Uint(stat.mtime_nsec() as u64),
+        nlink: serde_bare::Uint(stat.nlink()),
+        dev_major: serde_bare::Uint(dev_major as u64),
+        dev_minor: serde_bare::Uint(dev_minor as u64),
+        // To be normalized later in the pipeline.
+        norm_dev: serde_bare::Uint(stat.dev()),
+        ino: serde_bare::Uint(stat.ino()),
+        // Dummy value, set by caller.
+        data_cursor: index::RelativeDataCursor {
+            chunk_delta: serde_bare::Uint(0),
+            start_byte_offset: serde_bare::Uint(0),
+            end_byte_offset: serde_bare::Uint(0),
+        },
+        sparse,
+        xattrs,
+        link_target,
+        data_hash,
+    })
+}
+
+#[derive(Default)]
+pub struct DevNormalizer {
+    count: u64,
+    tab: HashMap<u64, u64>,
+}
+
+impl DevNormalizer {
+    pub fn new() -> Self {
+        DevNormalizer {
+            count: 0,
+            tab: HashMap::new(),
+        }
+    }
+
+    pub fn normalize(&mut self, dev: u64) -> u64 {
+        match self.tab.get(&dev) {
+            Some(nd) => *nd,
+            None => {
+                let nd = self.count;
+                self.count += 1;
+                self.tab.insert(dev, nd);
+                nd
+            }
+        }
+    }
+}
+
+pub struct FsIndexerOptions {
+    pub exclusions: globset::GlobSet,
+    pub exclusion_markers: std::collections::HashSet<std::ffi::OsString>,
+    pub want_xattrs: bool,
+    pub want_sparseness: bool,
+    pub want_hash: bool,
+    pub one_file_system: bool,
+    pub ignore_permission_errors: bool,
+}
+
+pub struct FsIndexer {
+    base_dir: PathBuf,
+    fs_walker: FsWalker,
+    dev_normalizer: DevNormalizer,
+    opts: FsIndexerOptions,
+}
+
+impl FsIndexer {
+    pub fn new(paths: &[PathBuf], mut opts: FsIndexerOptions) -> Result<FsIndexer, anyhow::Error> {
+        let (base_dir, fs_walker) = FsWalker::new(
+            paths,
+            FsWalkerOptions {
+                exclusions: std::mem::take(&mut opts.exclusions),
+                exclusion_markers: std::mem::take(&mut opts.exclusion_markers),
+                one_file_system: opts.one_file_system,
+                ignore_permission_errors: opts.ignore_permission_errors,
+            },
+        )?;
+        Ok(FsIndexer {
+            base_dir,
+            fs_walker,
+            dev_normalizer: DevNormalizer::new(),
+            opts,
+        })
+    }
+}
+
+impl Iterator for FsIndexer {
+    type Item = Result<(PathBuf, index::IndexEntry), anyhow::Error>;
+
+    fn next(&mut self) -> Option<Result<(PathBuf, index::IndexEntry), anyhow::Error>> {
+        match self.fs_walker.next() {
+            Some(Ok(path)) => match index_entry_from_fs(&self.base_dir, &path, &self.opts) {
+                Ok(mut ent) => {
+                    ent.norm_dev.0 = self.dev_normalizer.normalize(ent.norm_dev.0);
+                    Some(Ok((path, ent)))
+                }
+                Err(err) if fsutil::likely_smear_error(&err) => self.next(),
+                Err(err)
+                    if self.opts.ignore_permission_errors
+                        && err.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    self.next()
+                }
+                Err(err) => Some(Err(err.into())),
+            },
+            Some(Err(err)) => Some(Err(err)),
+            None => None,
         }
     }
 }

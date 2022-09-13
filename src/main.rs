@@ -20,7 +20,6 @@ pub mod fsutil;
 pub mod hex;
 pub mod htree;
 pub mod index;
-pub mod indexer;
 pub mod indexer2;
 pub mod ioutil;
 pub mod keys;
@@ -28,6 +27,7 @@ pub mod migrate;
 pub mod oplog;
 pub mod pem;
 pub mod protocol;
+pub mod putpipeline;
 pub mod query;
 pub mod querycache;
 pub mod repository;
@@ -1267,16 +1267,10 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         one_file_system,
         file_action_log_fn,
         ignore_permission_errors,
+        send_log,
     };
 
-    let (id, stats) = client::send(
-        ctx,
-        &mut serve_out,
-        &mut serve_in,
-        send_log,
-        tags,
-        data_source,
-    )?;
+    let (id, stats) = client::send(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -1838,9 +1832,9 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         if !query.is_empty() && (query[0].starts_with("./") || query[0].starts_with('/')) {
             let paths: Vec<PathBuf> = query.iter().map(PathBuf::from).collect();
             let mut ciw = index::CompressedIndexWriter::new();
-            for indexed_dir in indexer::FsIndexer::new(
+            for ent in indexer2::FsIndexer::new(
                 &paths,
-                indexer::FsIndexerOptions {
+                indexer2::FsIndexerOptions {
                     exclusions: globset::GlobSet::empty(),
                     exclusion_markers: std::collections::HashSet::new(),
                     want_xattrs: matches.opt_present("xattrs"),
@@ -1850,10 +1844,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     ignore_permission_errors: false,
                 },
             )? {
-                let indexed_dir = indexed_dir?;
-                for index_ent in indexed_dir.index_ents {
-                    ciw.add(&index_ent);
-                }
+                ciw.add(&ent?.1);
             }
             to_diff.push(ciw.finish())
         } else {
@@ -2932,18 +2923,21 @@ fn test_walk(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let dirs: Vec<PathBuf> = matches.free.iter().map(|x| PathBuf::from(x)).collect();
 
-    let walker_opts = indexer2::FsWalkerOptions {
+    let indexer_opts = indexer2::FsIndexerOptions {
         exclusions: globset::GlobSetBuilder::new().build().unwrap(),
         exclusion_markers: std::collections::HashSet::new(),
         one_file_system: false,
         ignore_permission_errors: false,
+        want_hash: false,
+        want_sparseness: false,
+        want_xattrs: false,
     };
 
-    let (_, fs_walker) = indexer2::FsWalker::new(&dirs, walker_opts).unwrap();
+    let indexer = indexer2::FsIndexer::new(&dirs, indexer_opts).unwrap();
 
-    for p in fs_walker {
-        let p = p?;
-        print!("{}\n", p.to_string_lossy());
+    for ent in indexer {
+        let ent = ent?;
+        print!("{:?}\n", ent);
     }
 
     Ok(())

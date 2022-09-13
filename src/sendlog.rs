@@ -183,7 +183,7 @@ impl<'a> SendLogSession<'a> {
 
     pub fn perform_cache_invalidations(&self, had_send_id: bool) -> Result<(), anyhow::Error> {
         if !self.tx_active {
-            panic!()
+            anyhow::bail!("no active transaction");
         };
 
         let last_send_id = self.last_send_id()?;
@@ -317,7 +317,7 @@ impl<'a> SendLogSession<'a> {
         Ok(())
     }
 
-    pub fn commit(mut self, id: &Xid) -> Result<(), anyhow::Error> {
+    pub fn commit(&mut self, id: &Xid) -> Result<(), anyhow::Error> {
         if !self.tx_active {
             anyhow::bail!("no active transaction");
         };

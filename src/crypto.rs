@@ -255,6 +255,21 @@ impl EncryptionContext {
         ct[ct_len - self.ephemeral_pk.bytes.len()..].clone_from_slice(&self.ephemeral_pk.bytes[..]);
         ct
     }
+
+    #[allow(clippy::uninit_vec)]
+    pub fn encrypt_data2(&mut self, pt: Vec<u8>) -> Vec<u8> {
+        let ct_len = pt.len() + BOX_NONCEBYTES + BOX_MACBYTES + self.ephemeral_pk.bytes.len();
+        let mut ct = Vec::with_capacity(ct_len);
+        unsafe { ct.set_len(ct_len) };
+        box_encrypt(
+            &mut ct[..ct_len - self.ephemeral_pk.bytes.len()],
+            &pt,
+            &mut self.nonce,
+            &self.ephemeral_bk,
+        );
+        ct[ct_len - self.ephemeral_pk.bytes.len()..].clone_from_slice(&self.ephemeral_pk.bytes[..]);
+        ct
+    }
 }
 
 #[derive(Clone)]
