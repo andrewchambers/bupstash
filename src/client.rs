@@ -1,9 +1,7 @@
-use super::acache;
 use super::address::*;
 use super::compression;
 use super::crypto;
 use super::fsutil;
-use super::fsutil::likely_smear_error;
 use super::htree;
 use super::index;
 use super::indexer2;
@@ -21,7 +19,6 @@ use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::ffi::OsStr;
-use std::fmt::Write as FmtWrite;
 use std::io::{Read, Seek, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
@@ -29,11 +26,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-
-// These chunk parameters could be investigated and tuned.
-
-pub const CHUNK_MIN_SIZE: usize = 32 * 1024;
-pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
@@ -707,8 +699,21 @@ pub fn send(
             exclusions,
             exclusion_markers,
         } => {
-            todo!();
-            // session.send_dir(paths, exclusions, exclusion_markers)?;
+            let indexer = indexer2::FsIndexer::new(
+                &paths,
+                indexer2::FsIndexerOptions {
+                    one_file_system: ctx.one_file_system,
+                    want_xattrs: ctx.want_xattrs,
+                    want_sparseness: true,
+                    want_hash: false,
+                    ignore_permission_errors: ctx.ignore_permission_errors,
+                    exclusions,
+                    exclusion_markers,
+                },
+            )?;
+            let (data_tree, index_tree, stats) =
+                putpipeline::send_files(send_pipeline_ctx, r, w, indexer)?;
+            (data_tree, Some(index_tree), stats)
         }
     };
 
@@ -906,6 +911,8 @@ pub fn request_index(
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
     let bytes_received = receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
     if bytes_received != decrypted_metadata.index_size.0 {
+        dbg!(bytes_received);
+        dbg!(decrypted_metadata.index_size.0);
         anyhow::bail!(
             "expected index size does not match actual index size, possible corruption detected"
         );
@@ -983,7 +990,6 @@ fn write_indexed_data_as_tarball(
     let mut copy_out_and_hash =
         |out: &mut dyn Write, mut n: u64| -> Result<blake3::Hash, anyhow::Error> {
             let mut hasher = blake3::Hasher::new();
-
             'read: while n != 0 {
                 let mut remaining;
                 loop {

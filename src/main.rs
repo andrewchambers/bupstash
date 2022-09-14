@@ -2413,8 +2413,8 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let do_print = matches.opt_present("print");
     let do_print_chunk_size = matches.opt_present("print-chunk-size");
 
-    let min_size = client::CHUNK_MIN_SIZE;
-    let max_size = client::CHUNK_MAX_SIZE;
+    let min_size = putpipeline::CHUNK_MIN_SIZE;
+    let max_size = putpipeline::CHUNK_MAX_SIZE;
 
     let mut chunker =
         chunker::RollsumChunker::new(crypto::GearHashKey::new().gear_tab(), min_size, max_size);

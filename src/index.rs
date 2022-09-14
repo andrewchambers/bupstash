@@ -31,7 +31,7 @@ pub enum VersionedIndexEntry {
     Reserved3,
 }
 
-const CURRENT_INDEX_ENTRY_KIND: u8 = 3;
+const CURRENT_INDEX_ENTRY_KIND: u8 = 4;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub enum IndexEntryKind {

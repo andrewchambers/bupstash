@@ -22,14 +22,13 @@ use super::oplog;
 use super::protocol;
 use super::rollsum;
 use super::sendlog;
-use super::xid::Xid;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-pub struct EntBatcher {
+struct EntBatcher {
     indexer: indexer2::FsIndexer,
     buffered: Option<(PathBuf, index::IndexEntry)>,
 }
@@ -54,8 +53,8 @@ impl Iterator for EntBatcher {
     type Item = Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Error>;
 
     fn next(&mut self) -> Option<Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Error>> {
-        const MAX_BATCH_BYTES: u64 = 1024 * 1024 * 1024 * 32;
-        const MAX_BATCH_ENTRIES: usize = 10000;
+        const MAX_BATCH_BYTES: u64 = 1024 * 1024 * 128;
+        const MAX_BATCH_ENTRIES: usize = 128;
 
         let mut batch_slashes: usize = 0;
         let mut batch_bytes: u64 = 0;
@@ -233,26 +232,41 @@ struct Sender<'a, 'b> {
 
 impl<'a, 'b> Sender<'a, 'b> {
     fn write_chunk(&self, addr: &Address, data: std::vec::Vec<u8>) -> Result<(), anyhow::Error> {
-        let mut acache = self.acache.lock().unwrap();
-        if !acache.add(addr) {
-            return Ok(());
+        {
+            let mut acache = self.acache.lock().unwrap();
+            if !acache.add(addr) {
+                return Ok(());
+            }
         }
-        drop(acache);
 
         match &self.send_log_session {
             Some(session) => {
-                let session = session.lock().unwrap();
-                if !session.add_address(addr)? {
-                    return Ok(());
+                {
+                    let session = session.lock().unwrap();
+                    if session.add_address_if_cached(addr)? {
+                        return Ok(());
+                    }
                 }
-                drop(session)
-            }
-            None => (),
-        }
 
-        let mut conn = self.conn.lock().unwrap();
-        conn.write_chunk(addr, data)?;
-        drop(conn);
+                {
+                    let mut conn = self.conn.lock().unwrap();
+                    conn.write_chunk(addr, data)?;
+                }
+
+                {
+                    // Ensure we add the address to the sendlog AFTER it has
+                    // been written to the connection so checkpoints
+                    // won't incorrectly mark a chunk as sent when it
+                    // hasnt been confirmed by a corresponding flush.
+                    let session = session.lock().unwrap();
+                    session.add_address(addr)?;
+                }
+            }
+            None => {
+                let mut conn = self.conn.lock().unwrap();
+                conn.write_chunk(addr, data)?;
+            }
+        }
 
         Ok(())
     }
@@ -389,6 +403,211 @@ pub fn send_data(
     ))
 }
 
+fn chunk_and_hash_file_data(
+    ctx: &mut SendContext,
+    sender: &Sender,
+    f: std::fs::File,
+    data_chunker: &mut chunker::RollsumChunker,
+    data_addresses: &mut Vec<Address>,
+    ent: &mut index::IndexEntry,
+) -> Result<(), anyhow::Error> {
+    let mut f = ioutil::TeeReader::new(f, blake3::Hasher::new());
+    let mut buf = [0; 8192]; // XXX TODO can we avoid initializing this?
+    let mut file_len = 0;
+
+    loop {
+        match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n_read) => {
+                file_len += n_read as u64;
+                let mut to_chunk = &buf[..n_read];
+                while !to_chunk.is_empty() {
+                    let (n_chunked, maybe_chunk) = data_chunker.add_bytes(to_chunk);
+                    to_chunk = &to_chunk[n_chunked..];
+                    if let Some(chunk) = maybe_chunk {
+                        let chunk_len = chunk.len() as u64;
+                        let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
+                        let chunk = compression::compress(ctx.compression, chunk);
+                        let chunk = ctx.data_ectx.encrypt_data2(chunk);
+                        sender.write_chunk(&address, chunk)?;
+                        data_addresses.push(address);
+                        ctx.progress.inc(chunk_len);
+                    }
+                }
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    if file_len != ent.size.0 {
+        ent.size.0 = file_len;
+    }
+
+    let (_, file_hasher) = f.into_inner();
+    ent.data_hash = index::ContentCryptoHash::Blake3(file_hasher.finalize().into());
+    Ok(())
+}
+
+fn process_file_batch(
+    ctx: &mut SendContext,
+    sender: &Sender,
+    data_chunker: &mut chunker::RollsumChunker,
+    file_batch: &mut Vec<(PathBuf, index::IndexEntry)>,
+) -> Result<Vec<Address>, anyhow::Error> {
+    ctx.progress
+        .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
+
+    let mut stat_cache_key = None;
+
+    let cache_lookup = if ctx.use_stat_cache && ctx.send_log_session.is_some() {
+        let mut hash_state = crypto::HashState::new(Some(&ctx.idx_hash_key));
+        let mut hash_buf = Vec::with_capacity(1024);
+        for (path, ent) in file_batch.iter() {
+            hash_buf.truncate(0);
+            hash_buf.write_all(path.as_os_str().as_bytes()).unwrap();
+            serde_bare::to_writer(&mut hash_buf, ent).unwrap();
+            hash_state.update(&hash_buf);
+        }
+        stat_cache_key = Some(hash_state.finish());
+        ctx.send_log_session
+            .as_ref()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .stat_cache_lookup_and_update(&stat_cache_key.unwrap())?
+    } else {
+        None
+    };
+
+    let data_addresses = match cache_lookup {
+        Some(cache_entry) => {
+            let mut uncompressed_data_size = 0;
+            for (i, (ref _path, ref mut ent)) in file_batch.iter_mut().enumerate() {
+                uncompressed_data_size += ent.size.0;
+                // XXX
+                // ctx.log_file_action('~', ent.type_display_char(), path)?;
+                ent.data_hash = cache_entry.hashes[i];
+                ent.data_cursor = cache_entry.data_cursors[i];
+            }
+            ctx.progress.inc(uncompressed_data_size);
+            cache_entry.addresses
+        }
+        None => {
+            let mut file_opener = fprefetch::ReadaheadFileOpener::new();
+            let mut bad_cache_ent = false;
+
+            let mut data_cursors: Vec<index::RelativeDataCursor> =
+                Vec::with_capacity(file_batch.len());
+            let mut content_hashes: Vec<index::ContentCryptoHash> =
+                Vec::with_capacity(file_batch.len());
+            let mut data_addresses = Vec::with_capacity(file_batch.len());
+
+            // Setup the file readahead immediately.
+            for (path, _) in file_batch.iter().filter(|x| x.1.is_file()) {
+                file_opener.add_to_queue(path.to_path_buf());
+            }
+
+            let file_batch_len = file_batch.len();
+
+            for (i, (ref _path, ref mut ent)) in file_batch.iter_mut().enumerate() {
+                // XXX
+                // self.log_file_action('+', ent.type_display_char(), &path)?;
+
+                let ent_data_chunk_start_idx = data_addresses.len() as u64;
+                let ent_start_byte_offset = data_chunker.buffered_count() as u64;
+
+                if ent.is_file() {
+                    match file_opener.next_file().unwrap() {
+                        (_, Ok(f)) => {
+                            let stat_size = ent.size.0;
+                            chunk_and_hash_file_data(
+                                ctx,
+                                &sender,
+                                f,
+                                data_chunker,
+                                &mut data_addresses,
+                                ent,
+                            )?;
+                            if stat_size != ent.size.0 {
+                                // The files size changed, don't cache
+                                // this result in the stat cache.
+                                bad_cache_ent = true;
+                            }
+                        }
+                        (_, Err(err))
+                            if fsutil::likely_smear_error(&err)
+                                || (ctx.ignore_permission_errors
+                                    && err.kind() == std::io::ErrorKind::PermissionDenied) =>
+                        {
+                            // This can happen if the file was deleted,
+                            // the filesystem was unmounted during upload,
+                            // or the file permissions were changed changed.
+                            // We simply skip this entry and don't cache the result.
+                            bad_cache_ent = true;
+                            ent.path = PathBuf::from(""); // Empty path as a marker for bad entries.
+                        }
+                        (ent_path, Err(err)) => {
+                            anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
+                        }
+                    };
+                }
+
+                if i == file_batch_len - 1 {
+                    // Force a new chunk for the final entry so we can
+                    // cache batches as a single block.
+                    if let Some(chunk) = data_chunker.force_split() {
+                        let chunk_len = chunk.len() as u64;
+                        let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
+                        let chunk = compression::compress(ctx.compression, chunk);
+                        let chunk = ctx.data_ectx.encrypt_data2(chunk);
+                        sender.write_chunk(&address, chunk)?;
+                        data_addresses.push(address);
+                        ctx.progress.inc(chunk_len);
+                    }
+                }
+
+                let ent_data_chunk_end_idx = data_addresses.len() as u64;
+                let ent_end_byte_offset = data_chunker.buffered_count() as u64;
+
+                ent.data_cursor = index::RelativeDataCursor {
+                    chunk_delta: serde_bare::Uint(
+                        ent_data_chunk_end_idx - ent_data_chunk_start_idx,
+                    ),
+                    start_byte_offset: serde_bare::Uint(ent_start_byte_offset),
+                    end_byte_offset: serde_bare::Uint(ent_end_byte_offset),
+                };
+
+                data_cursors.push(ent.data_cursor);
+                content_hashes.push(ent.data_hash);
+            }
+
+            if bad_cache_ent {
+                file_batch.retain(|(_, ent)| !ent.path.as_os_str().is_empty());
+            }
+
+            if ctx.send_log_session.is_some() && ctx.use_stat_cache && !bad_cache_ent {
+                ctx.send_log_session
+                    .as_ref()
+                    .unwrap()
+                    .lock()
+                    .unwrap()
+                    .add_stat_cache_data(
+                        &stat_cache_key.unwrap()[..],
+                        &sendlog::StatCacheEntry {
+                            addresses: data_addresses.clone(), // TODO XXX don't clone.
+                            data_cursors,
+                            hashes: content_hashes,
+                        },
+                    )?;
+            }
+
+            data_addresses
+        }
+    };
+
+    Ok(data_addresses)
+}
+
 pub fn send_files(
     mut ctx: SendContext,
     r: &mut dyn Read,
@@ -402,8 +621,6 @@ pub fn send_files(
         chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
     let mut data_chunker =
         chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
-
-    let mut file_data_buf = vec![0; 512 * 1024 * 1024];
 
     let mut sender = Sender {
         acache: Mutex::new(acache::ACache::new(ACACHE_SIZE)),
@@ -428,217 +645,32 @@ pub fn send_files(
     for file_batch in EntBatcher::new(files) {
         let mut file_batch = file_batch?;
 
-        ctx.progress
-            .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
-
-        let mut stat_cache_key = None;
-
-        let cache_lookup = if ctx.use_stat_cache && ctx.send_log_session.is_some() {
-            let mut hash_state = crypto::HashState::new(Some(&ctx.idx_hash_key));
-            let mut hash_buf = Vec::with_capacity(1024);
-            for (path, ent) in file_batch.iter() {
-                hash_buf.truncate(0);
-                hash_buf.write_all(path.as_os_str().as_bytes()).unwrap();
-                serde_bare::to_writer(&mut hash_buf, ent).unwrap();
-                hash_state.update(&hash_buf);
-            }
-            stat_cache_key = Some(hash_state.finish());
-            ctx.send_log_session
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .stat_cache_lookup(&stat_cache_key.unwrap())?
-        } else {
-            None
-        };
-
-        let mut data_addresses;
-
-        match cache_lookup {
-            Some(cache_entry) => {
-                uncompressed_data_size += cache_entry.total_size;
-                ctx.progress.inc(cache_entry.total_size);
-                for (i, (ref _path, ref mut index_ent)) in file_batch.iter_mut().enumerate() {
-                    // XXX
-                    // ctx.log_file_action('~', index_ent.type_display_char(), path)?;
-                    index_ent.data_hash = cache_entry.hashes[i];
-                    index_ent.data_cursor = cache_entry.data_cursors[i];
-                }
-                data_addresses = cache_entry.addresses;
-            }
-            None => {
-                let mut file_opener = fprefetch::ReadaheadFileOpener::new();
-                let mut bad_cache_ent = false;
-                let mut dir_data_size: u64 = 0;
-                let mut data_chunk_count: u64 = 0;
-
-                let mut data_cursors: Vec<index::RelativeDataCursor> =
-                    Vec::with_capacity(file_batch.len());
-
-                let mut content_hashes: Vec<index::ContentCryptoHash> =
-                    Vec::with_capacity(file_batch.len());
-
-                data_addresses = Vec::with_capacity(file_batch.len());
-
-                // Setup the file readahead immediately.
-                for (path, _) in file_batch.iter().filter(|x| x.1.is_file()) {
-                    file_opener.add_to_queue(path.to_path_buf());
-                }
-
-                let file_batch_len = file_batch.len();
-
-                'add_dir_ents: for (i, (ref _path, ref mut index_ent)) in
-                    file_batch.iter_mut().enumerate()
-                {
-                    // XXX
-                    // self.log_file_action('+', index_ent.type_display_char(), &path)?;
-
-                    let ent_data_chunk_start_idx = data_chunk_count;
-                    let ent_start_byte_offset = data_chunker.buffered_count() as u64;
-
-                    if index_ent.is_file() {
-                        let mut f = match file_opener.next_file().unwrap() {
-                            (_, Ok(f)) => ioutil::TeeReader::new(f, blake3::Hasher::new()),
-
-                            (_, Err(err)) if fsutil::likely_smear_error(&err) => {
-                                // This can happen if the file was deleted,
-                                // or the filesystem was unmounted during upload.
-                                // We simply skip this entry but don't cache the result.
-                                bad_cache_ent = true;
-                                continue 'add_dir_ents;
-                            }
-
-                            (_, Err(err))
-                                if ctx.ignore_permission_errors
-                                    && err.kind() == std::io::ErrorKind::PermissionDenied =>
-                            {
-                                bad_cache_ent = true;
-                                continue 'add_dir_ents;
-                            }
-
-                            (ent_path, Err(err)) => {
-                                anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
-                            }
-                        };
-
-                        let mut file_len = 0;
-                        loop {
-                            match f.read(&mut file_data_buf) {
-                                Ok(0) => break,
-                                Ok(n_read) => {
-                                    file_len += n_read as u64;
-                                    uncompressed_data_size += n_read as u64;
-                                    dir_data_size += n_read as u64;
-                                    let mut n_chunked = 0;
-                                    while n_chunked != n_read {
-                                        let (n, maybe_chunk) = data_chunker
-                                            .add_bytes(&file_data_buf[n_chunked..n_read]);
-                                        n_chunked += n;
-                                        if let Some(chunk) = maybe_chunk {
-                                            let data_len = chunk.len() as u64;
-                                            data_chunk_count += 1;
-                                            let address = crypto::keyed_content_address(
-                                                &chunk,
-                                                &ctx.data_hash_key,
-                                            );
-                                            let chunk =
-                                                compression::compress(ctx.compression, chunk);
-                                            let chunk = ctx.data_ectx.encrypt_data2(chunk);
-                                            sender.write_chunk(&address, chunk)?;
-                                            data_addresses.push(address);
-                                            ctx.progress.inc(data_len);
-                                        }
-                                    }
-                                }
-                                Err(err) => return Err(err.into()),
-                            }
-                        }
-
-                        if file_len != index_ent.size.0 {
-                            bad_cache_ent = true;
-                            // The true size is what we read from disk.
-                            index_ent.size.0 = file_len;
-                        }
-
-                        let (_, file_hasher) = f.into_inner();
-
-                        index_ent.data_hash =
-                            index::ContentCryptoHash::Blake3(file_hasher.finalize().into());
-                    }
-
-                    if i == file_batch_len - 1 {
-                        // Force a new chunk for the final entry so we can
-                        // cache batches as a single block.
-                        if let Some(chunk) = data_chunker.force_split() {
-                            let data_len = chunk.len() as u64;
-                            uncompressed_data_size += data_len;
-                            data_chunk_count += 1;
-                            let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
-                            let chunk = compression::compress(ctx.compression, chunk);
-                            let chunk = ctx.data_ectx.encrypt_data2(chunk);
-                            sender.write_chunk(&address, chunk)?;
-                            data_addresses.push(address);
-                            ctx.progress.inc(data_len);
-                        }
-                    }
-
-                    let ent_data_chunk_end_idx = data_chunk_count;
-                    let ent_end_byte_offset = data_chunker.buffered_count() as u64;
-
-                    index_ent.data_cursor = index::RelativeDataCursor {
-                        chunk_delta: serde_bare::Uint(
-                            ent_data_chunk_end_idx - ent_data_chunk_start_idx,
-                        ),
-                        start_byte_offset: serde_bare::Uint(ent_start_byte_offset),
-                        end_byte_offset: serde_bare::Uint(ent_end_byte_offset),
-                    };
-
-                    data_cursors.push(index_ent.data_cursor);
-                    content_hashes.push(index_ent.data_hash)
-                }
-
-                if ctx.send_log_session.is_some() && ctx.use_stat_cache && !bad_cache_ent {
-                    ctx.send_log_session
-                        .as_ref()
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .add_stat_cache_data(
-                            &stat_cache_key.unwrap()[..],
-                            &sendlog::StatCacheEntry {
-                                addresses: data_addresses.clone(), // TODO XXX don't clone.
-                                data_cursors,
-                                total_size: dir_data_size,
-                                hashes: content_hashes,
-                            },
-                        )?;
-                }
-            }
-        };
+        let data_addresses =
+            process_file_batch(&mut ctx, &sender, &mut data_chunker, &mut file_batch)?;
 
         for addr in data_addresses.iter() {
             data_htree.add_data_addr(&mut sender, addr)?;
         }
 
         let mut ent_buf = Vec::with_capacity(file_batch.len() * 64);
-        for (_, ent) in file_batch.iter() {
-            serde_bare::to_writer(&mut ent_buf, &ent)?;
+        for (_, ent) in file_batch.drain(..) {
+            uncompressed_data_size += ent.size.0;
+            serde_bare::to_writer(&mut ent_buf, &index::VersionedIndexEntry::V5(ent))?;
         }
-        uncompressed_index_size += ent_buf.len();
+        uncompressed_index_size += ent_buf.len() as u64;
 
         let mut to_chunk = &ent_buf[..];
         while !to_chunk.is_empty() {
             let (n, maybe_chunk) = index_chunker.add_bytes(to_chunk);
             to_chunk = &to_chunk[n..];
             if let Some(chunk) = maybe_chunk {
-                let data_len = chunk.len() as u64;
+                let chunk_len = chunk.len() as u64;
                 let address = crypto::keyed_content_address(&chunk, &ctx.idx_hash_key);
                 let chunk = compression::compress(ctx.compression, chunk);
                 let chunk = ctx.idx_ectx.encrypt_data2(chunk);
                 sender.write_chunk(&address, chunk)?;
                 index_htree.add_data_addr(&mut sender, &address)?;
-                ctx.progress.inc(data_len);
+                ctx.progress.inc(chunk_len);
             }
         }
     }
@@ -656,8 +688,7 @@ pub fn send_files(
 
     {
         let chunk = index_chunker.finish();
-        uncompressed_index_size += chunk.len() as u64;
-        if !chunk.is_empty() || uncompressed_index_size == 0 {
+        if uncompressed_index_size == 0 || !chunk.is_empty() {
             let address = crypto::keyed_content_address(&chunk, &ctx.idx_hash_key);
             let chunk = compression::compress(ctx.compression, chunk);
             let chunk = ctx.idx_ectx.encrypt_data2(chunk);
@@ -686,7 +717,7 @@ pub fn send_files(
             end_time: chrono::Utc::now(),
             uncompressed_data_size,
             uncompressed_index_size,
-            total_chunks: data_tree_meta.total_chunk_count,
+            total_chunks: data_tree_meta.total_chunk_count + index_tree_meta.total_chunk_count,
             transferred_bytes: conn.transferred_bytes,
             transferred_chunks: conn.transferred_chunks,
             added_bytes: conn.added_bytes,
