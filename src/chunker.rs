@@ -1,5 +1,6 @@
 use super::rollsum::{FastGearHasher, GearTab, RollsumSplitter};
 
+#[derive(Clone)]
 pub struct RollsumChunker {
     rs: FastGearHasher,
     min_sz: usize,

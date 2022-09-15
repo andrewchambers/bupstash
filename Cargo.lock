@@ -121,6 +121,7 @@ dependencies = [
  "once_cell",
  "path-clean",
  "pkg-config",
+ "plmap",
  "rand",
  "rangemap",
  "regex",
@@ -546,6 +547,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
 
 [[package]]
+name = "plmap"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4029ecca38e12edee53607456bb4199632dd39e2255b321e8592eb117a0fbf0a"
+dependencies = [
+ "crossbeam-channel",
+ "rustversion",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -654,6 +665,12 @@ dependencies = [
  "memchr",
  "smallvec",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97477e48b4cf8603ad5f7aaf897467cf42ab4218a38ef76fb14c2d6773a6d6a8"
 
 [[package]]
 name = "ryu"

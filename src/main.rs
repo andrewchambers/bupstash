@@ -40,9 +40,10 @@ pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
+use plmap::PipelineMap;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as FmtWrite;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -973,7 +974,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let ignore_permission_errors = matches.opt_present("ignore-permission-errors");
     let one_file_system = matches.opt_present("one-file-system");
     let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
-    let print_file_actions =
+    let _print_file_actions =
         matches.opt_present("print-file-actions") || matches.opt_present("verbose");
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
@@ -1118,6 +1119,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
     );
 
+    /*
     let file_action_log_fn = if print_file_actions {
         let log_fn: Rc<client::FileActionLogFn> = if progress.is_hidden() {
             Rc::new(Box::new(move |ln: &str| {
@@ -1135,6 +1137,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else {
         None
     };
+    */
 
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
@@ -1265,7 +1268,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         idx_ectx,
         want_xattrs,
         one_file_system,
-        file_action_log_fn,
+        // file_action_log_fn,
         ignore_permission_errors,
         send_log,
     };
@@ -2397,29 +2400,28 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
 
 fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
-    opts.optflag("", "chunk", "Do rollsum chunking.");
+    opts.optopt("", "compression", "Compression algorithm.", "ALGO");
     opts.optflag("", "compress", "Compress chunks.");
     opts.optflag("", "address", "Compute chunk content addresses.");
     opts.optflag("", "encrypt", "Encrypt chunks.");
     opts.optflag("", "print", "Print data to stdout.");
+    opts.optflag("", "pipelining", "Do parallel pipelining.");
     opts.optflag("", "print-chunk-size", "Print chunk sizes.");
 
     let matches = parse_cli_opts(opts, &args[..]);
 
-    let do_chunking = matches.opt_present("chunk");
+    let compression_scheme = {
+        let scheme = matches
+            .opt_str("compression")
+            .unwrap_or_else(|| "".to_string());
+        compression::parse_scheme(&scheme)?
+    };
+
     let do_compress = matches.opt_present("compress");
     let do_address = matches.opt_present("address");
     let do_encrypt = matches.opt_present("encrypt");
     let do_print = matches.opt_present("print");
-    let do_print_chunk_size = matches.opt_present("print-chunk-size");
-
-    let min_size = putpipeline::CHUNK_MIN_SIZE;
-    let max_size = putpipeline::CHUNK_MAX_SIZE;
-
-    let mut chunker =
-        chunker::RollsumChunker::new(crypto::GearHashKey::new().gear_tab(), min_size, max_size);
-
-    let mut buf = vec![0; 1024 * 1024];
+    let do_pipelining = matches.opt_present("pipelining");
 
     let (pk, _) = crypto::box_keypair();
     let psk = crypto::BoxPreSharedKey::new();
@@ -2437,57 +2439,47 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     {
         let mut outf = outf.lock();
 
-        let mut process_data = move |mut data: Vec<u8>| -> Result<(), anyhow::Error> {
-            if do_print_chunk_size {
-                writeln!(outf, "{}", data.len())?;
-            }
+        let chunker = chunker::RollsumChunker::new(
+            crypto::RollsumKey::new().gear_tab(),
+            putpipeline::CHUNK_MIN_SIZE,
+            putpipeline::CHUNK_MAX_SIZE,
+        );
 
-            if do_compress {
-                data = compression::compress(compression::Scheme::Lz4, data);
-            }
+        let chunks = putpipeline::ChunkIter::new(chunker, &mut inf);
 
+        let chunks = chunks.map(|chunk| chunk.unwrap());
+
+        let n_workers = if do_pipelining { 16 } else { 0 };
+
+        let chunks = chunks.plmap(n_workers, move |mut chunk: Vec<u8>| {
             if do_address {
-                let address = crypto::keyed_content_address(&data, &hk);
+                let address = crypto::keyed_content_address(&chunk, &hk);
                 // use address to ensure compiler can't eliminate it.
                 if address.bytes[0] == 0 {
-                    data[0] = 0;
+                    chunk[0] = 0;
                 }
             }
+            chunk
+        });
 
+        let chunks = chunks.plmap(n_workers, move |mut chunk: Vec<u8>| {
+            if do_compress {
+                chunk = compression::compress(compression_scheme, chunk);
+            }
+            chunk
+        });
+
+        let chunks = chunks.plmap(n_workers, move |mut chunk: Vec<u8>| {
             if do_encrypt {
-                data = ectx.encrypt_data(data, compression::Scheme::None);
+                chunk = ectx.encrypt_data2(chunk);
             }
+            chunk
+        });
 
+        for chunk in chunks {
             if do_print {
-                outf.write_all(&data)?;
+                outf.write_all(&chunk)?;
             }
-
-            Ok(())
-        };
-
-        loop {
-            match inf.read(&mut buf)? {
-                0 => break,
-                n_read => {
-                    if do_chunking {
-                        let mut tot_n_chunked: usize = 0;
-                        while tot_n_chunked != n_read {
-                            let (n_chunked, data) = chunker.add_bytes(&buf[tot_n_chunked..n_read]);
-                            tot_n_chunked += n_chunked;
-
-                            if let Some(data) = data {
-                                process_data(data)?;
-                            }
-                        }
-                    } else {
-                        process_data(buf[0..n_read].to_vec())?;
-                    }
-                }
-            }
-        }
-
-        if do_chunking {
-            process_data(chunker.finish())?;
         }
     }
 
