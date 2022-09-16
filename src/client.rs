@@ -24,7 +24,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, thiserror::Error)]
@@ -89,8 +88,6 @@ pub enum DataSource {
     },
 }
 
-// pub type FileActionLogFn = dyn Fn(&str) -> Result<(), anyhow::Error> + Send;
-
 pub struct SendContext {
     pub progress: indicatif::ProgressBar,
     pub compression: compression::Scheme,
@@ -108,7 +105,7 @@ pub struct SendContext {
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
     pub send_log: Option<sendlog::SendLog>,
-    // pub file_action_log_fn: Option<Rc<FileActionLogFn>>,
+    pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
 }
 
 pub fn send(
@@ -156,7 +153,7 @@ pub fn send(
         one_file_system: ctx.one_file_system,
         ignore_permission_errors: ctx.ignore_permission_errors,
         send_log_session: send_log_session.clone(),
-        // file_action_log_fn: ctx.file_action_log_fn.clone(),
+        file_action_log_fn: ctx.file_action_log_fn.clone(),
     };
 
     let (data_tree, index_tree, stats) = match data {
@@ -206,6 +203,7 @@ pub fn send(
                     ignore_permission_errors: ctx.ignore_permission_errors,
                     exclusions,
                     exclusion_markers,
+                    file_action_log_fn: ctx.file_action_log_fn.clone(),
                 },
             )?;
             let (data_tree, index_tree, stats) =
@@ -942,6 +940,7 @@ pub fn restore_to_local_dir(
                 want_hash: true,
                 one_file_system: false,
                 ignore_permission_errors: false,
+                file_action_log_fn: None,
             },
         )? {
             ciw.add(&ent?.1);

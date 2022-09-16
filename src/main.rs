@@ -46,7 +46,7 @@ use std::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
 fn die(s: String) -> ! {
     let _ = writeln!(std::io::stderr(), "{}", s);
@@ -974,7 +974,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let ignore_permission_errors = matches.opt_present("ignore-permission-errors");
     let one_file_system = matches.opt_present("one-file-system");
     let print_stats = matches.opt_present("print-stats") || matches.opt_present("verbose");
-    let _print_file_actions =
+    let print_file_actions =
         matches.opt_present("print-file-actions") || matches.opt_present("verbose");
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
@@ -1119,17 +1119,27 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             .template("[{elapsed_precise}] {wide_msg} [{bytes} sent, {bytes_per_sec}]"),
     );
 
-    /*
     let file_action_log_fn = if print_file_actions {
-        let log_fn: Rc<client::FileActionLogFn> = if progress.is_hidden() {
-            Rc::new(Box::new(move |ln: &str| {
-                writeln!(std::io::stderr(), "{}", ln)?;
+        let log_fn: Arc<index::FileActionLogFn> = if progress.is_hidden() {
+            Arc::new(Box::new(move |action: char, ty: char, path: &Path| {
+                writeln!(
+                    std::io::stderr(),
+                    "{} {} {}",
+                    action,
+                    ty,
+                    path.as_os_str().to_string_lossy()
+                )?;
                 Ok(())
             }))
         } else {
             let progress = progress.clone();
-            Rc::new(Box::new(move |ln: &str| {
-                progress.println(ln);
+            Arc::new(Box::new(move |action: char, ty: char, path: &Path| {
+                progress.println(format!(
+                    "{} {} {}",
+                    action,
+                    ty,
+                    path.as_os_str().to_string_lossy()
+                ));
                 Ok(())
             }))
         };
@@ -1137,7 +1147,6 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     } else {
         None
     };
-    */
 
     if matches.opt_present("exec") {
         data_source = client::DataSource::Subprocess(source_args)
@@ -1268,7 +1277,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         idx_ectx,
         want_xattrs,
         one_file_system,
-        // file_action_log_fn,
+        file_action_log_fn,
         ignore_permission_errors,
         send_log,
     };
@@ -1845,6 +1854,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     want_hash: true,
                     one_file_system: false,
                     ignore_permission_errors: false,
+                    file_action_log_fn: None,
                 },
             )? {
                 ciw.add(&ent?.1);
@@ -2909,32 +2919,6 @@ fn exec_with_locks_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     anyhow::bail!("exec failed");
 }
 
-fn test_walk(args: Vec<String>) -> Result<(), anyhow::Error> {
-    let opts = default_cli_opts();
-    let matches = parse_cli_opts(opts, &args[..]);
-
-    let dirs: Vec<PathBuf> = matches.free.iter().map(|x| PathBuf::from(x)).collect();
-
-    let indexer_opts = indexer2::FsIndexerOptions {
-        exclusions: globset::GlobSetBuilder::new().build().unwrap(),
-        exclusion_markers: std::collections::HashSet::new(),
-        one_file_system: false,
-        ignore_permission_errors: false,
-        want_hash: false,
-        want_sparseness: false,
-        want_xattrs: false,
-    };
-
-    let indexer = indexer2::FsIndexer::new(&dirs, indexer_opts).unwrap();
-
-    for ent in indexer {
-        let ent = ent?;
-        print!("{:?}\n", ent);
-    }
-
-    Ok(())
-}
-
 fn main() {
     crypto::init();
     cksumvfs::register_cksumvfs();
@@ -2966,7 +2950,6 @@ fn main() {
         "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
         "rollsum-benchmark" => rollsum_benchmark(args),
-        "test-walk" => test_walk(args),
         "sync" => sync_main(args),
         "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {

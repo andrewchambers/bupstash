@@ -25,8 +25,7 @@ use super::sendlog;
 use plmap::ScopedPipelineMap;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 struct EntBatcher {
@@ -293,9 +292,6 @@ impl<'a, 'b> htree::Sink for Arc<Sender<'a, 'b>> {
     }
 }
 
-// TODO REMOVE???
-// pub type FileActionLogFn = dyn Fn(&str) -> Result<(), anyhow::Error> + Send;
-
 #[derive(Clone)]
 pub struct SendContext<'a> {
     pub progress: indicatif::ProgressBar,
@@ -311,7 +307,7 @@ pub struct SendContext<'a> {
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
     pub send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'a>>>>,
-    // pub file_action_log_fn: Option<Rc<FileActionLogFn>>,
+    pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
 }
 
 pub struct SendStats {
@@ -347,7 +343,7 @@ pub fn send_data(
 ) -> Result<(oplog::HTreeMetadata, SendStats), anyhow::Error> {
     let start_time = chrono::Utc::now();
     let mut data_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
-    let chunker = chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
+    let data_chunker = chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
 
     let mut sender = Sender {
         acache: Mutex::new(acache::ACache::new(ACACHE_SIZE)),
@@ -368,7 +364,7 @@ pub fn send_data(
 
     let mut uncompressed_data_size = 0;
 
-    for chunk in ChunkIter::new(chunker, data) {
+    for chunk in ChunkIter::new(data_chunker, data) {
         let chunk = chunk?;
         let data_len = chunk.len() as u64;
         uncompressed_data_size += data_len;
@@ -420,6 +416,7 @@ struct BatchFileProcessor<'a, 'b> {
     ctx: SendContext<'b>,
     sender: Arc<Sender<'a, 'b>>,
     data_chunker: chunker::RollsumChunker,
+    scratch_buf: Vec<u8>,
 }
 
 impl<'a, 'b> plmap::Mapper<Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Error>>
@@ -437,6 +434,18 @@ impl<'a, 'b> plmap::Mapper<Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Err
 }
 
 impl<'a, 'b> BatchFileProcessor<'a, 'b> {
+    fn log_file_action(
+        &mut self,
+        action_char: char,
+        kind_char: char,
+        p: &Path,
+    ) -> Result<(), anyhow::Error> {
+        if let Some(ref file_action_log_fn) = self.ctx.file_action_log_fn {
+            file_action_log_fn(action_char, kind_char, p)?;
+        }
+        Ok(())
+    }
+
     fn chunk_and_hash_file_data(
         &mut self,
         f: std::fs::File,
@@ -444,15 +453,14 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
         ent: &mut index::IndexEntry,
     ) -> Result<(), anyhow::Error> {
         let mut f = ioutil::TeeReader::new(f, blake3::Hasher::new());
-        let mut buf = [0; 8192]; // XXX TODO can we avoid initializing this?
         let mut file_len = 0;
 
         loop {
-            match f.read(&mut buf) {
+            match f.read(&mut self.scratch_buf) {
                 Ok(0) => break,
                 Ok(n_read) => {
                     file_len += n_read as u64;
-                    let mut to_chunk = &buf[..n_read];
+                    let mut to_chunk = &self.scratch_buf[..n_read];
                     while !to_chunk.is_empty() {
                         let (n_chunked, maybe_chunk) = self.data_chunker.add_bytes(to_chunk);
                         to_chunk = &to_chunk[n_chunked..];
@@ -515,10 +523,9 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
         let data_addresses = match cache_lookup {
             Some(cache_entry) => {
                 let mut uncompressed_data_size = 0;
-                for (i, (ref _path, ref mut ent)) in file_batch.iter_mut().enumerate() {
+                for (i, (ref path, ref mut ent)) in file_batch.iter_mut().enumerate() {
                     uncompressed_data_size += ent.size.0;
-                    // XXX
-                    // ctx.log_file_action('~', ent.type_display_char(), path)?;
+                    self.log_file_action('~', ent.type_display_char(), path)?;
                     ent.data_hash = cache_entry.hashes[i];
                     ent.data_cursor = cache_entry.data_cursors[i];
                 }
@@ -542,9 +549,8 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
 
                 let file_batch_len = file_batch.len();
 
-                for (i, (ref _path, ref mut ent)) in file_batch.iter_mut().enumerate() {
-                    // XXX
-                    // self.log_file_action('+', ent.type_display_char(), &path)?;
+                for (i, (ref path, ref mut ent)) in file_batch.iter_mut().enumerate() {
+                    self.log_file_action('+', ent.type_display_char(), &path)?;
 
                     let ent_data_chunk_start_idx = data_addresses.len() as u64;
                     let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;
@@ -674,12 +680,13 @@ pub fn send_files(
         ctx: ctx.clone(),
         sender: sender.clone(),
         data_chunker: chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE),
+        scratch_buf: vec![0; 256 * 1024],
     };
 
     let file_batches = EntBatcher::new(files);
 
     std::thread::scope(|ts| -> Result<(), anyhow::Error> {
-        for processeed_file_batch in file_batches.scoped_plmap(ts, 2, batch_processor) {
+        for processeed_file_batch in file_batches.scoped_plmap(ts, 8, batch_processor) {
             let (mut file_batch, data_addresses) = processeed_file_batch?;
 
             for addr in data_addresses.iter() {

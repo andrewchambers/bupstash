@@ -6,6 +6,8 @@ use std::io::Write;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
+pub type FileActionLogFn = dyn Fn(char, char, &Path) -> Result<(), anyhow::Error> + Send + Sync;
+
 // Deprecated Xattr format for backwards compatibility.
 pub type StringXattrs = BTreeMap<String, Vec<u8>>;
 pub type OsStringXattrs = BTreeMap<OsString, Vec<u8>>;
