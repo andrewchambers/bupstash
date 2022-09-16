@@ -936,6 +936,18 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "one-file-system",
         "Do not cross mount points when traversing the file system.",
     );
+    opts.optopt(
+        "",
+        "parallel-stats",
+        "Number of processor threads to use for pipelined 'stat' system calls.",
+        "N",
+    );
+    opts.optopt(
+        "",
+        "parallel-file-reads",
+        "Number of processor threads to use for pipelined file reads.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args);
 
@@ -978,6 +990,18 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         matches.opt_present("print-file-actions") || matches.opt_present("verbose");
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
+
+    let parallel_stats = matches
+        .opt_str("parallel-stats")
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<usize>()
+        .unwrap_or_else(|_| 0);
+
+    let parallel_file_reads = matches
+        .opt_str("parallel-file-reads")
+        .unwrap_or_else(|| "0".to_string())
+        .parse::<usize>()
+        .unwrap_or_else(|_| 0);
 
     let compression = {
         let scheme = matches
@@ -1280,6 +1304,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         file_action_log_fn,
         ignore_permission_errors,
         send_log,
+        parallel_stats,
+        parallel_file_reads,
     };
 
     let (id, stats) = client::send(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
@@ -1855,6 +1881,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     one_file_system: false,
                     ignore_permission_errors: false,
                     file_action_log_fn: None,
+                    parallel_stats: 0,
                 },
             )? {
                 ciw.add(&ent?.1);

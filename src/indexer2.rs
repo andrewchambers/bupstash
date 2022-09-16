@@ -218,6 +218,9 @@ impl FsWalker {
                             .exclusion_markers
                             .contains(p.0.file_name().unwrap())
                         {
+                            if let Some(log) = &self.opts.file_action_log_fn {
+                                let _ = log('x', '-', &p.0);
+                            }
                             return false;
                         };
                         true
@@ -227,7 +230,15 @@ impl FsWalker {
             }
         }
 
-        children.retain(|p| !self.opts.exclusions.is_match(&p.0));
+        children.retain(|p| {
+            if self.opts.exclusions.is_match(&p.0) {
+                if let Some(log) = &self.opts.file_action_log_fn {
+                    let _ = log('x', '-', &p.0);
+                }
+                return false;
+            };
+            true
+        });
 
         children.sort_by(|l, r| {
             index::path_cmp(
@@ -524,6 +535,7 @@ pub struct FsIndexerOptions {
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
+    pub parallel_stats: usize,
 }
 
 pub struct FsIndexer {
@@ -553,7 +565,7 @@ impl FsIndexer {
             ignore_permission_errors: opts.ignore_permission_errors,
         };
 
-        let index_ents = fs_walker.plmap(8, metadata_collector);
+        let index_ents = fs_walker.plmap(opts.parallel_stats, metadata_collector);
 
         Ok(FsIndexer {
             index_ents,

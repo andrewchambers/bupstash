@@ -308,6 +308,8 @@ pub struct SendContext<'a> {
     pub ignore_permission_errors: bool,
     pub send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'a>>>>,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
+    pub parallel_stats: usize,
+    pub parallel_file_reads: usize,
 }
 
 pub struct SendStats {
@@ -686,7 +688,9 @@ pub fn send_files(
     let file_batches = EntBatcher::new(files);
 
     std::thread::scope(|ts| -> Result<(), anyhow::Error> {
-        for processeed_file_batch in file_batches.scoped_plmap(ts, 8, batch_processor) {
+        for processeed_file_batch in
+            file_batches.scoped_plmap(ts, ctx.parallel_file_reads, batch_processor)
+        {
             let (mut file_batch, data_addresses) = processeed_file_batch?;
 
             for addr in data_addresses.iter() {
