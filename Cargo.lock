@@ -548,9 +548,9 @@ checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
 
 [[package]]
 name = "plmap"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4029ecca38e12edee53607456bb4199632dd39e2255b321e8592eb117a0fbf0a"
+checksum = "b9931a61010cb5a6366cd1bf3b69418699a3d89799783e7db3f7be937a7ba31c"
 dependencies = [
  "crossbeam-channel",
  "rustversion",

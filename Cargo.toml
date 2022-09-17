@@ -53,7 +53,7 @@ xattr = "0.2"
 walkdir = "2"
 bitflags = "1"
 uriparse = "0.6"
-plmap = "0.2.2"
+plmap = "0.2.3"
 
 [dev-dependencies]
 

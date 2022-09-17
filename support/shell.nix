@@ -9,6 +9,7 @@ in
       buildInputs =  with pkgs; [ 
         clang
         clang-tools
+        linuxPackages.perf
         llvm
         entr
         minio

@@ -56,7 +56,8 @@ impl Iterator for EntBatcher {
         const MAX_BATCH_BYTES: u64 = 1024 * 1024 * 128;
         const MAX_BATCH_ENTRIES: usize = 128;
 
-        let mut batch_slashes: usize = 0;
+        let empty_path = PathBuf::from("");
+        let mut current_dir = PathBuf::new();
         let mut batch_bytes: u64 = 0;
         let mut batch = Vec::with_capacity(512);
 
@@ -67,18 +68,20 @@ impl Iterator for EntBatcher {
 
             match self.buffered_next() {
                 Some(Ok((abs_path, ent))) => {
-                    let n_slashes = abs_path
-                        .as_os_str()
-                        .as_bytes()
-                        .iter()
-                        .filter(|b| **b == b'/')
-                        .count();
-                    if batch_slashes == 0 {
-                        batch_slashes = n_slashes
-                    } else if batch_slashes != n_slashes {
+                    let entry_dir = match abs_path.parent() {
+                        Some(entry_dir) => entry_dir,
+                        None => &empty_path,
+                    };
+
+                    if batch.is_empty() {
+                        current_dir = entry_dir.to_path_buf();
+                    }
+
+                    if entry_dir != current_dir {
                         self.buffered = Some((abs_path, ent));
                         break;
-                    };
+                    }
+
                     batch_bytes += ent.size.0;
                     batch.push((abs_path, ent));
                 }
@@ -493,10 +496,6 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
         &mut self,
         file_batch: &mut Vec<(PathBuf, index::IndexEntry)>,
     ) -> Result<Vec<Address>, anyhow::Error> {
-        self.ctx
-            .progress
-            .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
-
         let mut stat_cache_key = None;
 
         let cache_lookup = if self.ctx.use_stat_cache && self.ctx.send_log_session.is_some() {
@@ -683,7 +682,18 @@ pub fn send_files(
         scratch_buf: vec![0; 256 * 1024],
     };
 
-    let file_batches = EntBatcher::new(files);
+    let progress_hidden = ctx.progress.is_hidden();
+    let batch_progress = ctx.progress.clone();
+
+    let file_batches = EntBatcher::new(files).map(move |file_batch| {
+        if !progress_hidden {
+            if let Ok(file_batch) = &file_batch {
+                batch_progress
+                    .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
+            }
+        }
+        file_batch
+    });
 
     std::thread::scope(|ts| -> Result<(), anyhow::Error> {
         for processeed_file_batch in
