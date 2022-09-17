@@ -993,15 +993,17 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let parallel_stats = matches
         .opt_str("parallel-stats")
-        .unwrap_or_else(|| "0".to_string())
+        .as_deref()
+        .unwrap_or("0")
         .parse::<usize>()
-        .unwrap_or_else(|_| 0);
+        .map_err(|err| anyhow::format_err!("error parsing --parallel-stats: {}", err))?;
 
     let parallel_file_reads = matches
         .opt_str("parallel-file-reads")
-        .unwrap_or_else(|| "0".to_string())
+        .as_deref()
+        .unwrap_or("0")
         .parse::<usize>()
-        .unwrap_or_else(|_| 0);
+        .map_err(|err| anyhow::format_err!("error parsing --parallel-file-reads: {}", err))?;
 
     let compression = {
         let scheme = matches

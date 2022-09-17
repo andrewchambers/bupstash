@@ -148,7 +148,7 @@ pub fn send(
         data_ectx: ctx.data_ectx.clone(),
         idx_hash_key: ctx.idx_hash_key.clone(),
         idx_ectx: ctx.idx_ectx.clone(),
-        gear_tab: ctx.gear_tab.clone(),
+        gear_tab: ctx.gear_tab,
         checkpoint_seconds: ctx.checkpoint_seconds,
         want_xattrs: ctx.want_xattrs,
         use_stat_cache: ctx.use_stat_cache,

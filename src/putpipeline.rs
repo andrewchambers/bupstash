@@ -75,11 +75,9 @@ impl Iterator for EntBatcher {
                         .count();
                     if batch_slashes == 0 {
                         batch_slashes = n_slashes
-                    } else {
-                        if n_slashes != batch_slashes {
-                            self.buffered = Some((abs_path, ent));
-                            break;
-                        }
+                    } else if batch_slashes != n_slashes {
+                        self.buffered = Some((abs_path, ent));
+                        break;
                     };
                     batch_bytes += ent.size.0;
                     batch.push((abs_path, ent));
@@ -552,7 +550,7 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                 let file_batch_len = file_batch.len();
 
                 for (i, (ref path, ref mut ent)) in file_batch.iter_mut().enumerate() {
-                    self.log_file_action('+', ent.type_display_char(), &path)?;
+                    self.log_file_action('+', ent.type_display_char(), path)?;
 
                     let ent_data_chunk_start_idx = data_addresses.len() as u64;
                     let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;

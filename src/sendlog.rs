@@ -407,7 +407,6 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        total_size: 123,
                         addresses: vec![],
                         data_cursors: vec![],
                         hashes: vec![],
@@ -487,7 +486,6 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        total_size: 123,
                         addresses: vec![],
                         data_cursors: vec![],
                         hashes: vec![],
@@ -561,7 +559,6 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        total_size: 123,
                         addresses: vec![],
                         data_cursors: vec![],
                         hashes: vec![],
@@ -581,7 +578,6 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        total_size: 123,
                         addresses: vec![],
                         data_cursors: vec![],
                         hashes: vec![],

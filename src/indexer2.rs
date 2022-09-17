@@ -66,7 +66,7 @@ impl FsWalker {
             };
         }
 
-        absolute_paths.sort_by(|l, r| index::path_cmp(&l, &r));
+        absolute_paths.sort_by(|l, r| index::path_cmp(l, r));
         absolute_paths.dedup();
 
         // Prune away paths that encapsulate eachother, for example
