@@ -424,7 +424,7 @@ mod tests {
 
         let mut sendlog = SendLog::open(&log_path).unwrap();
         {
-            let mut session = sendlog.session(gc_generation).unwrap();
+            let session = sendlog.session(gc_generation).unwrap();
             assert_eq!(session.last_send_id().unwrap(), Some(id));
             session.perform_cache_invalidations(false).unwrap();
             // gc_generation is the same, so we keep cache.
