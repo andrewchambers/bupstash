@@ -106,7 +106,7 @@ pub struct SendContext {
     pub ignore_permission_errors: bool,
     pub send_log: Option<sendlog::SendLog>,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub stat_threads: usize,
+    pub indexer_threads: usize,
     pub threads: usize,
 }
 
@@ -156,7 +156,7 @@ pub fn send(
         ignore_permission_errors: ctx.ignore_permission_errors,
         send_log_session: send_log_session.clone(),
         file_action_log_fn: ctx.file_action_log_fn.clone(),
-        stat_threads: ctx.stat_threads,
+        indexer_threads: ctx.indexer_threads,
         threads: ctx.threads,
     };
 
@@ -208,7 +208,7 @@ pub fn send(
                     exclusions,
                     exclusion_markers,
                     file_action_log_fn: ctx.file_action_log_fn.clone(),
-                    stat_threads: ctx.stat_threads,
+                    threads: ctx.indexer_threads,
                 },
             )?;
             let (data_tree, index_tree, stats) =
@@ -867,6 +867,7 @@ pub struct RestoreContext {
     pub metadata: oplog::VersionedItemMetadata,
     pub restore_xattrs: bool,
     pub restore_ownership: bool,
+    pub indexer_threads: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -946,7 +947,7 @@ pub fn restore_to_local_dir(
                 one_file_system: false,
                 ignore_permission_errors: false,
                 file_action_log_fn: None,
-                stat_threads: 0,
+                threads: ctx.indexer_threads,
             },
         )? {
             ciw.add(&ent?.1);

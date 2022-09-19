@@ -54,6 +54,7 @@ walkdir = "2"
 bitflags = "1"
 uriparse = "0.6"
 plmap = "0.3.0"
+num_cpus = "1"
 
 [dev-dependencies]
 

@@ -309,7 +309,7 @@ pub struct SendContext<'a> {
     pub ignore_permission_errors: bool,
     pub send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'a>>>>,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub stat_threads: usize,
+    pub indexer_threads: usize,
     pub threads: usize,
 }
 

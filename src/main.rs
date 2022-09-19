@@ -938,14 +938,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
     opts.optopt(
         "",
-        "stat-threads",
+        "indexer-threads",
         "Number of processor threads to use for pipelined parallel file metadata reads. Defaults to 1.",
         "N",
     );
     opts.optopt(
         "",
         "threads",
-        "Number of processor threads to use for parallel pipelined hashing, compression and encryption. Defaults to 0.",
+        "Number of processor threads to use for pipelined parallel reading, hashing, compression and encryption. Defaults to the number of processors.",
         "N",
     );
 
@@ -991,19 +991,23 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
-    let stat_threads = matches
-        .opt_str("stat-threads")
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
         .as_deref()
-        .unwrap_or("0")
-        .parse::<usize>()
-        .map_err(|err| anyhow::format_err!("error parsing --stat-threads: {}", err))?;
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(1))?;
 
     let threads = matches
         .opt_str("threads")
         .as_deref()
-        .unwrap_or("0")
-        .parse::<usize>()
-        .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))?;
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let compression = {
         let scheme = matches
@@ -1306,7 +1310,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         file_action_log_fn,
         ignore_permission_errors,
         send_log,
-        stat_threads,
+        indexer_threads,
         threads,
     };
 
@@ -1760,6 +1764,12 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Output format, valid values are 'human' or 'jsonl'.",
         "FORMAT",
     );
+    opts.optopt(
+        "",
+        "indexer-threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to the number of processors.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
     let utc_timestamps = matches.opt_present("utc-timestamps");
@@ -1771,6 +1781,15 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         },
         None => ListFormat::Human,
     };
+
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let mut diff_mask = index::INDEX_COMPARE_MASK_DATA_CURSORS;
 
@@ -1883,7 +1902,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     one_file_system: false,
                     ignore_permission_errors: false,
                     file_action_log_fn: None,
-                    stat_threads: 0,
+                    threads: indexer_threads,
                 },
             )? {
                 ciw.add(&ent?.1);
@@ -2601,8 +2620,23 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         "Directory to restore files into, defaults to BUPSTASH_RESTORE_DIR.",
         "PATH",
     );
+    opts.optopt(
+        "",
+        "indexer-threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to the number of processors.",
+        "N",
+    );
 
     let matches = parse_cli_opts(opts, &args[..]);
+
+    let indexer_threads = matches
+        .opt_str("indexer-threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --indexer-threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(num_cpus::get_physical()))?;
 
     let key = cli_to_key(&matches)?;
     let primary_key_id = key.primary_key_id();
@@ -2742,6 +2776,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             },
             restore_ownership: matches.opt_present("ownership"),
             restore_xattrs: matches.opt_present("xattrs"),
+            indexer_threads,
         },
         content_index,
         matches.opt_str("pick").map(|x| x.into()),

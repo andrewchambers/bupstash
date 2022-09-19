@@ -544,7 +544,7 @@ pub struct FsIndexerOptions {
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub stat_threads: usize,
+    pub threads: usize,
 }
 
 pub struct FsIndexer {
@@ -571,7 +571,7 @@ impl FsIndexer {
         // inter thread communication overhead. The allocation was measured
         // and seems to be a non issue w.r.t performance.
         let batched_paths = fs_walker.batching(|it| {
-            const METADATA_BATCH_SIZE: usize = 512;
+            const METADATA_BATCH_SIZE: usize = 256;
             let mut batch = Vec::with_capacity(METADATA_BATCH_SIZE);
             while batch.len() < METADATA_BATCH_SIZE {
                 match it.next() {
@@ -592,7 +592,7 @@ impl FsIndexer {
         };
 
         let index_ents = batched_paths
-            .plmap(opts.stat_threads, metadata_collector)
+            .plmap(opts.threads, metadata_collector)
             .flatten();
 
         Ok(FsIndexer {
