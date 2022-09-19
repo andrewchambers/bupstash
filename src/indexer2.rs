@@ -1,5 +1,6 @@
 use super::fsutil;
 use super::index;
+use itertools::Itertools;
 use plmap::PipelineMap;
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
@@ -489,13 +490,21 @@ impl MetadataCollector {
     }
 }
 
-impl plmap::Mapper<std::io::Result<PathBuf>> for MetadataCollector {
-    type Out = std::io::Result<(PathBuf, index::IndexEntry)>;
+impl plmap::Mapper<Vec<Result<PathBuf, std::io::Error>>> for MetadataCollector {
+    type Out = Vec<Result<(PathBuf, index::IndexEntry), std::io::Error>>;
 
-    fn apply(&mut self, path: std::io::Result<PathBuf>) -> Self::Out {
-        let path = path?;
-        let ent = self.index_entry_from_fs(&path)?;
-        Ok((path, ent))
+    fn apply(&mut self, paths: Vec<Result<PathBuf, std::io::Error>>) -> Self::Out {
+        let mut ents = Vec::with_capacity(paths.len());
+        for path in paths {
+            match path {
+                Ok(path) => match self.index_entry_from_fs(&path) {
+                    Ok(ent) => ents.push(Ok((path, ent))),
+                    Err(err) => ents.push(Err(err)),
+                },
+                Err(err) => ents.push(Err(err)),
+            }
+        }
+        ents
     }
 }
 
@@ -535,11 +544,12 @@ pub struct FsIndexerOptions {
     pub one_file_system: bool,
     pub ignore_permission_errors: bool,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub parallel_stats: usize,
+    pub stat_threads: usize,
 }
 
 pub struct FsIndexer {
-    index_ents: plmap::Pipeline<FsWalker, MetadataCollector>,
+    // This type is boxed because we can't name iterator types easily.
+    index_ents: Box<dyn Iterator<Item = Result<(PathBuf, index::IndexEntry), std::io::Error>>>,
     dev_normalizer: DevNormalizer,
     ignore_permission_errors: bool,
 }
@@ -557,6 +567,22 @@ impl FsIndexer {
             },
         )?;
 
+        // Batch paths together and stat the batches to amortize the
+        // inter thread communication overhead. The allocation was measured
+        // and seems to be a non issue w.r.t performance.
+        let batched_paths = fs_walker.batching(|it| {
+            const METADATA_BATCH_SIZE: usize = 512;
+            let mut batch = Vec::with_capacity(METADATA_BATCH_SIZE);
+            while batch.len() < METADATA_BATCH_SIZE {
+                match it.next() {
+                    Some(p) => batch.push(p),
+                    None if batch.is_empty() => return None,
+                    None => break,
+                }
+            }
+            Some(batch)
+        });
+
         let metadata_collector = MetadataCollector {
             base_path,
             want_xattrs: opts.want_xattrs,
@@ -565,10 +591,12 @@ impl FsIndexer {
             ignore_permission_errors: opts.ignore_permission_errors,
         };
 
-        let index_ents = fs_walker.plmap(opts.parallel_stats, metadata_collector);
+        let index_ents = batched_paths
+            .plmap(opts.stat_threads, metadata_collector)
+            .flatten();
 
         Ok(FsIndexer {
-            index_ents,
+            index_ents: Box::new(index_ents),
             dev_normalizer: DevNormalizer::new(),
             ignore_permission_errors: opts.ignore_permission_errors,
         })

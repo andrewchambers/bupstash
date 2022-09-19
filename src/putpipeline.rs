@@ -22,7 +22,7 @@ use super::oplog;
 use super::protocol;
 use super::rollsum;
 use super::sendlog;
-use plmap::ScopedPipelineMap;
+use plmap::{PipelineMap, ScopedPipelineMap};
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -309,8 +309,8 @@ pub struct SendContext<'a> {
     pub ignore_permission_errors: bool,
     pub send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'a>>>>,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub parallel_stats: usize,
-    pub parallel_file_reads: usize,
+    pub stat_threads: usize,
+    pub threads: usize,
 }
 
 pub struct SendStats {
@@ -365,17 +365,62 @@ pub fn send_data(
         send_log_session: ctx.send_log_session.clone(),
     };
 
-    let mut uncompressed_data_size = 0;
+    let chunks = ChunkIter::new(data_chunker, data);
 
-    for chunk in ChunkIter::new(data_chunker, data) {
-        let chunk = chunk?;
-        let data_len = chunk.len() as u64;
-        uncompressed_data_size += data_len;
-        let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
-        let chunk = compression::compress(ctx.compression, chunk);
-        let chunk = ctx.data_ectx.encrypt_data2(chunk);
+    let data_hash_key = ctx.data_hash_key.clone();
+    let compression = ctx.compression.clone();
+    let mut data_ectx = ctx.data_ectx.clone();
+
+    let pipeline_threads = ctx.threads;
+    let addressing_pipeline_len = pipeline_threads / 3;
+    let mut compressing_pipeline_len = pipeline_threads / 3;
+    let mut encrypting_pipeline_len = pipeline_threads / 3;
+
+    match pipeline_threads % 3 {
+        1 => {
+            compressing_pipeline_len += 1;
+        }
+        2 => {
+            compressing_pipeline_len += 1;
+            encrypting_pipeline_len += 1;
+        }
+        _ => (),
+    };
+
+    let addressed_chunks = chunks.plmap(
+        addressing_pipeline_len,
+        move |chunk: Result<Vec<u8>, anyhow::Error>| {
+            let chunk = chunk?;
+            let address = crypto::keyed_content_address(&chunk, &data_hash_key);
+            Ok::<_, anyhow::Error>((address, chunk))
+        },
+    );
+
+    let addressed_and_compressed_chunks = addressed_chunks.plmap(
+        compressing_pipeline_len,
+        move |chunk: Result<(Address, Vec<u8>), anyhow::Error>| {
+            let (address, chunk) = chunk?;
+            let chunk = compression::compress(compression, chunk);
+            Ok::<_, anyhow::Error>((address, chunk.len() as u64, chunk))
+        },
+    );
+
+    let addressed_and_encrypted_chunks = addressed_and_compressed_chunks.plmap(
+        encrypting_pipeline_len,
+        move |chunk: Result<(Address, u64, Vec<u8>), anyhow::Error>| {
+            let (address, data_len, chunk) = chunk?;
+            let chunk = data_ectx.encrypt_data2(chunk);
+            Ok::<_, anyhow::Error>((address, data_len, chunk))
+        },
+    );
+
+    let mut uncompressed_data_size: u64 = 0;
+
+    for chunk in addressed_and_encrypted_chunks {
+        let (address, data_len, chunk) = chunk?;
         sender.write_chunk(&address, chunk)?;
         data_htree.add_data_addr(&mut sender, &address)?;
+        uncompressed_data_size += data_len;
         ctx.progress.inc(data_len);
     }
 
@@ -695,10 +740,8 @@ pub fn send_files(
         file_batch
     });
 
-    std::thread::scope(|ts| -> Result<(), anyhow::Error> {
-        for processeed_file_batch in
-            file_batches.scoped_plmap(ts, ctx.parallel_file_reads, batch_processor)
-        {
+    crossbeam_utils::thread::scope(|ts| -> Result<(), anyhow::Error> {
+        for processeed_file_batch in file_batches.scoped_plmap(ts, ctx.threads, batch_processor) {
             let (mut file_batch, data_addresses) = processeed_file_batch?;
 
             for addr in data_addresses.iter() {
@@ -729,7 +772,8 @@ pub fn send_files(
         }
 
         Ok(())
-    })?;
+    })
+    .expect("unable to create thread scope")?;
 
     // We always need at least one chunk, so fill in the empty chunk.
     if uncompressed_data_size == 0 {

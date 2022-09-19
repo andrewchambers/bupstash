@@ -938,14 +938,14 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     );
     opts.optopt(
         "",
-        "parallel-stats",
-        "Number of processor threads to use for pipelined 'stat' system calls.",
+        "stat-threads",
+        "Number of processor threads to use for pipelined parallel file metadata reads. Defaults to 1.",
         "N",
     );
     opts.optopt(
         "",
-        "parallel-file-reads",
-        "Number of processor threads to use for pipelined file reads.",
+        "threads",
+        "Number of processor threads to use for parallel pipelined hashing, compression and encryption. Defaults to 0.",
         "N",
     );
 
@@ -991,19 +991,19 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let use_stat_cache =
         !(matches.opt_present("no-stat-caching") || matches.opt_present("no-send-log"));
 
-    let parallel_stats = matches
-        .opt_str("parallel-stats")
+    let stat_threads = matches
+        .opt_str("stat-threads")
         .as_deref()
         .unwrap_or("0")
         .parse::<usize>()
-        .map_err(|err| anyhow::format_err!("error parsing --parallel-stats: {}", err))?;
+        .map_err(|err| anyhow::format_err!("error parsing --stat-threads: {}", err))?;
 
-    let parallel_file_reads = matches
-        .opt_str("parallel-file-reads")
+    let threads = matches
+        .opt_str("threads")
         .as_deref()
         .unwrap_or("0")
         .parse::<usize>()
-        .map_err(|err| anyhow::format_err!("error parsing --parallel-file-reads: {}", err))?;
+        .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))?;
 
     let compression = {
         let scheme = matches
@@ -1306,8 +1306,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         file_action_log_fn,
         ignore_permission_errors,
         send_log,
-        parallel_stats,
-        parallel_file_reads,
+        stat_threads,
+        threads,
     };
 
     let (id, stats) = client::send(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
@@ -1883,7 +1883,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     one_file_system: false,
                     ignore_permission_errors: false,
                     file_action_log_fn: None,
-                    parallel_stats: 0,
+                    stat_threads: 0,
                 },
             )? {
                 ciw.add(&ent?.1);

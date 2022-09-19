@@ -106,8 +106,8 @@ pub struct SendContext {
     pub ignore_permission_errors: bool,
     pub send_log: Option<sendlog::SendLog>,
     pub file_action_log_fn: Option<Arc<index::FileActionLogFn>>,
-    pub parallel_stats: usize,
-    pub parallel_file_reads: usize,
+    pub stat_threads: usize,
+    pub threads: usize,
 }
 
 pub fn send(
@@ -156,8 +156,8 @@ pub fn send(
         ignore_permission_errors: ctx.ignore_permission_errors,
         send_log_session: send_log_session.clone(),
         file_action_log_fn: ctx.file_action_log_fn.clone(),
-        parallel_stats: ctx.parallel_stats,
-        parallel_file_reads: ctx.parallel_file_reads,
+        stat_threads: ctx.stat_threads,
+        threads: ctx.threads,
     };
 
     let (data_tree, index_tree, stats) = match data {
@@ -208,7 +208,7 @@ pub fn send(
                     exclusions,
                     exclusion_markers,
                     file_action_log_fn: ctx.file_action_log_fn.clone(),
-                    parallel_stats: ctx.parallel_stats,
+                    stat_threads: ctx.stat_threads,
                 },
             )?;
             let (data_tree, index_tree, stats) =
@@ -946,7 +946,7 @@ pub fn restore_to_local_dir(
                 one_file_system: false,
                 ignore_permission_errors: false,
                 file_action_log_fn: None,
-                parallel_stats: 0,
+                stat_threads: 0,
             },
         )? {
             ciw.add(&ent?.1);

@@ -548,12 +548,12 @@ checksum = "58893f751c9b0412871a09abd62ecd2a00298c6c83befa223ef98c52aef40cbe"
 
 [[package]]
 name = "plmap"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9931a61010cb5a6366cd1bf3b69418699a3d89799783e7db3f7be937a7ba31c"
+checksum = "b059a8177143e9da9d124d505feb5b5b0b03e296c9b4b09f87b82b0981e81e4c"
 dependencies = [
  "crossbeam-channel",
- "rustversion",
+ "crossbeam-utils",
 ]
 
 [[package]]
@@ -665,12 +665,6 @@ dependencies = [
  "memchr",
  "smallvec",
 ]
-
-[[package]]
-name = "rustversion"
-version = "1.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97477e48b4cf8603ad5f7aaf897467cf42ab4218a38ef76fb14c2d6773a6d6a8"
 
 [[package]]
 name = "ryu"
