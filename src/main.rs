@@ -43,7 +43,7 @@ pub mod xtar;
 use plmap::PipelineMap;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as FmtWrite;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -2423,7 +2423,7 @@ fn gc_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn recover_removed_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optflag("", "no-progress", "Suppress progress indicators.");
     opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
@@ -2456,7 +2456,7 @@ fn recover_removed(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut opts = default_cli_opts();
     opts.optopt("", "compression", "Compression algorithm.", "ALGO");
     opts.optflag("", "compress", "Compress chunks.");
@@ -2498,7 +2498,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
         let mut outf = outf.lock();
 
         let chunker = chunker::RollsumChunker::new(
-            crypto::RollsumKey::new().gear_tab(),
+            crypto::GearHashKey::new().gear_tab(),
             putpipeline::CHUNK_MIN_SIZE,
             putpipeline::CHUNK_MAX_SIZE,
         );
@@ -2546,7 +2546,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn rollsum_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+fn rollsum_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let opts = default_cli_opts();
     let matches = parse_cli_opts(opts, &args[..]);
 
@@ -2596,6 +2596,54 @@ fn rollsum_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn indexer_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let mut opts = default_cli_opts();
+    opts.optflag("", "one-file-system", "Don't traverse mount points.");
+    opts.optflag("", "want-hash", "Want hash.");
+    opts.optflag("", "sparseness", "Want spareness.");
+    opts.optflag("", "xattrs", "Want xattrs.");
+    opts.optflag("", "hash", "Want hash.");
+    opts.optflag("", "ignore-permission-errors", "Ignore permission errors.");
+    opts.optopt(
+        "",
+        "threads",
+        "Number of processor threads to use for pipelined parallel file hashing and metadata reads. Defaults to 0.",
+        "N",
+    );
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    let indexer_threads = matches
+        .opt_str("threads")
+        .as_deref()
+        .map(|n| {
+            n.parse::<usize>()
+                .map_err(|err| anyhow::format_err!("error parsing --threads: {}", err))
+        })
+        .unwrap_or_else(|| Ok(0))?;
+
+    let indexer_opts = indexer2::FsIndexerOptions {
+        exclusions: globset::GlobSetBuilder::new().build().unwrap(),
+        exclusion_markers: std::collections::HashSet::new(),
+        one_file_system: matches.opt_present("one-file-system"),
+        ignore_permission_errors: matches.opt_present("ignore-permission-errors"),
+        want_hash: matches.opt_present("hash"),
+        want_sparseness: matches.opt_present("sparseness"),
+        want_xattrs: matches.opt_present("xattrs"),
+        threads: indexer_threads,
+        file_action_log_fn: None,
+    };
+
+    let dirs: Vec<PathBuf> = matches.free.iter().map(|x| PathBuf::from(x)).collect();
+
+    let indexer = indexer2::FsIndexer::new(&dirs, indexer_opts).unwrap();
+
+    for ent in indexer {
+        print!("{}\n", ent?.0.display());
     }
 
     Ok(())
@@ -3011,9 +3059,10 @@ fn main() {
         "gc" => gc_main(args),
         "remove" | "rm" => remove_main(args),
         "serve" => serve_main(args),
-        "recover-removed" => recover_removed(args),
-        "put-benchmark" => put_benchmark(args),
-        "rollsum-benchmark" => rollsum_benchmark(args),
+        "recover-removed" => recover_removed_main(args),
+        "put-benchmark" => put_benchmark_main(args),
+        "rollsum-benchmark" => rollsum_benchmark_main(args),
+        "indexer-benchmark" => indexer_benchmark_main(args),
         "sync" => sync_main(args),
         "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {

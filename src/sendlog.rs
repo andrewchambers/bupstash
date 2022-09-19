@@ -3,6 +3,7 @@ use super::cksumvfs;
 use super::index;
 use super::xid::*;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::path::Path;
 
 pub struct SendLog {
@@ -17,10 +18,10 @@ pub struct SendLogSession<'a> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct StatCacheEntry {
-    pub addresses: Vec<Address>,
-    pub data_cursors: Vec<index::RelativeDataCursor>,
-    pub hashes: Vec<index::ContentCryptoHash>,
+pub struct StatCacheEntry<'a, 'b, 'c> {
+    pub addresses: Cow<'a, [Address]>,
+    pub data_cursors: Cow<'b, [index::RelativeDataCursor]>,
+    pub hashes: Cow<'c, [index::ContentCryptoHash]>,
 }
 
 const SCHEMA_VERSION: i64 = 6;
@@ -294,7 +295,7 @@ impl<'a> SendLogSession<'a> {
     pub fn stat_cache_lookup_and_update(
         &self,
         hash: &[u8],
-    ) -> Result<Option<StatCacheEntry>, anyhow::Error> {
+    ) -> Result<Option<StatCacheEntry<'static, 'static, 'static>>, anyhow::Error> {
         let mut stmt = self.log.db_conn.prepare_cached(
             "update StatCache set LatestSessionId = ?1 where Hash = ?2 returning Cached;",
         )?;
@@ -407,9 +408,9 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        addresses: vec![],
-                        data_cursors: vec![],
-                        hashes: vec![],
+                        addresses: Cow::Owned(vec![]),
+                        data_cursors: Cow::Owned(vec![]),
+                        hashes: Cow::Owned(vec![]),
                     },
                 )
                 .unwrap();
@@ -486,9 +487,9 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        addresses: vec![],
-                        data_cursors: vec![],
-                        hashes: vec![],
+                        addresses: Cow::Owned(vec![]),
+                        data_cursors: Cow::Owned(vec![]),
+                        hashes: Cow::Owned(vec![]),
                     },
                 )
                 .unwrap();
@@ -559,9 +560,9 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        addresses: vec![],
-                        data_cursors: vec![],
-                        hashes: vec![],
+                        addresses: Cow::Owned(vec![]),
+                        data_cursors: Cow::Owned(vec![]),
+                        hashes: Cow::Owned(vec![]),
                     },
                 )
                 .unwrap();
@@ -578,9 +579,9 @@ mod tests {
                 .add_stat_cache_data(
                     &[32; 0],
                     &StatCacheEntry {
-                        addresses: vec![],
-                        data_cursors: vec![],
-                        hashes: vec![],
+                        addresses: Cow::Owned(vec![]),
+                        data_cursors: Cow::Owned(vec![]),
+                        hashes: Cow::Owned(vec![]),
                     },
                 )
                 .unwrap();

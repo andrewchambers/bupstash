@@ -23,6 +23,7 @@ use super::protocol;
 use super::rollsum;
 use super::sendlog;
 use plmap::{PipelineMap, ScopedPipelineMap};
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -346,7 +347,8 @@ pub fn send_data(
 ) -> Result<(oplog::HTreeMetadata, SendStats), anyhow::Error> {
     let start_time = chrono::Utc::now();
     let mut data_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
-    let data_chunker = chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
+    let data_chunker =
+        chunker::RollsumChunker::new(ctx.gear_tab.clone(), CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
 
     let mut sender = Sender {
         acache: Mutex::new(acache::ACache::new(ACACHE_SIZE)),
@@ -574,7 +576,7 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                     ent.data_cursor = cache_entry.data_cursors[i];
                 }
                 self.ctx.progress.inc(uncompressed_data_size);
-                cache_entry.addresses
+                cache_entry.addresses.into_owned()
             }
             None => {
                 let mut file_opener = fprefetch::ReadaheadFileOpener::new();
@@ -673,9 +675,9 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                         .add_stat_cache_data(
                             &stat_cache_key.unwrap()[..],
                             &sendlog::StatCacheEntry {
-                                addresses: data_addresses.clone(), // TODO XXX don't clone.
-                                data_cursors,
-                                hashes: content_hashes,
+                                addresses: Cow::Borrowed(&data_addresses),
+                                data_cursors: Cow::Borrowed(&data_cursors),
+                                hashes: Cow::Borrowed(&content_hashes),
                             },
                         )?;
                 }
@@ -698,7 +700,7 @@ pub fn send_files(
     let mut data_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
     let mut index_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
     let mut index_chunker =
-        chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
+        chunker::RollsumChunker::new(ctx.gear_tab.clone(), CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
 
     let mut sender = Arc::new(Sender {
         acache: Mutex::new(acache::ACache::new(ACACHE_SIZE)),
@@ -723,7 +725,11 @@ pub fn send_files(
     let batch_processor = BatchFileProcessor {
         ctx: ctx.clone(),
         sender: sender.clone(),
-        data_chunker: chunker::RollsumChunker::new(ctx.gear_tab, CHUNK_MIN_SIZE, CHUNK_MAX_SIZE),
+        data_chunker: chunker::RollsumChunker::new(
+            ctx.gear_tab.clone(),
+            CHUNK_MIN_SIZE,
+            CHUNK_MAX_SIZE,
+        ),
         scratch_buf: vec![0; 256 * 1024],
     };
 

@@ -145,6 +145,11 @@ impl FsWalker {
             v.sort_by(|l, r| index::path_cmp(&l.0, &r.0))
         }
 
+        let base_md = match base.symlink_metadata() {
+            Ok(md) => md,
+            Err(err) => anyhow::bail!("unable to stat {:?}: {}", base, err),
+        };
+
         let start_dir = if let Some(base_parent) = base.parent() {
             base_parent.to_owned()
         } else {
@@ -152,22 +157,11 @@ impl FsWalker {
             "".into()
         };
 
-        let start_md_dir = if base.parent().is_some() {
-            start_dir.clone()
-        } else {
-            "/".into()
-        };
-
-        let start_md = match start_md_dir.symlink_metadata() {
-            Ok(md) => md,
-            Err(err) => anyhow::bail!("unable to stat {:?}: {}", start_md_dir, err),
-        };
-
         Ok((
             base,
             FsWalker {
                 opts,
-                base_dev: start_md.dev(),
+                base_dev: base_md.dev(),
                 prefilled_children,
                 buffered: VecDeque::new(),
                 work_stack: vec![vec![start_dir]],
@@ -255,9 +249,28 @@ impl FsWalker {
 
             if child_file_type.is_dir() {
                 if self.opts.one_file_system {
-                    todo!();
+                    match child_path.symlink_metadata() {
+                        Ok(stat) if stat.dev() == self.base_dev => {
+                            to_recurse.push(child_path.clone())
+                        }
+                        Ok(_) => (),
+                        Err(err)
+                            if fsutil::likely_smear_error(&err)
+                                || (self.opts.ignore_permission_errors
+                                    && err.kind() == std::io::ErrorKind::PermissionDenied) =>
+                        {
+                            ()
+                        }
+                        Err(err) => {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("unable to walk {}: {}", child_path.display(), err),
+                            ))
+                        }
+                    };
+                } else {
+                    to_recurse.push(child_path.clone());
                 }
-                to_recurse.push(child_path.clone());
             }
 
             self.buffered.push_back(child_path);
