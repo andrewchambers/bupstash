@@ -396,35 +396,35 @@ impl Drop for HashKey {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
-pub struct RollsumKey {
+pub struct GearHashKey {
     pub bytes: [u8; RANDOM_SEED_BYTES],
 }
 
-impl RollsumKey {
+impl GearHashKey {
     pub fn new() -> Self {
         let mut bytes = [0; RANDOM_SEED_BYTES];
         randombytes(&mut bytes[..]);
-        RollsumKey { bytes }
+        GearHashKey { bytes }
     }
 
     pub fn gear_tab(&self) -> rollsum::GearTab {
-        let mut tab_bytes = [0; 256 * (rollsum::WINDOW_SIZE / 8)];
+        let mut tab_bytes = [0; 256 * 4];
         randombytes_buf_deterministic(&self.bytes, &mut tab_bytes[..]);
         let mut tab = [0; 256];
-        for (i, sl) in tab_bytes.chunks(rollsum::WINDOW_SIZE / 8).enumerate() {
+        for (i, sl) in tab_bytes.chunks(4).enumerate() {
             tab[i] = u32::from_le_bytes(sl.try_into().unwrap());
         }
-        tab
+        rollsum::GearTab::from_array(tab)
     }
 }
 
-impl Default for RollsumKey {
+impl Default for GearHashKey {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for RollsumKey {
+impl Drop for GearHashKey {
     fn drop(&mut self) {
         memzero(&mut self.bytes[..]);
     }

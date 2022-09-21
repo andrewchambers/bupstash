@@ -10,7 +10,7 @@ use std::os::unix::fs::OpenOptionsExt;
 pub struct PrimaryKey {
     pub id: Xid,
     /* key used to make the rollsum unique to this key. */
-    pub rollsum_key: crypto::RollsumKey,
+    pub rollsum_key: crypto::GearHashKey,
     /*
        Hash keys are used for content addressing, similar
        to git, but with an HMAC. This means plaintext
@@ -47,7 +47,7 @@ pub struct PrimaryKey {
 pub struct SubKey {
     pub id: Xid,
     pub primary_key_id: Xid,
-    pub rollsum_key: Option<crypto::RollsumKey>,
+    pub rollsum_key: Option<crypto::GearHashKey>,
     pub data_hash_key_part_1: Option<crypto::PartialHashKey>,
     pub data_hash_key_part_2: Option<crypto::PartialHashKey>,
     pub data_pk: Option<crypto::BoxPublicKey>,
@@ -224,7 +224,7 @@ impl Key {
 impl PrimaryKey {
     pub fn gen() -> PrimaryKey {
         let id = Xid::new();
-        let rollsum_key = crypto::RollsumKey::new();
+        let rollsum_key = crypto::GearHashKey::new();
         let data_hash_key_part_1 = crypto::PartialHashKey::new();
         let data_hash_key_part_2 = crypto::PartialHashKey::new();
         let (data_pk, data_sk) = crypto::box_keypair();
@@ -262,7 +262,7 @@ impl SubKey {
             primary_key_id: k.id,
 
             rollsum_key: if put {
-                Some(crypto::RollsumKey::new())
+                Some(crypto::GearHashKey::new())
             } else {
                 None
             },
