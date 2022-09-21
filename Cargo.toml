@@ -14,6 +14,9 @@ panic = 'abort'
 codegen-units = 1
 incremental = false
 
+[features]
+simd-rollsum = []
+
 [dependencies]
 
 # More trusted dependencies

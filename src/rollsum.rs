@@ -1,46 +1,84 @@
-pub const WINDOW_SIZE: usize = 32;
+// This file contains high performance rolling hash implementations used by bupstash
+// for data deduplication - see https://en.wikipedia.org/wiki/Rolling_hash for more context.
+//
+// Bupstash initially used gear hash as described in the article above, but
+// has since adopted a modified SIMD compatible gear hash developed by Quentin Carbonneaux.
+//
+// The implementations use const generics to select how many instances of gear hash
+// are interleaved and can be experimented with via 'bupstash rollsum-benchmark'.
+//
+// Note that at the time of writing portable-simd is an unstable rust feature,
+// so to experiment with it you must run a nightly compiler and use the following flags:
+//
+// RUSTFLAGS="-C target-cpu=native" cargo build --release --features simd-rollsum
+//
+use std::sync::Arc;
 
-pub type GearTab = [u32; 256];
-
-// An implementation of 'gear hash'.
 #[derive(Clone)]
-pub struct Rollsum {
+pub struct GearTab {
+    pub data: Arc<[u32; 256]>,
+}
+
+impl GearTab {
+    pub fn from_array(data: [u32; 256]) -> GearTab {
+        GearTab {
+            data: Arc::new(data),
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn get_unchecked(&self, i: usize) -> u32 {
+        *self.data.get_unchecked(i)
+    }
+}
+
+pub trait RollsumSplitter {
+    fn window_size(&self) -> Option<usize>;
+    fn roll_bytes(&mut self, buf: &[u8]) -> Option<usize>;
+    fn reset(&mut self);
+}
+
+// The split mask controls the probability of content split point
+// we keep it as a constant for performance. It is important to note
+// that because we are shifting our gear hashes to the left, mask the top bits.
+const SPLIT_MASK: u32 = 0xfffff000; // A split every 2^20 bytes or ~ 1MiB.
+
+#[cfg(not(feature = "simd-rollsum"))]
+pub type FastGearHasher = InterleavedGearHasher<8>;
+
+#[cfg(feature = "simd-rollsum")]
+pub type FastGearHasher = SimdInterleavedGearHasher<8>;
+
+#[derive(Clone)]
+pub struct GearHasher {
+    tab: GearTab,
     h: u32,
 }
 
-impl Rollsum {
-    /// Create new Rollsum engine.
-    pub fn new() -> Self {
-        Rollsum { h: 0 }
+impl GearHasher {
+    pub fn new(tab: GearTab) -> Self {
+        GearHasher { tab, h: 0 }
+    }
+}
+
+impl RollsumSplitter for GearHasher {
+    #[inline(always)]
+    fn window_size(&self) -> Option<usize> {
+        Some(32)
     }
 
-    #[inline(always)]
-    pub fn roll_byte(&mut self, tab: &GearTab, b: u8) -> bool {
-        // Only used for testing, can be slow...
-        let b = &[b];
-        self.roll_bytes(tab, b).is_some()
-    }
-
-    #[inline(always)]
-    pub fn roll_bytes(&mut self, tab: &GearTab, buf: &[u8]) -> Option<usize> {
+    fn roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
         let mut h = self.h;
-        let bp = buf.as_ptr();
-        let end = buf.len();
-        let mut offset = 0;
-        // This is the tightest loop in bupstash,
-        // we must get rid of as many instructions as possible.
         unsafe {
-            while offset < end {
-                let b = *bp.add(offset);
-                // The << 1 rolls out previous values after WINDOW_SIZE shifts.
-                let gv = *tab.get_unchecked(b as usize);
+            for offset in 0..buf.len() {
+                let b = *buf.get_unchecked(offset);
+                let gv = self.tab.get_unchecked(b as usize);
                 h = (h << 1).wrapping_add(gv);
-                offset += 1;
                 // The chunk mask uses the upper bits, as that has influence from
                 // the whole chunk window, where the bottom bits do not.
-                if (h & 0xfffff000) == 0 {
+                if (h & SPLIT_MASK) == 0 {
                     self.h = h;
-                    return Some(offset);
+                    return Some(offset + 1);
                 }
             }
         }
@@ -48,20 +86,210 @@ impl Rollsum {
         None
     }
 
-    #[inline]
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.h = 0
     }
 }
 
-impl Default for Rollsum {
-    fn default() -> Self {
-        Rollsum::new()
+#[derive(Clone)]
+pub struct InterleavedGearHasher<const N: usize> {
+    tab: GearTab,
+    align: usize,
+    h: [u32; N],
+}
+
+impl<const N: usize> InterleavedGearHasher<N> {
+    pub fn new(tab: GearTab) -> Self {
+        InterleavedGearHasher {
+            tab,
+            align: 0,
+            h: [0; N],
+        }
+    }
+
+    fn unaligned_roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        unsafe {
+            for offset in 0..buf.len() {
+                let b = *buf.get_unchecked(offset);
+                let gv = self.tab.get_unchecked(b as usize);
+                let ha = (*self.h.get_unchecked(self.align) << 1).wrapping_add(gv);
+                *self.h.get_unchecked_mut(self.align) = ha;
+                self.align = (self.align + 1) % N;
+                if ha & SPLIT_MASK == 0 {
+                    return Some(offset + 1);
+                }
+            }
+        }
+        None
+    }
+
+    fn aligned_roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        // We put everything into registers to make the optimizers job easier.
+        let end = buf.len();
+        let aligned_end = end - (end % N);
+        let mut h = self.h;
+        let mut splits: [bool; N] = [false; N];
+        let mut offset = 0;
+
+        unsafe {
+            while offset < aligned_end {
+                for i in 0..N {
+                    let b = *buf.get_unchecked(offset + i);
+                    let gvi = self.tab.get_unchecked(b as usize);
+                    *h.get_unchecked_mut(i) = (h.get_unchecked(i) << 1).wrapping_add(gvi);
+                    *splits.get_unchecked_mut(i) = *h.get_unchecked(i) & SPLIT_MASK == 0;
+                }
+
+                for i in 0..N {
+                    *self.h.get_unchecked_mut(i) = *h.get_unchecked(i);
+                    if *splits.get_unchecked(i) {
+                        self.align = (i + 1) % N;
+                        return Some(offset + i + 1);
+                    }
+                }
+
+                self.h = h;
+                offset += N;
+            }
+        }
+        self.unaligned_roll_bytes(&buf[aligned_end..end])
+            .map(|n| aligned_end + n)
+    }
+}
+
+impl<const N: usize> RollsumSplitter for InterleavedGearHasher<N> {
+    #[inline(always)]
+    fn window_size(&self) -> Option<usize> {
+        Some(32 * N)
+    }
+
+    fn roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        let mut align_adjust = 0;
+        if self.align != 0 {
+            align_adjust = (N - self.align).min(buf.len());
+            if let Some(n) = self.unaligned_roll_bytes(&buf[0..align_adjust]) {
+                return Some(n);
+            }
+        }
+        self.aligned_roll_bytes(&buf[align_adjust..])
+            .map(|n| align_adjust + n)
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.align = 0;
+        self.h = [0; N];
+    }
+}
+
+#[cfg(feature = "simd-rollsum")]
+#[derive(Clone)]
+pub struct SimdInterleavedGearHasher<const N: usize>
+where
+    std::simd::LaneCount<N>: std::simd::SupportedLaneCount,
+{
+    tab: GearTab,
+    align: usize,
+    h: [u32; N],
+}
+
+#[cfg(feature = "simd-rollsum")]
+impl<const N: usize> SimdInterleavedGearHasher<N>
+where
+    std::simd::LaneCount<N>: std::simd::SupportedLaneCount,
+{
+    pub fn new(tab: GearTab) -> Self {
+        SimdInterleavedGearHasher {
+            tab,
+            align: 0,
+            h: [0; N],
+        }
+    }
+
+    fn unaligned_roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        unsafe {
+            for offset in 0..buf.len() {
+                let b = *buf.get_unchecked(offset);
+                let gv = self.tab.get_unchecked(b as usize);
+                let ha = (*self.h.get_unchecked(self.align) << 1).wrapping_add(gv);
+                *self.h.get_unchecked_mut(self.align) = ha;
+                self.align = (self.align + 1) % N;
+                if ha & SPLIT_MASK == 0 {
+                    return Some(offset + 1);
+                }
+            }
+        }
+        None
+    }
+
+    fn aligned_roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        use std::simd::{Simd, SimdUint};
+
+        let aligned_end = buf.len() - (buf.len() % N);
+        let end = buf.len();
+        let mut gv: Simd<u32, N> = Simd::splat(0);
+        let mut h = Simd::from(self.h);
+        let mut offset = 0;
+
+        unsafe {
+            while offset < aligned_end {
+                for i in 0..N {
+                    gv[i] = self
+                        .tab
+                        .get_unchecked(*buf.get_unchecked(offset + i) as usize);
+                }
+                h = (h << Simd::splat(1)) + gv;
+                let masked = h & Simd::splat(SPLIT_MASK);
+                if masked.reduce_min() == 0 {
+                    for i in 0..N {
+                        *self.h.get_unchecked_mut(i) = h[i];
+                        if masked[i] == 0 {
+                            self.align = (i + 1) % N;
+                            return Some(offset + i + 1);
+                        }
+                    }
+                }
+                self.h = *h.as_array();
+                offset += N;
+            }
+        }
+
+        self.unaligned_roll_bytes(&buf[aligned_end..end])
+            .map(|n| aligned_end + n)
+    }
+}
+
+#[cfg(feature = "simd-rollsum")]
+impl<const N: usize> RollsumSplitter for SimdInterleavedGearHasher<N>
+where
+    std::simd::LaneCount<N>: std::simd::SupportedLaneCount,
+{
+    #[inline(always)]
+    fn window_size(&self) -> Option<usize> {
+        Some(32 * N)
+    }
+
+    fn roll_bytes(&mut self, buf: &[u8]) -> Option<usize> {
+        let mut align_adjust = 0;
+        if self.align != 0 {
+            align_adjust = (N - self.align).min(buf.len());
+            if let Some(n) = self.unaligned_roll_bytes(&buf[0..align_adjust]) {
+                return Some(n);
+            }
+        }
+        self.aligned_roll_bytes(&buf[align_adjust..])
+            .map(|n| align_adjust + n)
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        self.align = 0;
+        self.h = [0; N];
     }
 }
 
 #[cfg(test)]
-pub static TEST_GEAR_TAB: [u32; 256] = [
+pub static TEST_GEAR_TAB_DATA: [u32; 256] = [
     0x67ed26b7, 0x32da500c, 0x53d0fee0, 0xce387dc7, 0xcd406d90, 0x2e83a4d4, 0x9fc9a38d, 0xb67259dc,
     0xca6b1722, 0x6d2ea08c, 0x235cea2e, 0x3149bb5f, 0x1beda787, 0x2a6b77d5, 0x2f22d9ac, 0x91fc0544,
     0xe413acfa, 0x5a30ff7a, 0xad6fdde0, 0x444fd0f5, 0x7ad87864, 0x58c5ff05, 0x8d2ec336, 0x2371f853,
@@ -98,29 +326,143 @@ pub static TEST_GEAR_TAB: [u32; 256] = [
 
 #[cfg(test)]
 mod tests {
+    use super::super::crypto::randombytes;
     use super::*;
 
     #[test]
-    fn rollsum_rolls() {
-        let mut rs = Rollsum::new();
-        for i in 0..WINDOW_SIZE {
-            rs.roll_byte(&TEST_GEAR_TAB, i as u8);
+    fn gear_hasher_rolls() {
+        let mut rs = GearHasher::new(GearTab::from_array(TEST_GEAR_TAB_DATA));
+        let window_size = rs.window_size().unwrap();
+        for i in 0..window_size {
+            rs.roll_bytes(&[i as u8]);
         }
         let h1 = rs.h;
-        for _i in 0..WINDOW_SIZE {
-            rs.roll_byte(&TEST_GEAR_TAB, 0xff);
+        for _i in 0..window_size {
+            rs.roll_bytes(&[0xff]);
         }
         let h2 = rs.h;
-        for i in 0..WINDOW_SIZE {
-            rs.roll_byte(&TEST_GEAR_TAB, i as u8);
+        for i in 0..window_size {
+            rs.roll_bytes(&[i as u8]);
         }
         let h3 = rs.h;
-        for _i in 0..WINDOW_SIZE {
-            rs.roll_byte(&TEST_GEAR_TAB, 0xff);
+        for _i in 0..window_size {
+            rs.roll_bytes(&[0xff]);
         }
         let h4 = rs.h;
 
         assert_eq!(h1, h3);
         assert_eq!(h2, h4);
+    }
+
+    #[test]
+    fn interleaved_gear_hasher_rolls() {
+        let mut rs = InterleavedGearHasher::<4>::new(GearTab::from_array(TEST_GEAR_TAB_DATA));
+        let window_size = rs.window_size().unwrap();
+        for i in 0..window_size {
+            rs.roll_bytes(&[i as u8]);
+        }
+        let h1 = rs.h;
+        for _i in 0..window_size {
+            rs.roll_bytes(&[0xff]);
+        }
+        let h2 = rs.h;
+        for i in 0..window_size {
+            rs.roll_bytes(&[i as u8]);
+        }
+        let h3 = rs.h;
+        for _i in 0..window_size {
+            rs.roll_bytes(&[0xff]);
+        }
+        let h4 = rs.h;
+        assert_eq!(h1, h3);
+        assert_eq!(h2, h4);
+    }
+
+    #[test]
+    fn gear_hasher_matches_interleaved_1() {
+        let tab = GearTab::from_array(TEST_GEAR_TAB_DATA);
+        let mut rs1 = GearHasher::new(tab.clone());
+        let mut rs2 = InterleavedGearHasher::<1>::new(tab);
+        let mut data = vec![0; 1024 * 1024];
+        for _ in 0..10 {
+            randombytes(&mut data);
+            let mut data = &data[..];
+            loop {
+                let split1 = rs1.roll_bytes(data);
+                let split2 = rs2.roll_bytes(data);
+                assert_eq!(rs1.h, rs2.h[0]);
+                assert_eq!(split1, split2);
+                match split1 {
+                    Some(n) => data = &data[n..],
+                    None => break,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fast_gear_hasher_matches_interleaved_8() {
+        let tab = GearTab::from_array(TEST_GEAR_TAB_DATA);
+        let mut rs1 = FastGearHasher::new(tab.clone());
+        let mut rs2 = InterleavedGearHasher::<8>::new(tab);
+        let mut data = vec![0; 1024 * 1024];
+        for _ in 0..10 {
+            randombytes(&mut data);
+            let mut data = &data[..];
+            loop {
+                let split1 = rs1.roll_bytes(data);
+                let split2 = rs2.roll_bytes(data);
+                assert_eq!(rs1.h, rs2.h);
+                assert_eq!(split1, split2);
+                match split1 {
+                    Some(n) => data = &data[n..],
+                    None => break,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interleaved_gear_hasher_aligned_roll_bytes_same_as_unaligned_roll_bytes() {
+        let mut rs1 = InterleavedGearHasher::<4>::new(GearTab::from_array(TEST_GEAR_TAB_DATA));
+        let mut rs2 = rs1.clone();
+        let mut data = vec![0; 1024 * 1024];
+        for _ in 0..10 {
+            randombytes(&mut data);
+            let mut data = &data[..];
+            loop {
+                let split1 = rs1.roll_bytes(data);
+                let split2 = rs2.unaligned_roll_bytes(data);
+                assert_eq!(rs1.h, rs2.h);
+                assert_eq!(split1, split2);
+                match split1 {
+                    Some(n) => data = &data[n..],
+                    None => break,
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "simd-rollsum")]
+    #[test]
+    fn simd_interleaved_gear_hasher() {
+        let tab = GearTab::from_array(TEST_GEAR_TAB_DATA);
+        let mut rs1 = InterleavedGearHasher::<4>::new(tab.clone());
+        let mut rs2 = SimdInterleavedGearHasher::<4>::new(tab);
+        let mut data = vec![0; 1024 * 1024];
+        for _ in 0..10 {
+            randombytes(&mut data);
+            let mut data = &data[..];
+            loop {
+                let split1 = rs1.roll_bytes(data);
+                let split2 = rs2.roll_bytes(data);
+                assert_eq!(rs1.h, rs2.h);
+                assert_eq!(split1, split2);
+                match split1 {
+                    Some(n) => data = &data[n..],
+                    None => break,
+                }
+            }
+        }
     }
 }

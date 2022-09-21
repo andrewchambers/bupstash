@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 // These chunk parameters could be investigated and tuned.
 
-pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
+pub const CHUNK_MIN_SIZE: usize = 32 * 1024;
 pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -689,9 +689,9 @@ pub fn send(
         added_bytes: 0,
         send_log_session: &mut send_log_session,
         acache: acache::ACache::new(32768),
-        data_chunker: chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size),
+        data_chunker: chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size),
         data_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
-        idx_chunker: chunker::RollsumChunker::new(ctx.gear_tab, min_size, max_size),
+        idx_chunker: chunker::RollsumChunker::new(ctx.gear_tab.clone(), min_size, max_size),
         idx_tw: Cell::new(Some(Box::new(htree::TreeWriter::new(min_size, max_size)))),
         idx_size: 0,
         data_size: 0,

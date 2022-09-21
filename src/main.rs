@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "simd-rollsum", feature(portable_simd))]
+
 pub mod abloom;
 pub mod acache;
 pub mod address;
@@ -2423,7 +2425,7 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     let max_size = client::CHUNK_MAX_SIZE;
 
     let mut chunker =
-        chunker::RollsumChunker::new(crypto::RollsumKey::new().gear_tab(), min_size, max_size);
+        chunker::RollsumChunker::new(crypto::GearHashKey::new().gear_tab(), min_size, max_size);
 
     let mut buf = vec![0; 1024 * 1024];
 
@@ -2498,6 +2500,61 @@ fn put_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
     }
 
     outf.flush()?;
+
+    Ok(())
+}
+
+fn rollsum_benchmark(args: Vec<String>) -> Result<(), anyhow::Error> {
+    let opts = default_cli_opts();
+    let matches = parse_cli_opts(opts, &args[..]);
+
+    if matches.free.len() != 1 {
+        anyhow::bail!("expected an algorithm to run.");
+    }
+
+    let gear_tab = crypto::GearHashKey::new().gear_tab();
+
+    let mut rs: Box<dyn rollsum::RollsumSplitter> = match matches.free[0].as_str() {
+        "GearHasher" => Box::new(rollsum::GearHasher::new(gear_tab)),
+        "InterleavedGearHasher<4>" => Box::new(rollsum::InterleavedGearHasher::<4>::new(gear_tab)),
+        "InterleavedGearHasher<8>" => Box::new(rollsum::InterleavedGearHasher::<8>::new(gear_tab)),
+        "InterleavedGearHasher<16>" => {
+            Box::new(rollsum::InterleavedGearHasher::<16>::new(gear_tab))
+        }
+        #[cfg(feature = "simd-rollsum")]
+        "SimdInterleavedGearHasher<4>" => {
+            Box::new(rollsum::SimdInterleavedGearHasher::<4>::new(gear_tab))
+        }
+        #[cfg(feature = "simd-rollsum")]
+        "SimdInterleavedGearHasher<8>" => {
+            Box::new(rollsum::SimdInterleavedGearHasher::<8>::new(gear_tab))
+        }
+        #[cfg(feature = "simd-rollsum")]
+        "SimdInterleavedGearHasher<16>" => {
+            Box::new(rollsum::SimdInterleavedGearHasher::<16>::new(gear_tab))
+        }
+        _ => anyhow::bail!("expected a supported algorithm"),
+    };
+
+    let mut buf = vec![0; 1024 * 1024];
+
+    let inf = std::io::stdin();
+    let mut inf = inf.lock();
+
+    loop {
+        match inf.read(&mut buf)? {
+            0 => break,
+            n_read => {
+                let mut buf = &buf[..n_read];
+                while !buf.is_empty() {
+                    match rs.roll_bytes(buf) {
+                        Some(n) => buf = &buf[n..],
+                        None => break,
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -2898,6 +2955,7 @@ fn main() {
         "serve" => serve_main(args),
         "recover-removed" => recover_removed(args),
         "put-benchmark" => put_benchmark(args),
+        "rollsum-benchmark" => rollsum_benchmark(args),
         "sync" => sync_main(args),
         "exec-with-locks" => exec_with_locks_main(args),
         "version" | "--version" => {
