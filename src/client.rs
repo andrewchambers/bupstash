@@ -8,7 +8,7 @@ use super::indexer2;
 use super::ioutil;
 use super::oplog;
 use super::protocol::*;
-use super::putpipeline;
+use super::put;
 use super::querycache;
 use super::repository;
 use super::rollsum;
@@ -88,7 +88,7 @@ pub enum DataSource {
     },
 }
 
-pub struct SendContext {
+pub struct PutContext {
     pub progress: indicatif::ProgressBar,
     pub compression: compression::Scheme,
     pub primary_key_id: Xid,
@@ -110,13 +110,13 @@ pub struct SendContext {
     pub threads: usize,
 }
 
-pub fn send(
-    mut ctx: SendContext,
+pub fn put(
+    mut ctx: PutContext,
     r: &mut (dyn Read + Send),
     w: &mut (dyn Write + Send),
     tags: BTreeMap<String, String>,
     data: DataSource,
-) -> Result<(Xid, putpipeline::SendStats), anyhow::Error> {
+) -> Result<(Xid, put::SendStats), anyhow::Error> {
     let send_id = match ctx.send_log {
         Some(ref mut send_log) => send_log.last_send_id()?,
         None => None,
@@ -141,8 +141,8 @@ pub fn send(
             .perform_cache_invalidations(ack.has_delta_id)?;
     }
 
-    let send_pipeline_ctx = putpipeline::SendContext {
-        progress: putpipeline::ProgressTracker::new(ctx.progress.clone()),
+    let send_pipeline_ctx = put::PutContext {
+        progress: put::ProgressTracker::new(ctx.progress.clone()),
         compression: ctx.compression,
         data_hash_key: ctx.data_hash_key.clone(),
         data_ectx: ctx.data_ectx.clone(),
@@ -175,7 +175,7 @@ pub fn send(
 
             let mut data = child.stdout.as_mut().unwrap();
 
-            let (data_tree, stats) = putpipeline::send_data(send_pipeline_ctx, r, w, &mut data)?;
+            let (data_tree, stats) = put::put_data(send_pipeline_ctx, r, w, &mut data)?;
 
             let status = child.wait()?;
             if !status.success() {
@@ -189,7 +189,7 @@ pub fn send(
             mut data,
         } => {
             ctx.progress.set_message(description);
-            let (data_tree, stats) = putpipeline::send_data(send_pipeline_ctx, r, w, &mut data)?;
+            let (data_tree, stats) = put::put_data(send_pipeline_ctx, r, w, &mut data)?;
             (data_tree, None, stats)
         }
         DataSource::Filesystem {
@@ -211,8 +211,7 @@ pub fn send(
                     threads: ctx.indexer_threads,
                 },
             )?;
-            let (data_tree, index_tree, stats) =
-                putpipeline::send_files(send_pipeline_ctx, r, w, indexer)?;
+            let (data_tree, index_tree, stats) = put::put_files(send_pipeline_ctx, r, w, indexer)?;
             (data_tree, Some(index_tree), stats)
         }
     };
@@ -236,9 +235,10 @@ pub fn send(
 
     let versioned_metadata = oplog::VersionedItemMetadata::V3(oplog::V3ItemMetadata {
         plain_text_metadata,
-        encrypted_metadata: ctx
-            .metadata_ectx
-            .encrypt_data(serde_bare::to_vec(&e_metadata)?, compression::Scheme::Lz4),
+        encrypted_metadata: ctx.metadata_ectx.encrypt_data(compression::compress(
+            compression::Scheme::Zstd { level: 3 },
+            serde_bare::to_vec(&e_metadata)?,
+        )),
     });
 
     write_packet(
@@ -464,7 +464,7 @@ fn receive_htree(
                 _ => anyhow::bail!("protocol error, expected begin chunk packet"),
             };
 
-            let data = dctx.decrypt_data(data)?;
+            let data = compression::decompress(dctx.decrypt_data(data)?)?;
             if addr != crypto::keyed_content_address(&data, hash_key) {
                 return Err(ClientError::CorruptOrTamperedData.into());
             }
@@ -612,7 +612,7 @@ fn receive_indexed_htree_as_tarball(
                     _ => anyhow::bail!("protocol error, expected begin chunk packet"),
                 };
 
-                let data = dctx.decrypt_data(data)?;
+                let data = compression::decompress(dctx.decrypt_data(data)?)?;
                 if addr != crypto::keyed_content_address(&data, hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }
@@ -672,7 +672,7 @@ fn receive_partial_htree(
                     }
                     _ => anyhow::bail!("protocol error, expected chunk packet"),
                 };
-                let data = dctx.decrypt_data(data)?;
+                let data = compression::decompress(dctx.decrypt_data(data)?)?;
                 if chunk_addr != crypto::keyed_content_address(&data, hash_key) {
                     return Err(ClientError::CorruptOrTamperedData.into());
                 }

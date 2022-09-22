@@ -27,7 +27,7 @@ pub mod migrate;
 pub mod oplog;
 pub mod pem;
 pub mod protocol;
-pub mod putpipeline;
+pub mod put;
 pub mod query;
 pub mod querycache;
 pub mod repository;
@@ -1292,7 +1292,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
-    let ctx = client::SendContext {
+    let ctx = client::PutContext {
         progress: progress.clone(),
         compression,
         checkpoint_seconds,
@@ -1314,7 +1314,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         threads,
     };
 
-    let (id, stats) = client::send(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
+    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -2499,11 +2499,11 @@ fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         let chunker = chunker::RollsumChunker::new(
             crypto::GearHashKey::new().gear_tab(),
-            putpipeline::CHUNK_MIN_SIZE,
-            putpipeline::CHUNK_MAX_SIZE,
+            put::CHUNK_MIN_SIZE,
+            put::CHUNK_MAX_SIZE,
         );
 
-        let chunks = putpipeline::ChunkIter::new(chunker, &mut inf);
+        let chunks = put::ChunkIter::new(chunker, &mut inf);
 
         let chunks = chunks.map(|chunk| chunk.unwrap());
 
@@ -2529,7 +2529,7 @@ fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         let chunks = chunks.plmap(n_workers, move |mut chunk: Vec<u8>| {
             if do_encrypt {
-                chunk = ectx.encrypt_data2(chunk);
+                chunk = ectx.encrypt_data(chunk);
             }
             chunk
         });

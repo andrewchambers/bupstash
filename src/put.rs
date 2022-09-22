@@ -407,7 +407,7 @@ impl<'a, 'b> htree::Sink for Arc<Sender<'a, 'b>> {
 }
 
 #[derive(Clone)]
-pub struct SendContext<'a> {
+pub struct PutContext<'a> {
     pub progress: ProgressTracker,
     pub compression: compression::Scheme,
     pub data_hash_key: crypto::HashKey,
@@ -451,8 +451,8 @@ pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
 pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
 const ACACHE_SIZE: usize = 32768;
 
-pub fn send_data(
-    mut ctx: SendContext,
+pub fn put_data(
+    mut ctx: PutContext,
     r: &mut (dyn Read + Send),
     w: &mut (dyn Write + Send),
     data: &mut dyn Read,
@@ -523,7 +523,7 @@ pub fn send_data(
         encrypting_pipeline_len,
         move |chunk: Result<(Address, u64, Vec<u8>), anyhow::Error>| {
             let (address, data_len, chunk) = chunk?;
-            let chunk = data_ectx.encrypt_data2(chunk);
+            let chunk = data_ectx.encrypt_data(chunk);
             Ok::<_, anyhow::Error>((address, data_len, chunk))
         },
     );
@@ -543,7 +543,7 @@ pub fn send_data(
         let chunk = Vec::new();
         let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
         let chunk = compression::compress(ctx.compression, chunk);
-        let chunk = ctx.data_ectx.encrypt_data2(chunk);
+        let chunk = ctx.data_ectx.encrypt_data(chunk);
         sender.write_chunk(&address, chunk)?;
         data_htree.add_data_addr(&mut sender, &address)?;
     }
@@ -575,7 +575,7 @@ pub fn send_data(
 
 #[derive(Clone)]
 struct BatchFileProcessor<'a, 'b> {
-    ctx: SendContext<'b>,
+    ctx: PutContext<'b>,
     sender: Arc<Sender<'a, 'b>>,
     data_chunker: chunker::RollsumChunker,
     scratch_buf: Vec<u8>,
@@ -631,7 +631,7 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                             let address =
                                 crypto::keyed_content_address(&chunk, &self.ctx.data_hash_key);
                             let chunk = compression::compress(self.ctx.compression, chunk);
-                            let chunk = self.ctx.data_ectx.encrypt_data2(chunk);
+                            let chunk = self.ctx.data_ectx.encrypt_data(chunk);
                             self.sender.write_chunk(&address, chunk)?;
                             data_addresses.push(address);
                             self.ctx.progress.inc(chunk_len);
@@ -750,7 +750,7 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                             let address =
                                 crypto::keyed_content_address(&chunk, &self.ctx.data_hash_key);
                             let chunk = compression::compress(self.ctx.compression, chunk);
-                            let chunk = self.ctx.data_ectx.encrypt_data2(chunk);
+                            let chunk = self.ctx.data_ectx.encrypt_data(chunk);
                             self.sender.write_chunk(&address, chunk)?;
                             data_addresses.push(address);
                             self.ctx.progress.inc(chunk_len);
@@ -805,17 +805,20 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
     }
 }
 
-pub fn send_files(
-    mut ctx: SendContext,
+pub fn put_files(
+    mut ctx: PutContext,
     r: &mut (dyn Read + Send),
     w: &mut (dyn Write + Send),
     files: indexer2::FsIndexer,
 ) -> Result<(oplog::HTreeMetadata, oplog::HTreeMetadata, SendStats), anyhow::Error> {
     let start_time = chrono::Utc::now();
     let mut data_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
+
     let mut index_htree = htree::TreeWriter::new(CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
     let mut index_chunker =
         chunker::RollsumChunker::new(ctx.gear_tab.clone(), CHUNK_MIN_SIZE, CHUNK_MAX_SIZE);
+    // The index is highly compressible, there is no reason to ever avoid compressing it.
+    let index_compression_scheme = compression::Scheme::Zstd { level: 3 };
 
     let mut sender = Arc::new(Sender {
         acache: Mutex::new(acache::ACache::new(ACACHE_SIZE)),
@@ -870,7 +873,6 @@ pub fn send_files(
             }
 
             let mut ent_buf = Vec::with_capacity(file_batch.len() * 64);
-
             for (_, ent) in file_batch.drain(..) {
                 uncompressed_data_size += ent.size.0;
                 serde_bare::to_writer(&mut ent_buf, &index::VersionedIndexEntry::V5(ent))?;
@@ -884,8 +886,8 @@ pub fn send_files(
                 if let Some(chunk) = maybe_chunk {
                     let chunk_len = chunk.len() as u64;
                     let address = crypto::keyed_content_address(&chunk, &ctx.idx_hash_key);
-                    let chunk = compression::compress(ctx.compression, chunk);
-                    let chunk = ctx.idx_ectx.encrypt_data2(chunk);
+                    let chunk = compression::compress(index_compression_scheme, chunk);
+                    let chunk = ctx.idx_ectx.encrypt_data(chunk);
                     sender.write_chunk(&address, chunk)?;
                     index_htree.add_data_addr(&mut sender, &address)?;
                     ctx.progress.inc(chunk_len);
@@ -902,7 +904,7 @@ pub fn send_files(
         let chunk = Vec::new();
         let address = crypto::keyed_content_address(&chunk, &ctx.data_hash_key);
         let chunk = compression::compress(ctx.compression, chunk);
-        let chunk = ctx.data_ectx.encrypt_data2(chunk);
+        let chunk = ctx.data_ectx.encrypt_data(chunk);
         sender.write_chunk(&address, chunk)?;
         data_htree.add_data_addr(&mut sender, &address)?;
     }
@@ -912,8 +914,8 @@ pub fn send_files(
         let chunk = index_chunker.finish();
         if uncompressed_index_size == 0 || !chunk.is_empty() {
             let address = crypto::keyed_content_address(&chunk, &ctx.idx_hash_key);
-            let chunk = compression::compress(ctx.compression, chunk);
-            let chunk = ctx.idx_ectx.encrypt_data2(chunk);
+            let chunk = compression::compress(index_compression_scheme, chunk);
+            let chunk = ctx.idx_ectx.encrypt_data(chunk);
             sender.write_chunk(&address, chunk)?;
             index_htree.add_data_addr(&mut sender, &address)?;
         }
