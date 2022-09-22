@@ -65,12 +65,12 @@ impl ProgressTracker {
         }
     }
 
-    fn path_in_progress(&self, p: &PathBuf) {
+    fn path_in_progress(&self, p: &Path) {
         if self.hidden {
             return;
         }
 
-        let p = p.clone();
+        let p = p.to_path_buf();
         let mut inner = self.inner.lock().unwrap();
         if inner.in_progress.is_empty() && !inner.checkpoint_in_progress {
             self.progress_bar
@@ -482,7 +482,7 @@ pub fn send_data(
     let chunks = ChunkIter::new(data_chunker, data);
 
     let data_hash_key = ctx.data_hash_key.clone();
-    let compression = ctx.compression.clone();
+    let compression = ctx.compression;
     let mut data_ectx = ctx.data_ectx.clone();
 
     let pipeline_threads = ctx.threads;

@@ -2638,12 +2638,12 @@ fn indexer_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         file_action_log_fn: None,
     };
 
-    let dirs: Vec<PathBuf> = matches.free.iter().map(|x| PathBuf::from(x)).collect();
+    let dirs: Vec<PathBuf> = matches.free.iter().map(PathBuf::from).collect();
 
     let indexer = indexer2::FsIndexer::new(&dirs, indexer_opts).unwrap();
 
     for ent in indexer {
-        print!("{}\n", ent?.0.display());
+        println!("{}", ent?.0.display());
     }
 
     Ok(())

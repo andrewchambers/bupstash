@@ -253,14 +253,11 @@ impl FsWalker {
                         Ok(stat) if stat.dev() == self.base_dev => {
                             to_recurse.push(child_path.clone())
                         }
-                        Ok(_) => (),
+                        Ok(_) => {}
                         Err(err)
                             if fsutil::likely_smear_error(&err)
                                 || (self.opts.ignore_permission_errors
-                                    && err.kind() == std::io::ErrorKind::PermissionDenied) =>
-                        {
-                            ()
-                        }
+                                    && err.kind() == std::io::ErrorKind::PermissionDenied) => {}
                         Err(err) => {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::Other,
