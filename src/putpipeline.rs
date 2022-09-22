@@ -24,10 +24,126 @@ use super::rollsum;
 use super::sendlog;
 use plmap::{PipelineMap, ScopedPipelineMap};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+enum PathDisplayState {
+    Pending,
+    Visible,
+}
+
+struct ProgressTrackerInner {
+    checkpoint_in_progress: bool,
+    in_progress: BTreeMap<PathBuf, PathDisplayState>,
+}
+
+#[derive(Clone)]
+pub struct ProgressTracker {
+    hidden: bool,
+    progress_bar: indicatif::ProgressBar,
+
+    // Tracking and displaying progress for multi threaded uploads
+    // requires a bit of state. We want to know which files are
+    // being uploaded and when one finishes we want to display
+    // another in progress upload that has already been started.
+    inner: Arc<Mutex<ProgressTrackerInner>>,
+}
+
+impl ProgressTracker {
+    pub fn new(progress_bar: indicatif::ProgressBar) -> ProgressTracker {
+        let hidden = progress_bar.is_hidden();
+        ProgressTracker {
+            progress_bar,
+            hidden,
+            inner: Arc::new(Mutex::new(ProgressTrackerInner {
+                checkpoint_in_progress: false,
+                in_progress: BTreeMap::new(),
+            })),
+        }
+    }
+
+    fn path_in_progress(&self, p: &PathBuf) {
+        if self.hidden {
+            return;
+        }
+
+        let p = p.clone();
+        let mut inner = self.inner.lock().unwrap();
+        if inner.in_progress.is_empty() && !inner.checkpoint_in_progress {
+            self.progress_bar
+                .set_message(p.to_string_lossy().to_string());
+            inner.in_progress.insert(p, PathDisplayState::Visible);
+        } else {
+            inner.in_progress.insert(p, PathDisplayState::Pending);
+        }
+        drop(inner);
+    }
+
+    fn path_done(&self, p: &PathBuf) {
+        if self.hidden {
+            return;
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(PathDisplayState::Visible) = inner.in_progress.remove(p) {
+            if !inner.checkpoint_in_progress {
+                let mut iter = inner.in_progress.iter_mut(); // XXX .first_entry() in unstable rust would be better.
+                if let Some((next_p, state)) = iter.next() {
+                    *state = PathDisplayState::Visible;
+                    self.progress_bar
+                        .set_message(next_p.to_string_lossy().to_string());
+                }
+            }
+        };
+        drop(inner);
+    }
+
+    fn inc(&self, v: u64) {
+        if self.hidden {
+            return;
+        }
+        self.progress_bar.inc(v);
+    }
+
+    fn checkpoint_in_progress(&self) {
+        if self.hidden {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.checkpoint_in_progress {
+            // Mark all paths as pending display, possibly
+            // inefficient, but checkpoints do not happen frequently.
+            // it probably costs less than copying the currently displayed path.
+            for (_, v) in inner.in_progress.iter_mut() {
+                *v = PathDisplayState::Pending;
+            }
+            self.progress_bar.set_message("checkpointing progress...");
+            inner.checkpoint_in_progress = true;
+        }
+        drop(inner);
+    }
+
+    fn checkpoint_done(&self) {
+        if self.hidden {
+            return;
+        }
+        let mut inner = self.inner.lock().unwrap();
+        if inner.checkpoint_in_progress {
+            // Choose a path to display from those currently in progress.
+            let mut iter = inner.in_progress.iter_mut(); // XXX .first_entry() in unstable rust would be better.
+            if let Some((next_p, state)) = iter.next() {
+                *state = PathDisplayState::Visible;
+                self.progress_bar
+                    .set_message(next_p.to_string_lossy().to_string());
+            }
+            inner.checkpoint_in_progress = false;
+        }
+        drop(inner);
+    }
+}
 
 struct EntBatcher {
     indexer: indexer2::FsIndexer,
@@ -163,7 +279,7 @@ impl<'a> Iterator for ChunkIter<'a> {
     }
 }
 
-struct ServerConn<'a, 'b> {
+struct ServerConn<'a> {
     r: &'a mut (dyn Read + Send),
     w: &'a mut (dyn Write + Send),
 
@@ -174,11 +290,9 @@ struct ServerConn<'a, 'b> {
     added_bytes: u64,
 
     next_checkpoint: std::time::Instant,
-    checkpoint_seconds: u64,
-    send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'b>>>>,
 }
 
-impl<'a, 'b> ServerConn<'a, 'b> {
+impl<'a> ServerConn<'a> {
     fn write_chunk(
         &mut self,
         addr: &Address,
@@ -186,16 +300,7 @@ impl<'a, 'b> ServerConn<'a, 'b> {
     ) -> Result<(), anyhow::Error> {
         self.transferred_bytes += data.len() as u64;
         self.transferred_chunks += 1;
-
         protocol::write_chunk(self.w, addr, &data)?;
-
-        if self.send_log_session.is_some()
-            && (self.transferred_chunks % 16 == 0)
-            && std::time::Instant::now() > self.next_checkpoint
-        {
-            self.checkpoint()?;
-        }
-
         Ok(())
     }
 
@@ -210,26 +315,14 @@ impl<'a, 'b> ServerConn<'a, 'b> {
         }
         Ok(())
     }
-
-    fn checkpoint(&mut self) -> Result<(), anyhow::Error> {
-        self.flush()?;
-        match &self.send_log_session {
-            Some(send_log_session) => {
-                let mut send_log_session = send_log_session.lock().unwrap();
-                send_log_session.checkpoint()?
-            }
-            None => (),
-        }
-        self.next_checkpoint =
-            std::time::Instant::now() + std::time::Duration::from_secs(self.checkpoint_seconds);
-        Ok(())
-    }
 }
 
 struct Sender<'a, 'b> {
+    progress: ProgressTracker,
     acache: Mutex<acache::ACache>,
-    conn: Mutex<ServerConn<'a, 'b>>,
+    conn: Mutex<ServerConn<'a>>,
     send_log_session: Option<Arc<Mutex<sendlog::SendLogSession<'b>>>>,
+    checkpoint_seconds: u64,
 }
 
 impl<'a, 'b> Sender<'a, 'b> {
@@ -246,13 +339,31 @@ impl<'a, 'b> Sender<'a, 'b> {
                 {
                     let session = session.lock().unwrap();
                     if session.add_address_if_cached(addr)? {
+                        // The address was already cached and so
+                        // has already been flushed, nothing more to do.
                         return Ok(());
                     }
                 }
 
                 {
                     let mut conn = self.conn.lock().unwrap();
+
                     conn.write_chunk(addr, data)?;
+
+                    if (conn.transferred_chunks % 64 == 0)
+                        && std::time::Instant::now() > conn.next_checkpoint
+                    {
+                        let mut session = session.lock().unwrap();
+                        self.progress.checkpoint_in_progress();
+                        // Flush all data chunks that have already been written to the wire.
+                        conn.flush()?;
+                        // Once flushed, it is ok to flush to the send log.
+                        session.checkpoint()?;
+                        self.progress.checkpoint_done();
+                        conn.next_checkpoint = std::time::Instant::now()
+                            + std::time::Duration::from_secs(self.checkpoint_seconds);
+                        drop(session);
+                    }
                 }
 
                 {
@@ -267,6 +378,7 @@ impl<'a, 'b> Sender<'a, 'b> {
             None => {
                 let mut conn = self.conn.lock().unwrap();
                 conn.write_chunk(addr, data)?;
+                drop(conn);
             }
         }
 
@@ -296,7 +408,7 @@ impl<'a, 'b> htree::Sink for Arc<Sender<'a, 'b>> {
 
 #[derive(Clone)]
 pub struct SendContext<'a> {
-    pub progress: indicatif::ProgressBar,
+    pub progress: ProgressTracker,
     pub compression: compression::Scheme,
     pub data_hash_key: crypto::HashKey,
     pub data_ectx: crypto::EncryptionContext,
@@ -361,9 +473,9 @@ pub fn send_data(
             added_bytes: 0,
             next_checkpoint: std::time::Instant::now()
                 + std::time::Duration::from_secs(ctx.checkpoint_seconds),
-            checkpoint_seconds: ctx.checkpoint_seconds,
-            send_log_session: None,
         }),
+        progress: ctx.progress.clone(),
+        checkpoint_seconds: ctx.checkpoint_seconds,
         send_log_session: ctx.send_log_session.clone(),
     };
 
@@ -666,6 +778,9 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
 
                 if self.ctx.send_log_session.is_some() && self.ctx.use_stat_cache && !bad_cache_ent
                 {
+                    // It is important to note that every chunk in the stat cache entry
+                    // has already been written to the wire, these chunks will be flushed
+                    // before any checkpoint that commits this cache entry.
                     self.ctx
                         .send_log_session
                         .as_ref()
@@ -713,10 +828,10 @@ pub fn send_files(
             added_bytes: 0,
             next_checkpoint: std::time::Instant::now()
                 + std::time::Duration::from_secs(ctx.checkpoint_seconds),
-            checkpoint_seconds: ctx.checkpoint_seconds,
-            send_log_session: None,
         }),
+        progress: ctx.progress.clone(),
         send_log_session: ctx.send_log_session.clone(),
+        checkpoint_seconds: ctx.checkpoint_seconds,
     });
 
     let mut uncompressed_data_size = 0;
@@ -733,14 +848,12 @@ pub fn send_files(
         scratch_buf: vec![0; 256 * 1024],
     };
 
-    let progress_hidden = ctx.progress.is_hidden();
     let batch_progress = ctx.progress.clone();
 
     let file_batches = EntBatcher::new(files).map(move |file_batch| {
-        if !progress_hidden {
-            if let Ok(file_batch) = &file_batch {
-                batch_progress
-                    .set_message(file_batch.first().unwrap().0.to_string_lossy().to_string());
+        if let Ok(file_batch) = &file_batch {
+            if let Some(first) = file_batch.first() {
+                batch_progress.path_in_progress(&first.0);
             }
         }
         file_batch
@@ -750,11 +863,14 @@ pub fn send_files(
         for processeed_file_batch in file_batches.scoped_plmap(ts, ctx.threads, batch_processor) {
             let (mut file_batch, data_addresses) = processeed_file_batch?;
 
+            ctx.progress.path_done(&file_batch.first().unwrap().0);
+
             for addr in data_addresses.iter() {
                 data_htree.add_data_addr(&mut sender, addr)?;
             }
 
             let mut ent_buf = Vec::with_capacity(file_batch.len() * 64);
+
             for (_, ent) in file_batch.drain(..) {
                 uncompressed_data_size += ent.size.0;
                 serde_bare::to_writer(&mut ent_buf, &index::VersionedIndexEntry::V5(ent))?;

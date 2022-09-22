@@ -142,7 +142,7 @@ pub fn send(
     }
 
     let send_pipeline_ctx = putpipeline::SendContext {
-        progress: ctx.progress.clone(),
+        progress: putpipeline::ProgressTracker::new(ctx.progress.clone()),
         compression: ctx.compression,
         data_hash_key: ctx.data_hash_key.clone(),
         data_ectx: ctx.data_ectx.clone(),
