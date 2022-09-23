@@ -411,8 +411,6 @@ pub fn request_index(
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
     let bytes_received = receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
     if bytes_received != decrypted_metadata.index_size.0 {
-        dbg!(bytes_received);
-        dbg!(decrypted_metadata.index_size.0);
         anyhow::bail!(
             "expected index size does not match actual index size, possible corruption detected"
         );
