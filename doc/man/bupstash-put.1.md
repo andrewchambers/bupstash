@@ -5,15 +5,15 @@ bupstash-put(1)
 
 Put data into a bupstash repository.
 
-`bupstash put [OPTIONS] [TAG=VAL...] PATHS...`<br>
-`bupstash put --exec [OPTIONS] [TAG=VAL...] COMMAND`<br>
+`bupstash put [OPTIONS] [TAG=VAL...] [::] PATHS...`<br>
+`bupstash put --exec [OPTIONS] [TAG=VAL...] [::] COMMAND`<br>
 
 ## DESCRIPTION
 
-`bupstash put` encrypts a file, directory, or command output and stores it in a bupstash repository
+`bupstash put` encrypts files, directories, or command output and stores it in a bupstash repository
 such that only the decryption key can decrypt it.
 
-For single file the contents are saved directly, for multiple files the data
+For single files the contents are saved directly, for multiple files the data
 is saved such that is can be retrieved as a tar archive, and for commands the
 command is executed and stdout is sent to the repository.
 
@@ -245,17 +245,6 @@ With possible types:
 
 ## EXAMPLES
 
-### Save a file or directory to a repository over ssh
-
-```
-export BUPSTASH_KEY="/backups/backups-secret.key"
-export BUPSTASH_REPOSITORY="ssh://$SERVER/home/me/bupstash-repository"
-
-$ bupstash put ./data.file
-$ bupstash put ./directory
-
-```
-
 ### Snapshot a directory
 
 The builtin directory put creates a tarball from a directory, while
@@ -266,7 +255,22 @@ deduplicating repeated files.
 $ ID="$(bupstash put ./data)"
 # List snapshot contents.
 $ bupstash list-contents id="$ID"
+# Fetch the snapshot.
+$ bupstash get id="$ID" | tar -xf -
 ```
+
+### Save files or directory to a repository over ssh
+
+```
+export BUPSTASH_KEY="/backups/backups-secret.key"
+export BUPSTASH_REPOSITORY="ssh://$SERVER/home/me/bupstash-repository"
+
+$ bupstash put ./data.file
+$ bupstash put ./directory
+$ bupstash put ./multiple-files.txt ./directory
+
+```
+
 
 ### Snapshot the output of a command
 

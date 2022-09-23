@@ -1,10 +1,10 @@
-bupstash put [OPTIONS] TAGS... PATHS...
-bupstash put -e [OPTIONS] TAGS... CMD...
+bupstash put [OPTIONS] TAGS... [::] PATHS...
+bupstash put -e [OPTIONS] TAGS... [::] CMD...
 
 `bupstash put` encrypts a file, directory, or command output and stores it
 in a bupstash repository such that only the primary backup key can decrypt it.
 
-For single file the contents are saved directly, for multiple files the data
+For single files the contents are saved directly, for multiple files the data
 is saved such that is can be retrieved as a tar archive, and for commands the
 command is executed and stdout is sent to the repository.
 
@@ -22,8 +22,14 @@ Examples:
   # Specify arbitrary metadata as KEY=VALUE before.
   $ bupstash put host=$(hostname) ./file.txt
 
+  # Multiple files and directories can be saved at once.
+  $ bupstash put ./file1.txt ./file2.txt ./some-dir
+
   # Use --exec to save the output of commands.
   $ bupstash put --exec name=files.tar tar -C ./files -cvf - .
 
   # Put from stdin (does not check error codes).
   $ echo data | bupstash put -
+
+  # You can use '::' to terminate the tag list.
+  $ bupstash put :: foo=bar.txt
