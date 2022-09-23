@@ -5,8 +5,7 @@ bupstash-put(1)
 
 Put data into a bupstash repository.
 
-`bupstash put [OPTIONS] [TAG=VAL...] FILE`<br>
-`bupstash put [OPTIONS] [TAG=VAL...] DIRS...`<br>
+`bupstash put [OPTIONS] [TAG=VAL...] PATHS...`<br>
 `bupstash put --exec [OPTIONS] [TAG=VAL...] COMMAND`<br>
 
 ## DESCRIPTION
@@ -14,13 +13,13 @@ Put data into a bupstash repository.
 `bupstash put` encrypts a file, directory, or command output and stores it in a bupstash repository
 such that only the decryption key can decrypt it.
 
-For files, the data is saved directly, for directories, the data
-is converted to a tar archive containing each of the specified directories,
-and for commands the command is executed, and stdout is sent to the database.
+For single file the contents are saved directly, for multiple files the data
+is saved such that is can be retrieved as a tar archive, and for commands the
+command is executed and stdout is sent to the repository.
 
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots take minimal additional disk space.
-For efficient incremental backups, use the --send-log option described in the usage notes section.
+For efficient incremental operation, use the --send-log option described in the usage notes section.
 
 All puts can associated with a set of arbitrary encrypted metadata tags, which
 can be queried using bupstash-list(1). Tags are specified in a simple
@@ -37,7 +36,7 @@ Always prefer connecting to a remote repository via an `ssh://` style url or an 
 
 ## USAGE NOTES
 
-### Incremental backups
+### Incremental put
 
 When sending data, `bupstash` records metadata about what was sent in the previous
 'put' operation in a file known as the send log. 
@@ -46,7 +45,7 @@ The send log serves two main purposes:
 
 - it remembers the ids of data chunks that were sent to the repository in the last 'put',
   allowing `bupstash` to avoid resending those chunks over the network repeatedly.
-- It stores a mapping of file paths, to data that has already been sent, allowing bupstash
+- It stores a mapping of file paths to data that has already been sent, allowing bupstash
   to skip processing files when snapshotting the same directory many times repeatedly.
 
 The send log only remembers the data previously sent, so for efficient 'put' use, give each backup job

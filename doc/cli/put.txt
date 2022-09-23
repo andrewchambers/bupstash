@@ -1,15 +1,14 @@
-bupstash put [OPTIONS] TAGS... FILE
-bupstash put [OPTIONS] TAGS... DIRS...
+bupstash put [OPTIONS] TAGS... PATHS...
 bupstash put -e [OPTIONS] TAGS... CMD...
 
 `bupstash put` encrypts a file, directory, or command output and stores it
 in a bupstash repository such that only the primary backup key can decrypt it.
 
-For files, the data is saved directly, for directories, the data
-is converted to a tar archive, and for commands the command is executed, and
-stdout is sent to the database.
+For single file the contents are saved directly, for multiple files the data
+is saved such that is can be retrieved as a tar archive, and for commands the
+command is executed and stdout is sent to the repository.
 
-To best utilize the put caching mechanism, give each job you intend to run
+To do incremental puts you must give each job you intend to run
 repeatedly it's own send log. This can dramatically reduce the amount of 
 disk reading and network usage required to make a snapshot.
 
