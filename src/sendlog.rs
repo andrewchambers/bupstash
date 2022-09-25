@@ -316,8 +316,11 @@ impl<'a> SendLogSession<'a> {
             anyhow::bail!("no active transaction");
         };
 
-        self.log.db_conn.execute("commit;", [])?;
         self.tx_active = false;
+        self.log
+            .db_conn
+            .execute("commit;", [])
+            .map_err(|err| anyhow::format_err!("unable to checkpoint send log changes: {}", err))?;
         self.log.db_conn.execute("begin immediate;", [])?;
         self.tx_active = true;
         Ok(())
@@ -355,8 +358,12 @@ impl<'a> SendLogSession<'a> {
             &[id],
         )?;
 
-        self.log.db_conn.execute("commit;", [])?;
         self.tx_active = false;
+        self.log
+            .db_conn
+            .execute("commit;", [])
+            .map_err(|err| anyhow::format_err!("unable to commit send log changes: {}", err))?;
+
         Ok(())
     }
 }
