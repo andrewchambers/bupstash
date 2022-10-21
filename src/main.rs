@@ -23,6 +23,8 @@ pub mod index;
 pub mod indexer;
 pub mod ioutil;
 pub mod keys;
+#[cfg(feature = "metering")]
+pub mod metering;
 pub mod migrate;
 pub mod oplog;
 pub mod pem;

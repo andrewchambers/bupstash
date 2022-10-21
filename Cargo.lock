@@ -123,6 +123,7 @@ dependencies = [
  "path-clean",
  "pkg-config",
  "plmap",
+ "posixmq",
  "rand",
  "rangemap",
  "regex",
@@ -565,6 +566,15 @@ checksum = "b059a8177143e9da9d124d505feb5b5b0b03e296c9b4b09f87b82b0981e81e4c"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "posixmq"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5e01860c5a0b0c823066268fb7950019bac142c1cb8919e774823fe510e697a"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

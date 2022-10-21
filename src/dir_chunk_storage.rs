@@ -3,6 +3,8 @@ use super::address::Address;
 use super::chunk_storage::Engine;
 use super::crypto;
 use super::hex;
+#[cfg(feature = "metering")]
+use super::metering;
 use super::protocol;
 use super::repository;
 use super::vfs;
@@ -33,13 +35,11 @@ enum WriteWorkerMsg {
     Exit,
 }
 
-// A backend that stores all data in a directory,
-// it operates by swapping between two batches of pending
-// fsyncs, and round robin writing to each. It supports
-// concurrent reading and writing from multiple instances
-// of bupstash.
 pub struct DirStorage {
     fs: Arc<vfs::VFs>,
+
+    #[cfg(feature = "metering")]
+    usage_reporter: Arc<metering::UsageReporter>,
 
     // Reading
     read_worker_handles: Vec<std::thread::JoinHandle<()>>,
@@ -58,6 +58,9 @@ impl DirStorage {
         let fs = self.fs.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
+
+        #[cfg(feature = "metering")]
+        let usage_reporter = self.usage_reporter.clone();
 
         macro_rules! worker_bail {
             ($err:expr) => {{
@@ -136,6 +139,9 @@ impl DirStorage {
                             worker_try!(tmp_file.write_all(&data));
                             worker_try!(tmp_file.flush());
                             worker_try!(fs.rename(&tmp, chunk_name));
+
+                            #[cfg(feature = "metering")]
+                            usage_reporter.chunk_added(data.len() as u64)
                         }
                         Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.flush() {
                             Ok(()) => {
@@ -259,6 +265,9 @@ impl DirStorage {
             }
         }
 
+        #[cfg(feature = "metering")]
+        self.usage_reporter.flush()?;
+
         match aggregate_err {
             None => Ok(aggregate_stats),
             Some(err) => Err(err),
@@ -283,8 +292,13 @@ impl DirStorage {
         let had_io_error = Arc::new(AtomicBool::new(false));
         let (read_worker_tx, read_worker_rx) = crossbeam_channel::bounded(0);
 
+        #[cfg(feature = "metering")]
+        let usage_reporter = metering::UsageReporter::from_env()?;
+
         Ok(DirStorage {
             fs: Arc::new(fs),
+            #[cfg(feature = "metering")]
+            usage_reporter: Arc::new(usage_reporter),
             read_worker_handles,
             read_worker_tx,
             read_worker_rx,
@@ -299,6 +313,10 @@ impl DirStorage {
 impl Drop for DirStorage {
     fn drop(&mut self) {
         self.stop_workers();
+        #[cfg(feature = "metering")]
+        {
+            _ = self.usage_reporter.flush();
+        }
     }
 }
 
@@ -482,6 +500,12 @@ impl Engine for DirStorage {
                 ))?;
             }
             self.fs.remove_file(to_remove)?;
+        }
+
+        #[cfg(feature = "metering")]
+        {
+            self.usage_reporter
+                .set_storage_totals(chunks_remaining, bytes_remaining)?;
         }
 
         Ok(repository::GcStats {
