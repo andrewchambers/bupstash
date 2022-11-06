@@ -10,7 +10,7 @@ use std::io::Read;
 use thiserror::Error;
 
 pub const CURRENT_REPOSITORY_PROTOCOL_VERSION: &str = "13";
-pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 16;
+pub const DEFAULT_MAX_PACKET_SIZE: usize = 1024 * 1024 * 32;
 
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq, Clone, Copy)]
 pub enum OpenMode {

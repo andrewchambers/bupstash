@@ -448,7 +448,7 @@ pub struct SendStats {
 }
 
 pub const CHUNK_MIN_SIZE: usize = 256 * 1024;
-pub const CHUNK_MAX_SIZE: usize = 8 * 1024 * 1024;
+pub const CHUNK_MAX_SIZE: usize = 20 * 1024 * 1024;
 const ACACHE_SIZE: usize = 32768;
 
 pub fn put_data(

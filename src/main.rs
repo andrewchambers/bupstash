@@ -2508,6 +2508,7 @@ fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         threads.insert(kind, n_threads);
     }
 
+    let do_print_chunk_sizes = matches.opt_present("print-chunk-size");
     let do_compress = matches.opt_present("compress");
     let do_address = matches.opt_present("address");
     let do_encrypt = matches.opt_present("encrypt");
@@ -2537,7 +2538,13 @@ fn put_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
         let chunks = put::ChunkIter::new(chunker, &mut inf);
 
-        let chunks = chunks.map(|chunk| chunk.unwrap());
+        let chunks = chunks.map(|chunk| {
+            let chunk = chunk.unwrap();
+            if do_print_chunk_sizes {
+                println!("{}", chunk.len());
+            }
+            chunk
+        });
 
         let chunks = chunks.plmap(
             *threads.get("address-threads").unwrap(),

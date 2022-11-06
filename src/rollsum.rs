@@ -41,7 +41,7 @@ pub trait RollsumSplitter {
 // The split mask controls the probability of content split point
 // we keep it as a constant for performance. It is important to note
 // that because we are shifting our gear hashes to the left, mask the top bits.
-const SPLIT_MASK: u32 = 0xfffff000; // A split every 2^20 bytes or ~ 1MiB.
+const SPLIT_MASK: u32 = 0xfffff800; // A split every 2^21 bytes or ~ 2MiB.
 
 #[cfg(not(feature = "simd-rollsum"))]
 pub type FastGearHasher = InterleavedGearHasher<8>;

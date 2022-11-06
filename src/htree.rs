@@ -82,11 +82,12 @@ impl TreeWriter {
 
         self.tree_blocks[level].extend(leaf_count.to_le_bytes());
         self.tree_blocks[level].extend(addr.bytes);
-        // if the 15 leading bits are set, we have a 1/(2**15) chance a given chunk is a split point,
-        // each entry is 32 bytes + and 8 byte offset, that gives us ~1MB chunks.
-        let is_split_point = addr.bytes[0] == 0xff && ((addr.bytes[1] & 0xfe) == 0xfe);
 
         if self.tree_blocks[level].len() >= self.min_addr_chunk_size {
+            // If the 16 leading bits are set, we have a 1/(2**16) chance a given chunk is a split point,
+            // each entry is 32 bytes + and 8 byte offset, that gives us ~2MiB chunks.
+            let is_split_point = addr.bytes[0] == 0xff && addr.bytes[1] == 0xff;
+
             let next_would_overflow_max_size =
                 self.tree_blocks[level].len() + 8 + ADDRESS_SZ > self.max_addr_chunk_size;
 
