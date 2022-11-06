@@ -33,11 +33,6 @@ enum WriteWorkerMsg {
     Exit,
 }
 
-// A backend that stores all data in a directory,
-// it operates by swapping between two batches of pending
-// fsyncs, and round robin writing to each. It supports
-// concurrent reading and writing from multiple instances
-// of bupstash.
 pub struct DirStorage {
     fs: Arc<vfs::VFs>,
 
@@ -104,7 +99,8 @@ impl DirStorage {
                             let addr = addr.as_hex_addr();
                             let chunk_name = addr.as_str();
 
-                            match fs.metadata(chunk_name) {
+                            // Using open to check if it exists works better with fuse caching.
+                            match fs.open(chunk_name, vfs::OpenFlags::RDONLY) {
                                 Ok(_) => continue,
                                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                                 Err(err) => worker_bail!(err),
@@ -134,10 +130,10 @@ impl DirStorage {
                             ));
 
                             worker_try!(tmp_file.write_all(&data));
-                            worker_try!(tmp_file.flush());
+                            worker_try!(tmp_file.fsync());
                             worker_try!(fs.rename(&tmp, chunk_name));
                         }
-                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.flush() {
+                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.fsync() {
                             Ok(()) => {
                                 let _ = rendezvous_tx.send(Ok(protocol::FlushStats {
                                     added_chunks,

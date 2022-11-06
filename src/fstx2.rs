@@ -114,7 +114,7 @@ impl WalWriter {
         let h = h.finalize();
         let h = h.as_bytes();
         f.write_all(&h[..])?;
-        f.flush()?;
+        f.fsync()?;
         Ok(())
     }
 }
@@ -131,7 +131,11 @@ impl std::io::Write for WalWriter {
 
 fn hot_wal(fs: &vfs::VFs) -> Result<bool, std::io::Error> {
     let mut hasher = blake3::Hasher::new();
-    let mut f = fs.open(WAL_NAME, vfs::OpenFlags::RDONLY)?;
+    let mut f = match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
+        Ok(f) => f,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
     let md = f.metadata()?;
     let sz = md.size;
     if sz < 32 {
@@ -147,7 +151,7 @@ fn hot_wal(fs: &vfs::VFs) -> Result<bool, std::io::Error> {
 
 fn sync_dir(fs: &vfs::VFs, p: &str) -> Result<(), std::io::Error> {
     let mut f = fs.open(p, vfs::OpenFlags::RDONLY)?;
-    f.flush()?;
+    f.fsync()?;
     Ok(())
 }
 
@@ -159,10 +163,20 @@ fn dir_to_sync(p: &str) -> String {
     rel.to_string()
 }
 
+fn keep_wal() -> bool {
+    match std::env::var("BUPSTASH_KEEP_WAL") {
+        Ok(v) => v == "1",
+        _ => false,
+    }
+}
+
 fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
     if !hot_wal(fs)? {
-        fs.remove_file(WAL_NAME)?;
-        return Ok(());
+        match fs.remove_file(WAL_NAME) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err),
+        };
     }
 
     let wal = fs.open(WAL_NAME, vfs::OpenFlags::RDONLY)?;
@@ -207,7 +221,7 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
                 )?;
                 let wal = &mut wal;
                 std::io::copy(&mut wal.take(data_size.0), &mut f)?;
-                f.flush()?;
+                f.fsync()?;
                 std::mem::drop(f);
                 pending_dir_syncs.insert(dir_to_sync(&path));
             }
@@ -220,7 +234,7 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
                 f.seek(std::io::SeekFrom::Start(offset.0))?;
                 let wal = &mut wal;
                 std::io::copy(&mut wal.take(data_size.0), &mut f)?;
-                f.flush()?;
+                f.fsync()?;
                 std::mem::drop(f);
             }
             Ok(WalOp::Remove { path }) => {
@@ -269,17 +283,15 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
         sync_dir(fs, &d)?;
     }
 
-    // update the sequence number.
-    let mut seqf = fs.open(SEQ_NUM_NAME, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
-    seqf.write_all(&(sequence_number + 1).to_le_bytes()[..])?;
-    seqf.flush()?;
-    drop(seqf);
-
-    match std::env::var("BUPSTASH_KEEP_WAL") {
-        Ok(v) if v == "1" => {
-            fs.rename(WAL_NAME, &format!("wal/{:0>8}.wal", sequence_number))?;
-        }
-        _ => fs.remove_file(WAL_NAME)?,
+    if keep_wal() {
+        // update the sequence number.
+        let mut seqf = fs.open(SEQ_NUM_NAME, vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT)?;
+        seqf.write_all(&(sequence_number + 1).to_le_bytes()[..])?;
+        seqf.fsync()?;
+        drop(seqf);
+        fs.rename(WAL_NAME, &format!("wal/{:0>8}.wal", sequence_number))?;
+    } else {
+        fs.remove_file(WAL_NAME)?;
     }
 
     sync_dir(fs, ".")?;
@@ -410,13 +422,17 @@ impl<'a> WriteTxn<'a> {
             return Ok(());
         }
 
-        let sequence_number = match self.fs.open(SEQ_NUM_NAME, vfs::OpenFlags::RDONLY) {
-            Ok(mut f) => {
-                let mut buf: [u8; 8] = [0; 8];
-                f.read_exact(&mut buf[..])?;
-                u64::from_le_bytes(buf)
+        let sequence_number = if keep_wal() {
+            match self.fs.open(SEQ_NUM_NAME, vfs::OpenFlags::RDONLY) {
+                Ok(mut f) => {
+                    let mut buf: [u8; 8] = [0; 8];
+                    f.read_exact(&mut buf[..])?;
+                    u64::from_le_bytes(buf)
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
+        } else {
+            0
         };
 
         let mut wal = WalWriter::new(

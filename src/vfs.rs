@@ -208,6 +208,12 @@ impl VFile {
         }
     }
 
+    pub fn fsync(&mut self) -> Result<(), std::io::Error> {
+        match self {
+            VFile::OsFile(f) => f.fsync(),
+        }
+    }
+
     pub fn lock(&mut self, lock_type: LockType) -> Result<(), std::io::Error> {
         match self {
             VFile::OsFile(f) => f.lock(lock_type),
@@ -240,7 +246,10 @@ impl Write for VFile {
 
     fn flush(&mut self) -> Result<(), std::io::Error> {
         match self {
-            VFile::OsFile(f) => f.flush(),
+            VFile::OsFile(f) => {
+                f.f.flush()?;
+                Ok(())
+            }
         }
     }
 }
@@ -379,8 +388,9 @@ impl OsFile {
         self.f.write(buf)
     }
 
-    pub fn flush(&mut self) -> Result<(), std::io::Error> {
-        self.f.flush()
+    pub fn fsync(&mut self) -> Result<(), std::io::Error> {
+        self.f.sync_all()?;
+        Ok(())
     }
 
     pub fn set_len(&mut self, len: u64) -> Result<(), std::io::Error> {

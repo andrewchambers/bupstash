@@ -91,7 +91,7 @@ impl RollbackJournalWriter {
         let h = h.finalize();
         let h = h.as_bytes();
         f.write_all(&h[..])?;
-        f.flush()?;
+        f.fsync()?;
         Ok(())
     }
 }
@@ -124,7 +124,7 @@ fn hot_rollback_journal(fs: &vfs::VFs) -> Result<bool, std::io::Error> {
 
 fn sync_dir(fs: &vfs::VFs) -> Result<(), std::io::Error> {
     let mut f = fs.open(".", vfs::OpenFlags::RDONLY)?;
-    f.flush()?;
+    f.fsync()?;
     Ok(())
 }
 
@@ -135,7 +135,7 @@ fn sync_parent_dir(fs: &vfs::VFs, p: &str) -> Result<(), std::io::Error> {
     let rel = parent.to_str().unwrap();
     let rel = if rel.is_empty() { "." } else { rel };
     let mut f = fs.open(rel, vfs::OpenFlags::RDONLY)?;
-    f.flush()?;
+    f.fsync()?;
     Ok(())
 }
 
@@ -159,14 +159,14 @@ fn rollback(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
                 )?;
                 let rj = &mut rj;
                 std::io::copy(&mut rj.take(sz.0), &mut f)?;
-                f.flush()?;
+                f.fsync()?;
                 std::mem::drop(f);
                 sync_parent_dir(fs, &path)?;
             }
             Ok(RollbackOp::TruncateFile((path, sz))) => {
                 let mut f = fs.open(&path, vfs::OpenFlags::WRONLY | vfs::OpenFlags::APPEND)?;
                 f.set_len(sz.0)?;
-                f.flush()?;
+                f.fsync()?;
                 std::mem::drop(f);
                 sync_parent_dir(fs, &path)?;
             }
@@ -423,7 +423,7 @@ impl<'a> WriteTxn<'a> {
                         vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
                     )?;
                     f.write_all(data)?;
-                    f.flush()?;
+                    f.fsync()?;
                     sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::WriteFile(ref mut dataf) => {
@@ -438,7 +438,7 @@ impl<'a> WriteTxn<'a> {
                         vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
                     )?;
                     std::io::copy(dataf, &mut outf)?;
-                    outf.flush()?;
+                    outf.fsync()?;
                     sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::Append(data) => {
@@ -446,7 +446,7 @@ impl<'a> WriteTxn<'a> {
                         .fs
                         .open(p, vfs::OpenFlags::WRONLY | vfs::OpenFlags::APPEND)?;
                     f.write_all(data)?;
-                    f.flush()?;
+                    f.fsync()?;
                     sync_parent_dir(self.fs, p)?;
                 }
                 WriteTxnOp::Rename(to) => {
