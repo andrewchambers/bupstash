@@ -81,7 +81,7 @@ impl SendLog {
             )?;
             tx.execute(
                 "insert into LogMeta(Key, Value) values('schema-version', ?);",
-                &[&SCHEMA_VERSION],
+                [&SCHEMA_VERSION],
             )?;
             tx.execute(
                 "insert into LogMeta(Key, Value) values('sequence-number', 1);",
@@ -253,7 +253,7 @@ impl<'a> SendLogSession<'a> {
             .db_conn
             .prepare_cached("select 1 from Sent where Address = ?;")?;
 
-        let hit = match stmt.query_row(&[&addr.bytes[..]], |_r| Ok(())) {
+        let hit = match stmt.query_row([&addr.bytes[..]], |_r| Ok(())) {
             Ok(_) => true,
             Err(rusqlite::Error::QueryReturnedNoRows) => false,
             Err(err) => return Err(err.into()),
@@ -335,27 +335,27 @@ impl<'a> SendLogSession<'a> {
         // that was not sent or updated during the current session.
         self.log.db_conn.execute(
             "delete from StatCache where LatestSessionId != ?;",
-            &[&self.session_id],
+            [&self.session_id],
         )?;
 
         self.log.db_conn.execute(
             "delete from Sent where LatestSessionId != ?;",
-            &[&self.session_id],
+            [&self.session_id],
         )?;
 
         self.log.db_conn.execute(
             "update StatCache set ItemId = ? where LatestSessionId = ?;",
-            &[id, &self.session_id],
+            [id, &self.session_id],
         )?;
 
         self.log.db_conn.execute(
             "update Sent set ItemId = ? where LatestSessionId = ?;",
-            &[id, &self.session_id],
+            [id, &self.session_id],
         )?;
 
         self.log.db_conn.execute(
             "insert or replace into LogMeta(Key, Value) Values('last-send-id', ?);",
-            &[id],
+            [id],
         )?;
 
         self.tx_active = false;

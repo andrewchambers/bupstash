@@ -98,7 +98,7 @@ pub fn index_entry_to_tarheader(
             ent.link_target.as_ref().unwrap()
         };
 
-        match ustar_hdr.set_link_name(&target) {
+        match ustar_hdr.set_link_name(target) {
             Ok(()) => (),
             Err(err) => {
                 /* 100 is more than ustar can handle as a link target */

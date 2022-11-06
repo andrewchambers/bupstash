@@ -123,7 +123,7 @@ impl Repo {
             let path = if repo_path_or_url.is_absolute() {
                 repo_path_or_url.to_path_buf()
             } else {
-                std::env::current_dir()?.join(&repo_path_or_url)
+                std::env::current_dir()?.join(repo_path_or_url)
             };
 
             let repo_path = match path.file_name() {

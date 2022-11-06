@@ -80,8 +80,8 @@ impl TreeWriter {
             self.tree_blocks.push(Vec::new());
         }
 
-        self.tree_blocks[level].extend(&leaf_count.to_le_bytes());
-        self.tree_blocks[level].extend(&addr.bytes);
+        self.tree_blocks[level].extend(leaf_count.to_le_bytes());
+        self.tree_blocks[level].extend(addr.bytes);
         // if the 15 leading bits are set, we have a 1/(2**15) chance a given chunk is a split point,
         // each entry is 32 bytes + and 8 byte offset, that gives us ~1MB chunks.
         let is_split_point = addr.bytes[0] == 0xff && ((addr.bytes[1] & 0xfe) == 0xfe);
@@ -167,7 +167,7 @@ impl TreeReader {
         };
         let mut initial_block = Vec::new();
         initial_block.extend(&data_chunk_count.to_le_bytes()[..]);
-        initial_block.extend(&addr.bytes);
+        initial_block.extend(addr.bytes);
         tr.tree_blocks.push(initial_block);
         tr.tree_heights.push(level);
         tr.read_offsets.push(0);

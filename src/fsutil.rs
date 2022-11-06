@@ -58,7 +58,7 @@ where
 
 pub fn read_dirents(path: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     let mut dir_ents = Vec::new();
-    for entry in std::fs::read_dir(&path)? {
+    for entry in std::fs::read_dir(path)? {
         dir_ents.push(entry?);
     }
     Ok(dir_ents)
@@ -91,7 +91,7 @@ pub fn common_path_all(paths: &[PathBuf]) -> Option<PathBuf> {
     let mut path_iter = paths.iter();
     let mut result = path_iter.next()?.to_path_buf();
     for path in path_iter {
-        if let Some(r) = common_path(&result, &path) {
+        if let Some(r) = common_path(&result, path) {
             result = r;
         } else {
             return None;

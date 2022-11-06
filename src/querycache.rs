@@ -207,7 +207,7 @@ impl<'a> QueryCacheTx<'a> {
                     self.clear()?;
                     self.tx.execute(
                         "update QueryCacheMeta set Value = ? where Key = 'gc-generation';",
-                        &[&gc_generation],
+                        [&gc_generation],
                     )?;
                 }
             }
@@ -215,7 +215,7 @@ impl<'a> QueryCacheTx<'a> {
                 self.clear()?;
                 self.tx.execute(
                     "insert into QueryCacheMeta(Key, Value) values('gc-generation', ?);",
-                    &[&gc_generation],
+                    [&gc_generation],
                 )?;
             }
             Err(err) => return Err(err.into()),

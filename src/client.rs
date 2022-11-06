@@ -896,7 +896,7 @@ pub fn restore_to_local_dir(
     progress.set_message("preparing directory...");
     let uid = nix::unistd::Uid::effective();
     let gid = nix::unistd::Gid::effective();
-    for dir_ent in walkdir::WalkDir::new(&to_dir) {
+    for dir_ent in walkdir::WalkDir::new(to_dir) {
         let dir_ent = dir_ent?;
         let metadata = dir_ent.path().symlink_metadata()?;
         if metadata.uid() != libc::uid_t::from(uid) || metadata.gid() != libc::uid_t::from(gid) {
@@ -1189,7 +1189,7 @@ pub fn restore_to_local_dir(
 
     let apply_ent_attrs = |to_ch: &Path, ent: &index::IndexEntry| -> Result<(), anyhow::Error> {
         if restore_xattrs && (ent.is_file() || ent.is_dir()) {
-            match xattr::list(&to_ch) {
+            match xattr::list(to_ch) {
                 Ok(attrs) => {
                     for attr in attrs {
                         match xattr::remove(to_ch, attr) {
