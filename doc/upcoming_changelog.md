@@ -9,7 +9,7 @@ This release also contains an important bug fix, so upgrading is strongly recomm
 
 - The deduplication rolling hash algorithm has been improved and is now 30 to 50 percent faster.
 - Those using a nightly rust compiler can enable SIMD (even faster) rolling hash implementations.
-- A multithreaded `bupstash put` implementation has been added that can read, hash, compress, encrypt many files in parallel.
+- A multithreaded `bupstash put` implementation has been added that can read, hash, compress, encrypt files in parallel.
 - New flags have been added to `bupstash put` to tune how bupstash uses cpu threads.
 - Bupstash diff and bupstash restore can now use multiple threads when computing changes on the local disk.
 
