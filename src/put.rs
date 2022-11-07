@@ -641,9 +641,8 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
             }
         }
 
-        if file_len != ent.size.0 {
-            ent.size.0 = file_len;
-        }
+        // The size might have changed since the first stat.
+        ent.size.0 = file_len;
 
         let (_, file_hasher) = f.into_inner();
         ent.data_hash = index::ContentCryptoHash::Blake3(file_hasher.finalize().into());
