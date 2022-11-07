@@ -1,21 +1,41 @@
 # Bupstash v0.12.0
 
 We are proud to bring you the next iteration of bupstash, this update contains a large amount of
-performance work that should speed up `bupstash put` in many situations.
+performance work as well as important bug fixes.
 
-This release also contains an important bug fix, so upgrading is strongly recommended.
+As an example of the potential performance improvements, here is a synthetic benchmark snapshotting the linux
+kernel source code on a development machine:
+
+```
+Benchmark 1: bupstash-0.11.1 put --no-send-log /tmp/linux
+  Time (mean ± σ):      5.885 s ±  0.091 s    [User: 6.099 s, System: 1.766 s]
+  Range (min … max):    5.701 s …  6.016 s    10 runs
+ 
+Benchmark 2: bupstash-0.12.0 put --no-send-log /tmp/linux
+  Time (mean ± σ):      1.884 s ±  0.014 s    [User: 7.334 s, System: 1.340 s]
+  Range (min … max):    1.862 s …  1.908 s    10 runs
+ 
+Summary
+  'bupstash-0.12.0 put --no-send-log /tmp/linux' ran
+    3.12 ± 0.05 times faster than 'bupstash put --no-send-log /tmp/linux'
+```
+
+You read that right, a 3x speed improvement! It is also important to keep in mind bupstash is often limited
+by disk, network and send-log speeds rather than the cpu and ram performance that this benchmark measures.
 
 ## New features
 
 - The deduplication rolling hash algorithm has been improved and is now 30 to 50 percent faster.
 - Those using a nightly rust compiler can enable SIMD (even faster) rolling hash implementations.
 - A multithreaded `bupstash put` implementation has been added that can read, hash, compress, encrypt files in parallel.
-- New flags have been added to `bupstash put` to tune how bupstash uses cpu threads.
 - Bupstash diff and bupstash restore can now use multiple threads when computing changes on the local disk.
+- New flags have been added to `bupstash put` and other commands to tune how bupstash uses cpu threads.
 
 ## Notable Bug fixes
 
-- A bug that cause bupstash to not detect io errors in certain situations has been fixed.
+- A bug that caused `bupstash serve` to not detect io errors in certain situations has been fixed.
+  Only the server side needs to be updated, so users of bupstash.io managed repositories do not need to take
+  further action.
 
 ## Incompatibilities
 
