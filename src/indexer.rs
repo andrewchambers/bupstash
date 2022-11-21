@@ -464,9 +464,12 @@ impl MetadataCollector {
                     PathBuf::from(path.file_name().unwrap())
                 }
             } else {
-                PathBuf::from(OsString::from_vec(
-                    path_bytes[base_path_bytes.len() + 1..].to_vec(),
-                ))
+                let trim = if base_path_bytes.len() == 1 {
+                    1 // '/' is our base path, trim a single slash.
+                } else {
+                    base_path_bytes.len() + 1 // Trim the base path and the separating '/'.
+                };
+                PathBuf::from(OsString::from_vec(path_bytes[trim..].to_vec()))
             }
         };
 
