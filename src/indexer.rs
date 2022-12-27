@@ -121,7 +121,13 @@ impl FsWalker {
         for p in filler_dirs.drain().chain(root_paths.drain(..)) {
             let stat = match p.symlink_metadata() {
                 Ok(stat) => stat,
-                Err(err) => anyhow::bail!("unable to stat {:?}: {}", p, err),
+                Err(err) => {
+                    if opts.ignore_permission_errors
+                        && err.kind() == std::io::ErrorKind::PermissionDenied {
+                        continue;
+                    }
+                    anyhow::bail!("unable to stat {:?}: {}", p, err);
+                },
             };
 
             let parent = if let Some(parent) = p.parent() {
