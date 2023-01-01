@@ -51,21 +51,21 @@ teardown () {
   rm -rf "$SCRATCH"
 }
 
-@test "simple put/get primary key" {
+@test "simple put+get primary key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash put :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
-@test "simple put/get put key" {
+@test "simple put+get put key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
-@test "simple put/get no compression" {
+@test "simple put+get no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash put --compression=none -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
