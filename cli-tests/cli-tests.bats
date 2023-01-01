@@ -1183,3 +1183,17 @@ _concurrent_modify_worker () {
     --dev-bind / / \
     -- $(which bash) "$BATS_TEST_DIRNAME"/s3-parallel-thrash.sh
 }
+
+@test "ignore permission errors on parent path elements" {
+  # Create something readable that is always backed up such that the operation
+  # is still considered succesful while other paths could not be backed up.
+  mkdir "$SCRATCH/userdir"
+  # Lacking test code to create files owned by another user,
+  # assume /root/ is not readable.
+
+  # The indexer must handle EACCES in any path element, i.e. gracefully stop at
+  # the first inaccessible parent directory.
+  id=$(bupstash put --ignore-permission-errors :: "$SCRATCH/userdir" /root/rootfile)
+  rootuid=$(bupstash list-contents --format=jsonl1 --pick root/ id=$id | jq .uid)
+  test 0 = $rootuid
+}
