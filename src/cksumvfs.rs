@@ -11,7 +11,7 @@ pub fn register_cksumvfs() {
     // Because have our own copy of the sqlite3 header file, this
     // test ensures we are using the same header rusqlite used.
     assert_eq!(
-        unsafe { cksumvfs_sqlite_version_number() as i32 },
+        unsafe { cksumvfs_sqlite_version_number() },
         rusqlite::version_number()
     );
     assert_eq!(

@@ -54,12 +54,12 @@ pub fn memzero(buf: &mut [u8]) {
 }
 
 pub struct BoxNonce {
-    pub bytes: [u8; BOX_NONCEBYTES as usize],
+    pub bytes: [u8; BOX_NONCEBYTES],
 }
 
 impl BoxNonce {
     pub fn new() -> Self {
-        let mut bytes: [u8; BOX_NONCEBYTES as usize] = [0; BOX_NONCEBYTES];
+        let mut bytes: [u8; BOX_NONCEBYTES] = [0; BOX_NONCEBYTES];
         randombytes(&mut bytes[..]);
         BoxNonce { bytes }
     }
@@ -100,7 +100,7 @@ impl Drop for BoxSecretKey {
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 pub struct BoxPublicKey {
-    pub bytes: [u8; BOX_PUBLICKEYBYTES as usize],
+    pub bytes: [u8; BOX_PUBLICKEYBYTES],
 }
 
 impl BoxPublicKey {

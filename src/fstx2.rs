@@ -173,7 +173,7 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
     if !hot_wal(fs)? {
         // Truncate the unfinished wal file, no work to do.
         let mut f = fs.open(
-            &WAL_NAME,
+            WAL_NAME,
             vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
         )?;
         f.fsync()?;
@@ -294,7 +294,7 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
     } else {
         // Truncate the wal, instead of removing it.
         let mut f = fs.open(
-            &WAL_NAME,
+            WAL_NAME,
             vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
         )?;
         f.fsync()?;

@@ -1194,7 +1194,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
             };
         } else {
             let input_path: PathBuf = std::convert::From::from(&source_args[0]);
-            let input_path = fsutil::absolute_path(&input_path)?;
+            let input_path = fsutil::absolute_path(input_path)?;
 
             let md = match std::fs::metadata(&input_path) {
                 Ok(md) => md,
@@ -2767,7 +2767,7 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         anyhow::bail!("please set --into or BUPSTASH_RESTORE_DIR to the restore target directory.")
     };
 
-    let into_dir = fsutil::absolute_path(&into_dir)?;
+    let into_dir = fsutil::absolute_path(into_dir)?;
 
     if !into_dir.exists() {
         anyhow::bail!("{} does not exist", into_dir.display())

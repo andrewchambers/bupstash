@@ -715,8 +715,7 @@ impl Repo {
         let estimated_chunk_count = self.storage_engine.estimate_chunk_count()?;
         let reachable_bloom_mem_size =
             abloom::approximate_mem_size_upper_bound(0.02, estimated_chunk_count)
-                .min(MAX_GC_BLOOM_SIZE)
-                .max(MIN_GC_BLOOM_SIZE);
+                .clamp(MIN_GC_BLOOM_SIZE, MAX_GC_BLOOM_SIZE);
 
         // Set of item ids we have walked before.
         let mut xid_wset = HashSet::with_capacity(65536);

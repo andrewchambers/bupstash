@@ -484,8 +484,8 @@ impl MetadataCollector {
             mtime: serde_bare::Uint(stat.mtime() as u64),
             mtime_nsec: serde_bare::Uint(stat.mtime_nsec() as u64),
             nlink: serde_bare::Uint(stat.nlink()),
-            dev_major: serde_bare::Uint(dev_major as u64),
-            dev_minor: serde_bare::Uint(dev_minor as u64),
+            dev_major: serde_bare::Uint(dev_major),
+            dev_minor: serde_bare::Uint(dev_minor),
             // To be normalized later in the pipeline.
             norm_dev: serde_bare::Uint(stat.dev()),
             ino: serde_bare::Uint(stat.ino()),

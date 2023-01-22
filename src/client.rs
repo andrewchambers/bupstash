@@ -1135,7 +1135,7 @@ pub fn restore_to_local_dir(
                     if ent.link_target.is_none() {
                         anyhow::bail!("{} is missing a link target", ent.path.to_string_lossy());
                     }
-                    match std::os::unix::fs::symlink(&ent.link_target.unwrap(), &to_create) {
+                    match std::os::unix::fs::symlink(ent.link_target.unwrap(), &to_create) {
                         Ok(_) => (),
                         Err(err) => anyhow::bail!(
                             "failed to make symlink at {}: {}",

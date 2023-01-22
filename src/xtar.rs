@@ -140,7 +140,7 @@ pub fn index_entry_to_tarheader(
         let remaining = 512 - (hdr_bytes.len() % 512);
         if remaining < 512 {
             let buf = [0; 512];
-            hdr_bytes.extend_from_slice(&buf[..remaining as usize]);
+            hdr_bytes.extend_from_slice(&buf[..remaining]);
         }
         debug_assert!(hdr_bytes.len() % 512 == 0);
     }
