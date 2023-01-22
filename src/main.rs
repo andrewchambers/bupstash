@@ -2689,7 +2689,8 @@ fn indexer_benchmark_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     let indexer = indexer::FsIndexer::new(&dirs, indexer_opts).unwrap();
 
     for ent in indexer {
-        println!("{}", ent?.0.display());
+        let ent = ent?;
+        println!("{}: {}", ent.0.display(), ent.1.path.display());
     }
 
     Ok(())
