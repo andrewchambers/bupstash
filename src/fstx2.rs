@@ -133,7 +133,6 @@ fn hot_wal(fs: &vfs::VFs) -> Result<bool, std::io::Error> {
     let mut hasher = blake3::Hasher::new();
     let mut f = match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
         Ok(f) => f,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(err),
     };
     let md = f.metadata()?;
@@ -172,11 +171,13 @@ fn keep_wal() -> bool {
 
 fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
     if !hot_wal(fs)? {
-        match fs.remove_file(WAL_NAME) {
-            Ok(()) => return Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err),
-        };
+        // Truncate the unfinished wal file, no work to do.
+        let mut f = fs.open(
+            &WAL_NAME,
+            vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+        )?;
+        f.fsync()?;
+        return Ok(());
     }
 
     let wal = fs.open(WAL_NAME, vfs::OpenFlags::RDONLY)?;
@@ -291,11 +292,15 @@ fn apply_wal(fs: &vfs::VFs, _lock: &vfs::VFile) -> Result<(), std::io::Error> {
         drop(seqf);
         fs.rename(WAL_NAME, &format!("wal/{:0>8}.wal", sequence_number))?;
     } else {
-        fs.remove_file(WAL_NAME)?;
+        // Truncate the wal, instead of removing it.
+        let mut f = fs.open(
+            &WAL_NAME,
+            vfs::OpenFlags::WRONLY | vfs::OpenFlags::CREAT | vfs::OpenFlags::TRUNC,
+        )?;
+        f.fsync()?;
     }
 
     sync_dir(fs, ".")?;
-
     Ok(())
 }
 
@@ -310,12 +315,13 @@ impl<'a> ReadTxn<'a> {
             let mut lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDONLY)?;
             lock.lock(vfs::LockType::Shared)?;
 
-            // Check if there is a hot WAL with a read lock applied.
+            // Check if there is a non empty WAL with a read lock applied.
+            // We use 'open' to force a stat refresh on fuse filesystems,
+            // it cannot be cached.
             match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
-                Ok(wal_file) => {
-                    std::mem::drop(wal_file);
-                    std::mem::drop(lock);
-                    {
+                Ok(mut wal) => {
+                    if wal.metadata()?.size > 0 {
+                        drop(lock);
                         lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
                         lock.lock(vfs::LockType::Exclusive)?;
 
@@ -394,10 +400,12 @@ impl<'a> WriteTxn<'a> {
         let mut lock_file = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
         lock_file.lock(vfs::LockType::Exclusive)?;
 
+        // Use open as this forces a stat refresh on fuse filesystems.
         match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
-            Ok(wal_file) => {
-                std::mem::drop(wal_file);
-                apply_wal(fs, &lock_file)?;
+            Ok(mut wal) => {
+                if wal.metadata()?.size > 0 {
+                    apply_wal(fs, &lock_file)?;
+                }
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
             Err(err) => return Err(err),
