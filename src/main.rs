@@ -1470,6 +1470,7 @@ fn get_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let mut get_index = if metadata.index_tree().is_some() {
         Some(client::request_index(
+            &progress,
             client::IndexRequestContext {
                 primary_key_id,
                 idx_hash_key_part_1,
@@ -1664,8 +1665,8 @@ fn list_contents_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         );
     }
 
-    progress.set_message("fetching content index...");
     let mut content_index = client::request_index(
+        &progress,
         client::IndexRequestContext {
             primary_key_id,
             idx_hash_key_part_1,
@@ -1979,6 +1980,7 @@ fn diff_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
             progress.set_message("fetching content index...");
             let content_index = client::request_index(
+                &progress,
                 client::IndexRequestContext {
                     primary_key_id,
                     idx_hash_key_part_1: idx_hash_key_part_1.clone(),
@@ -2838,11 +2840,11 @@ fn restore_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         }
     };
 
-    progress.set_message("fetching item index...");
     let metadata = client::request_metadata(item_id, &mut serve_out, &mut serve_in)?;
 
     let content_index = if metadata.index_tree().is_some() {
         client::request_index(
+            &progress,
             client::IndexRequestContext {
                 primary_key_id,
                 idx_hash_key_part_1,
