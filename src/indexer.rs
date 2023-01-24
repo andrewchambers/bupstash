@@ -123,11 +123,12 @@ impl FsWalker {
                 Ok(stat) => stat,
                 Err(err) => {
                     if opts.ignore_permission_errors
-                        && err.kind() == std::io::ErrorKind::PermissionDenied {
+                        && err.kind() == std::io::ErrorKind::PermissionDenied
+                    {
                         continue;
                     }
                     anyhow::bail!("unable to stat {:?}: {}", p, err);
-                },
+                }
             };
 
             let parent = if let Some(parent) = p.parent() {

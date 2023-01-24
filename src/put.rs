@@ -923,6 +923,11 @@ pub fn put_files(
     }
     let index_tree_meta = index_htree.finish(&mut sender)?;
 
+    if index_tree_meta.data_chunk_count == 0 {
+        // This could in theory happen when the base dir is temporarily inaccessible.
+        anyhow::bail!("refusing to create an empty snapshot");
+    }
+
     let mut conn = sender.conn.lock().unwrap();
     conn.flush()?;
 
