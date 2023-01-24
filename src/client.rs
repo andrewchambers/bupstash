@@ -350,7 +350,7 @@ pub fn request_data_stream(
                 )?,
                 None => {
                     let bytes_received =
-                        receive_htree(&mut ctx.data_dctx, &hash_key, r, &mut tr, out)?;
+                        receive_htree(None, &mut ctx.data_dctx, &hash_key, r, &mut tr, out)?;
                     if bytes_received != decrypted_metadata.data_size.0 {
                         anyhow::bail!("expected data size does not match actual data size, possible corruption detected");
                     };
@@ -371,6 +371,7 @@ pub struct IndexRequestContext {
 }
 
 pub fn request_index(
+    progress: &indicatif::ProgressBar,
     mut ctx: IndexRequestContext,
     id: Xid,
     metadata: &oplog::VersionedItemMetadata,
@@ -408,8 +409,24 @@ pub fn request_index(
             estimated_compressed_size,
         )))?;
 
+    progress.set_message("fetching content index");
+    progress.set_position(0);
+    progress.set_length(decrypted_metadata.index_size.0);
+    progress.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {msg} [{wide_bar}] {bytes}/{total_bytes}")
+            .progress_chars("=> "),
+    );
+
     write_packet(w, &Packet::RequestIndex(RequestIndex { id }))?;
-    let bytes_received = receive_htree(&mut ctx.idx_dctx, &hash_key, r, &mut tr, &mut index_data)?;
+    let bytes_received = receive_htree(
+        Some(progress),
+        &mut ctx.idx_dctx,
+        &hash_key,
+        r,
+        &mut tr,
+        &mut index_data,
+    )?;
     if bytes_received != decrypted_metadata.index_size.0 {
         anyhow::bail!(
             "expected index size does not match actual index size, possible corruption detected"
@@ -443,6 +460,7 @@ fn receive_and_authenticate_htree_chunk(
 }
 
 fn receive_htree(
+    progress: Option<&indicatif::ProgressBar>,
     dctx: &mut crypto::DecryptionContext,
     hash_key: &crypto::HashKey,
     r: &mut dyn Read,
@@ -461,12 +479,14 @@ fn receive_htree(
                 }
                 _ => anyhow::bail!("protocol error, expected begin chunk packet"),
             };
-
             let data = compression::decompress(dctx.decrypt_data(data)?)?;
             if addr != crypto::keyed_content_address(&data, hash_key) {
                 return Err(ClientError::CorruptOrTamperedData.into());
             }
             out.write_all(&data)?;
+            if let Some(progress) = progress {
+                progress.inc(data.len() as u64);
+            }
             n_copied += data.len() as u64;
         } else {
             let data = receive_and_authenticate_htree_chunk(r, addr)?;
