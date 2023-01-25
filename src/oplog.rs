@@ -212,7 +212,7 @@ impl VersionedItemMetadata {
                 let ts_nsecs = ((ts_millis % 1000) * 1000000) as u32;
                 let ts = chrono::DateTime::<chrono::Utc>::from_utc(
                     chrono::NaiveDateTime::from_timestamp_opt(ts_secs, ts_nsecs)
-                        .ok_or(anyhow::format_err!("invalid timestamp"))?,
+                        .ok_or_else(|| anyhow::format_err!("invalid timestamp"))?,
                     chrono::Utc,
                 );
                 Ok(DecryptedItemMetadata {
@@ -241,7 +241,7 @@ impl VersionedItemMetadata {
                 let ts_nsecs = ((ts_millis % 1000) * 1000000) as u32;
                 let ts = chrono::DateTime::<chrono::Utc>::from_utc(
                     chrono::NaiveDateTime::from_timestamp_opt(ts_secs, ts_nsecs)
-                        .ok_or(anyhow::format_err!("invalid timestamp"))?,
+                        .ok_or_else(|| anyhow::format_err!("invalid timestamp"))?,
                     chrono::Utc,
                 );
                 Ok(DecryptedItemMetadata {

@@ -186,7 +186,7 @@ cfg_if::cfg_if! {
     } else {
 
         pub fn makedev(major: u64, minor: u64) -> libc::dev_t {
-            unsafe { libc::makedev(major as libc::c_uint, minor as libc::c_uint) }
+            libc::makedev(major as libc::c_uint, minor as libc::c_uint)
         }
 
         pub fn dev_major(dev: u64) -> u64 {
