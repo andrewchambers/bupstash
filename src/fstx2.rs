@@ -361,16 +361,13 @@ impl<'a> ReadTxn<'a> {
         self.fs.open(p, vfs::OpenFlags::RDONLY)
     }
 
-    pub fn metadata(&self, p: &str) -> Result<vfs::Metadata, std::io::Error> {
-        self.fs.metadata(p)
-    }
-
     pub fn read_dir(&self, p: &str) -> Result<Vec<vfs::DirEntry>, std::io::Error> {
         self.fs.read_dir(p)
     }
 
     pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
-        match self.fs.metadata(p) {
+        // Using open plays better with fuse caching.
+        match self.fs.open(p, vfs::OpenFlags::RDONLY) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
@@ -564,12 +561,9 @@ impl<'a> WriteTxn<'a> {
         self.fs.open(p, vfs::OpenFlags::RDONLY)
     }
 
-    pub fn metadata(&self, p: &str) -> Result<vfs::Metadata, std::io::Error> {
-        self.fs.metadata(p)
-    }
-
     pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
-        match self.fs.metadata(p) {
+        // Using open plays better with fuse caching.
+        match self.fs.open(p, vfs::OpenFlags::RDONLY) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),

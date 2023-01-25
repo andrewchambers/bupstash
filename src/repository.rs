@@ -489,14 +489,10 @@ impl Repo {
 
         for item in items.drain(..) {
             let path = format!("items/{:x}", item);
-            match txn.metadata(&path) {
-                Ok(_) => {
-                    let removed = path.clone() + ".removed";
-                    txn.add_rename(&path, &removed)?;
-                    removed_items.push(item)
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-                Err(err) => return Err(err.into()),
+            if txn.file_exists(&path)? {
+                let removed = path.clone() + ".removed";
+                txn.add_rename(&path, &removed)?;
+                removed_items.push(item)
             };
         }
 
@@ -880,14 +876,9 @@ impl Repo {
                 let op = serde_bare::from_reader(&mut log_file)?;
                 if let oplog::LogOp::AddItem((id, md)) = op {
                     let p = format!("items/{:x}", id);
-                    match txn.metadata(&p) {
-                        Ok(_) => {
-                            compacted_log.write_all(&serde_bare::to_vec(
-                                &oplog::LogOp::AddItem((id, md)),
-                            )?)?;
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-                        Err(err) => return Err(err.into()),
+                    if txn.file_exists(&p)? {
+                        compacted_log
+                            .write_all(&serde_bare::to_vec(&oplog::LogOp::AddItem((id, md)))?)?;
                     }
                 }
             }

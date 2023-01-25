@@ -302,12 +302,9 @@ impl OsDir {
     }
 
     pub fn metadata(&self, p: &str) -> Result<Metadata, std::io::Error> {
-        let stat = nix::sys::stat::fstatat(
-            self.f.as_raw_fd(),
-            Path::new(p),
-            nix::fcntl::AtFlags::empty(),
-        )?;
-        Ok(stat.into())
+        // Using open for querying metadata forces a refresh of the stat
+        // info on fuse filesystems with caching enabled.
+        self.open(p, OpenFlags::RDONLY)?.metadata()
     }
 
     pub fn rename(&self, from: &str, to: &str) -> Result<(), std::io::Error> {
