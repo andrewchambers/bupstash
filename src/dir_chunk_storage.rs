@@ -9,7 +9,6 @@ use super::vfs;
 use super::xid;
 
 use std::collections::VecDeque;
-use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,6 +23,12 @@ enum ReadWorkerMsg {
             crossbeam_channel::Sender<Result<Vec<u8>, anyhow::Error>>,
         ),
     ),
+    FilterExisting(
+        (
+            Vec<Address>,
+            crossbeam_channel::Sender<Result<Vec<Address>, anyhow::Error>>,
+        ),
+    ),
     Exit,
 }
 
@@ -34,7 +39,8 @@ enum WriteWorkerMsg {
 }
 
 pub struct DirStorage {
-    fs: Arc<vfs::VFs>,
+    // An array of VFS directories, one for each chunk dir.
+    chunk_dirs: Arc<Vec<vfs::VFs>>,
 
     // Reading
     read_worker_handles: Vec<std::thread::JoinHandle<()>>,
@@ -50,26 +56,30 @@ pub struct DirStorage {
 
 impl DirStorage {
     fn add_write_worker_thread(&mut self) {
-        let fs = self.fs.clone();
+        let chunk_dirs = self.chunk_dirs.clone();
         let had_io_error = self.had_io_error.clone();
         let (write_worker_tx, write_worker_rx) = crossbeam_channel::bounded(0);
 
+        let err_forever = move |rx: crossbeam_channel::Receiver<WriteWorkerMsg>, mut err| {
+            had_io_error.store(true, Ordering::SeqCst);
+            loop {
+                match rx.recv() {
+                    Ok(WriteWorkerMsg::AddChunk(_)) => (),
+                    Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => {
+                        let _ = rendezvous_tx.send(Err(err));
+                    }
+                    Ok(WriteWorkerMsg::Exit) | Err(_) => {
+                        return;
+                    }
+                }
+                err = anyhow::format_err!("io error");
+            }
+        };
+
         macro_rules! worker_bail {
             ($err:expr) => {{
-                had_io_error.store(true, Ordering::SeqCst);
-                let mut write_err: anyhow::Error = $err.into();
-                loop {
-                    match write_worker_rx.recv() {
-                        Ok(WriteWorkerMsg::AddChunk(_)) => (),
-                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => {
-                            let _ = rendezvous_tx.send(Err(write_err));
-                        }
-                        Ok(WriteWorkerMsg::Exit) | Err(_) => {
-                            return;
-                        }
-                    }
-                    write_err = anyhow::format_err!("io error");
-                }
+                err_forever(write_worker_rx, $err.into());
+                return;
             }};
         }
 
@@ -85,22 +95,18 @@ impl DirStorage {
         let worker = std::thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(move || {
-                // Open dir handle over duration of renames, we want
-                // to guarantee when we sync the directory, we get notified
-                // of any io errors that happen on that directory.
-                let mut dir_handle = worker_try!(fs.open(".", vfs::OpenFlags::RDONLY));
-
                 let mut added_chunks: u64 = 0;
                 let mut added_bytes: u64 = 0;
 
                 loop {
                     match write_worker_rx.recv() {
                         Ok(WriteWorkerMsg::AddChunk((addr, data))) => {
+                            let shard = ((addr.bytes[0] & 0xf0) >> 4) as usize;
                             let addr = addr.as_hex_addr();
-                            let chunk_name = addr.as_str();
+                            let file_name = &addr.as_str()[1..];
 
                             // Using open to check if it exists works better with fuse caching.
-                            match fs.open(chunk_name, vfs::OpenFlags::RDONLY) {
+                            match chunk_dirs[shard].open(file_name, vfs::OpenFlags::RDONLY) {
                                 Ok(_) => continue,
                                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
                                 Err(err) => worker_bail!(err),
@@ -115,14 +121,14 @@ impl DirStorage {
                                 hex::easy_encode_to_string(&buf[..])
                             };
 
-                            let tmp = chunk_name
+                            let tmp = file_name
                                 .chars()
                                 .chain(".".chars())
                                 .chain(random_suffix.chars())
                                 .chain(".tmp".chars())
                                 .collect::<String>();
 
-                            let mut tmp_file = worker_try!(fs.open(
+                            let mut tmp_file = worker_try!(chunk_dirs[shard].open(
                                 &tmp,
                                 vfs::OpenFlags::TRUNC
                                     | vfs::OpenFlags::WRONLY
@@ -131,22 +137,16 @@ impl DirStorage {
 
                             worker_try!(tmp_file.write_all(&data));
                             worker_try!(tmp_file.fsync());
-                            worker_try!(fs.rename(&tmp, chunk_name));
+                            worker_try!(chunk_dirs[shard].rename(&tmp, file_name));
                         }
-                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => match dir_handle.fsync() {
-                            Ok(()) => {
-                                let _ = rendezvous_tx.send(Ok(protocol::FlushStats {
-                                    added_chunks,
-                                    added_bytes,
-                                }));
-                                added_chunks = 0;
-                                added_bytes = 0;
-                            }
-                            Err(err) => {
-                                let _ = rendezvous_tx.send(Err(err.into()));
-                                worker_bail!(anyhow::format_err!("io error"));
-                            }
-                        },
+                        Ok(WriteWorkerMsg::Barrier(rendezvous_tx)) => {
+                            let _ = rendezvous_tx.send(Ok(protocol::FlushStats {
+                                added_chunks,
+                                added_bytes,
+                            }));
+                            added_chunks = 0;
+                            added_bytes = 0;
+                        }
                         Ok(WriteWorkerMsg::Exit) | Err(_) => {
                             return;
                         }
@@ -160,26 +160,49 @@ impl DirStorage {
     }
 
     fn add_read_worker_thread(&mut self) {
-        let fs = self.fs.clone();
+        let chunk_dirs = self.chunk_dirs.clone();
         let read_worker_rx = self.read_worker_rx.clone();
 
         let worker = std::thread::Builder::new()
             .stack_size(256 * 1024)
-            .spawn(move || loop {
+            .spawn(move || 'worker_loop: loop {
                 match read_worker_rx.recv() {
                     Ok(ReadWorkerMsg::GetChunk((addr, result_tx))) => {
-                        let result =
-                            match fs.open(addr.as_hex_addr().as_str(), vfs::OpenFlags::RDONLY) {
-                                Ok(mut f) => {
-                                    let mut data = Vec::with_capacity(1024 * 1024);
-                                    match f.read_to_end(&mut data) {
-                                        Ok(_) => Ok(data),
-                                        Err(err) => Err(err.into()),
-                                    }
+                        let shard = ((addr.bytes[0] & 0xf0) >> 4) as usize;
+                        let addr = addr.as_hex_addr();
+                        let file_name = &addr.as_str()[1..];
+                        let result = match chunk_dirs[shard].open(file_name, vfs::OpenFlags::RDONLY)
+                        {
+                            Ok(mut f) => {
+                                let mut data = Vec::with_capacity(2 * 1024 * 1024);
+                                match f.read_to_end(&mut data) {
+                                    Ok(_) => Ok(data),
+                                    Err(err) => Err(err.into()),
                                 }
-                                Err(err) => Err(err.into()),
-                            };
+                            }
+                            Err(err) => Err(err.into()),
+                        };
                         let _ = result_tx.send(result);
+                    }
+                    Ok(ReadWorkerMsg::FilterExisting((addresses, result_tx))) => {
+                        let mut missing = Vec::with_capacity(addresses.len());
+                        for addr in addresses.iter() {
+                            let shard = ((addr.bytes[0] & 0xf0) >> 4) as usize;
+                            let hex_addr = addr.as_hex_addr();
+                            let file_name = &hex_addr.as_str()[1..];
+                            // Using open to check if it exists works better with fuse caching.
+                            match chunk_dirs[shard].open(file_name, vfs::OpenFlags::RDONLY) {
+                                Ok(_) => (),
+                                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                                    missing.push(*addr)
+                                }
+                                Err(err) => {
+                                    let _ = result_tx.send(Err(err.into()));
+                                    continue 'worker_loop;
+                                }
+                            }
+                        }
+                        let _ = result_tx.send(Ok(missing));
                     }
                     Ok(ReadWorkerMsg::Exit) | Err(_) => {
                         return;
@@ -240,6 +263,10 @@ impl DirStorage {
                 .unwrap();
         }
 
+        for d in self.chunk_dirs.iter() {
+            d.sync()?;
+        }
+
         let mut aggregate_err: Option<anyhow::Error> = None;
         for c in rendezvous.iter() {
             match c.recv().unwrap() {
@@ -279,8 +306,13 @@ impl DirStorage {
         let had_io_error = Arc::new(AtomicBool::new(false));
         let (read_worker_tx, read_worker_rx) = crossbeam_channel::bounded(0);
 
+        let mut chunk_dirs = Vec::new();
+        for i in 0..16 {
+            chunk_dirs.push(fs.sub_fs(&format!("{:x}", i))?);
+        }
+
         Ok(DirStorage {
-            fs: Arc::new(fs),
+            chunk_dirs: Arc::new(chunk_dirs),
             read_worker_handles,
             read_worker_tx,
             read_worker_rx,
@@ -304,22 +336,22 @@ impl Engine for DirStorage {
         addresses: &[Address],
         on_chunk: &mut dyn FnMut(&Address, &[u8]) -> Result<(), anyhow::Error>,
     ) -> Result<(), anyhow::Error> {
-        let mut pipeline_get_queue = VecDeque::new();
+        let mut pipeline_queue = VecDeque::new();
 
         for addr in addresses.iter() {
             let (tx, rx) = crossbeam_channel::bounded(1);
             self.scaling_read_worker_dispatch(ReadWorkerMsg::GetChunk((*addr, tx)))?;
-            pipeline_get_queue.push_back((addr, rx));
+            pipeline_queue.push_back((addr, rx));
 
-            if pipeline_get_queue.len() >= MAX_READ_WORKERS {
-                let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
+            if pipeline_queue.len() >= MAX_READ_WORKERS {
+                let (addr, rx) = pipeline_queue.pop_front().unwrap();
                 let data = rx.recv()??;
                 on_chunk(addr, &data)?;
             }
         }
 
-        while !pipeline_get_queue.is_empty() {
-            let (addr, rx) = pipeline_get_queue.pop_front().unwrap();
+        while !pipeline_queue.is_empty() {
+            let (addr, rx) = pipeline_queue.pop_front().unwrap();
             let data = rx.recv()??;
             on_chunk(addr, &data)?;
         }
@@ -332,40 +364,34 @@ impl Engine for DirStorage {
         on_progress: &mut dyn FnMut(u64) -> Result<(), anyhow::Error>,
         addresses: Vec<Address>,
     ) -> Result<Vec<Address>, anyhow::Error> {
-        let mut progress: u64 = 0;
+        let mut filtered = Vec::with_capacity(addresses.len());
+        let mut pipeline_queue = VecDeque::new();
 
-        let progress_update_delay = std::time::Duration::from_millis(300);
-        let mut last_progress_update = std::time::Instant::now()
-            .checked_sub(progress_update_delay)
-            .unwrap();
-
-        let mut filtered_addresses = Vec::with_capacity(addresses.len() / 10);
-
-        for addr in addresses.into_iter() {
-            let hex_addr = addr.as_hex_addr();
-            let chunk_path = hex_addr.as_str();
-            match self.fs.metadata(chunk_path) {
-                Ok(_) => (),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    filtered_addresses.push(addr)
-                }
-                Err(err) => return Err(err.into()),
-            };
-            progress += 1;
-            if progress % 107 == 0 && last_progress_update.elapsed() > progress_update_delay {
-                on_progress(progress)?;
-                last_progress_update = std::time::Instant::now();
-                progress = 0;
+        for addrs in addresses.chunks(4096) {
+            let (tx, rx) = crossbeam_channel::bounded(1);
+            pipeline_queue.push_back((addrs.len() as u64, rx));
+            self.scaling_read_worker_dispatch(ReadWorkerMsg::FilterExisting((addrs.to_vec(), tx)))?;
+            if pipeline_queue.len() >= MAX_READ_WORKERS {
+                let (new_progress, rx) = pipeline_queue.pop_front().unwrap();
+                filtered.append(&mut rx.recv()??);
+                on_progress(new_progress)?;
             }
         }
 
-        Ok(filtered_addresses)
+        while !pipeline_queue.is_empty() {
+            let (new_progress, rx) = pipeline_queue.pop_front().unwrap();
+            filtered.append(&mut rx.recv()??);
+            on_progress(new_progress)?;
+        }
+
+        Ok(filtered)
     }
 
     fn get_chunk(&mut self, addr: &Address) -> Result<Vec<u8>, anyhow::Error> {
-        let mut f = self
-            .fs
-            .open(addr.as_hex_addr().as_str(), vfs::OpenFlags::RDONLY)?;
+        let shard = ((addr.bytes[0] & 0xf0) >> 4) as usize;
+        let addr = addr.as_hex_addr();
+        let file_name = &addr.as_str()[1..];
+        let mut f = self.chunk_dirs[shard].open(file_name, vfs::OpenFlags::RDONLY)?;
         let mut data = Vec::with_capacity(1024 * 1024);
         f.read_to_end(&mut data)?;
         Ok(data)
@@ -410,7 +436,9 @@ impl Engine for DirStorage {
     }
 
     fn estimate_chunk_count(&mut self) -> Result<u64, anyhow::Error> {
-        Ok(self.fs.read_dir(".")?.len().try_into()?)
+        let n_chunks = self.chunk_dirs[0].read_dir(".")?.len() as u64;
+        let n_shards = self.chunk_dirs.len() as u64;
+        Ok(n_shards * n_chunks)
     }
 
     fn sweep(
@@ -437,35 +465,41 @@ impl Engine for DirStorage {
             .checked_sub(progress_update_delay)
             .unwrap();
 
-        // XXX: The following steps should probably be done parallel.
+        // XXX: The following steps should be done in parallel.
         // XXX: we are slowing the gc down by doing stat operatons on each chunk for diagnostics.
 
-        for (i, e) in self.fs.read_dir(".")?.into_iter().enumerate() {
-            if is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay {
-                last_progress_update = std::time::Instant::now();
-                update_progress_msg(format!(
-                    "enumerating chunks, {} reachable, {} unreachable...",
-                    chunks_remaining, chunks_deleted
-                ))?;
-            }
-            match Address::from_hex_str(&e.file_name) {
-                Ok(addr) if reachable.probably_has(&addr) => {
-                    if let Ok(md) = self.fs.metadata(&e.file_name) {
-                        bytes_remaining += md.size
-                    }
-                    chunks_remaining += 1
+        for shard in 0..self.chunk_dirs.len() {
+            for (i, e) in self.chunk_dirs[shard]
+                .read_dir(".")?
+                .into_iter()
+                .enumerate()
+            {
+                if is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay {
+                    last_progress_update = std::time::Instant::now();
+                    update_progress_msg(format!(
+                        "enumerating chunks, {} reachable, {} unreachable...",
+                        chunks_remaining, chunks_deleted
+                    ))?;
                 }
-                _ => {
-                    if let Ok(md) = self.fs.metadata(&e.file_name) {
-                        bytes_deleted += md.size
+                match Address::from_hex_str(&format!("{:x}{}", shard, e.file_name)) {
+                    Ok(addr) if reachable.probably_has(&addr) => {
+                        if let Ok(md) = self.chunk_dirs[shard].metadata(&e.file_name) {
+                            bytes_remaining += md.size
+                        }
+                        chunks_remaining += 1
                     }
-                    to_remove.push(e.file_name);
-                    chunks_deleted += 1;
+                    _ => {
+                        if let Ok(md) = self.chunk_dirs[shard].metadata(&e.file_name) {
+                            bytes_deleted += md.size
+                        }
+                        to_remove.push((shard, e.file_name));
+                        chunks_deleted += 1;
+                    }
                 }
             }
         }
 
-        for (i, to_remove) in to_remove.iter().enumerate() {
+        for (i, (shard, file_name)) in to_remove.drain(..).enumerate() {
             // Limit the number of updates, but always show the final update.
             if (is_update_idx(i) && last_progress_update.elapsed() >= progress_update_delay)
                 || ((i + 1) as u64 == chunks_deleted)
@@ -477,7 +511,7 @@ impl Engine for DirStorage {
                     chunks_deleted
                 ))?;
             }
-            self.fs.remove_file(to_remove)?;
+            self.chunk_dirs[shard].remove_file(&file_name)?;
         }
 
         Ok(repository::GcStats {
@@ -503,6 +537,9 @@ mod tests {
     fn add_and_get_chunk() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let fs = vfs::VFs::create(tmp_dir.path().to_str().unwrap()).unwrap();
+        for i in 0..16 {
+            fs.mkdir(&format!("{:x}", i)).unwrap();
+        }
         let mut storage = DirStorage::new(fs).unwrap();
         let addr = Address::default();
         storage.add_chunk(&addr, vec![1]).unwrap();
@@ -517,8 +554,10 @@ mod tests {
     fn pipelined_get_chunks() {
         let tmp_dir = tempfile::tempdir().unwrap();
         let fs = vfs::VFs::create(tmp_dir.path().to_str().unwrap()).unwrap();
+        for i in 0..16 {
+            fs.mkdir(&format!("{:x}", i)).unwrap();
+        }
         let mut storage = DirStorage::new(fs).unwrap();
-
         let addr = Address::default();
         storage.add_chunk(&addr, vec![1]).unwrap();
         storage.flush().unwrap();

@@ -45,6 +45,7 @@ bitflags! {
     }
 }
 
+#[derive(Clone)]
 pub struct DirEntry {
     pub file_name: String,
 }
@@ -189,6 +190,12 @@ impl VFs {
             VFs::OsDir(fs) => fs.mkdir(p),
         }
     }
+
+    pub fn sync(&self) -> Result<(), std::io::Error> {
+        match self {
+            VFs::OsDir(fs) => fs.sync(),
+        }
+    }
 }
 
 pub enum VFile {
@@ -255,7 +262,7 @@ impl Write for VFile {
 }
 
 pub struct OsDir {
-    f: std::fs::File,
+    pub f: std::fs::File,
 }
 
 impl OsDir {
@@ -362,10 +369,14 @@ impl OsDir {
         )?;
         Ok(())
     }
+
+    pub fn sync(&self) -> Result<(), std::io::Error> {
+        self.f.sync_all()
+    }
 }
 
 pub struct OsFile {
-    f: std::fs::File,
+    pub f: std::fs::File,
 }
 
 impl OsFile {

@@ -314,17 +314,12 @@ impl<'a> ReadTxn<'a> {
         'try_again: loop {
             let mut lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDONLY)?;
             lock.lock(vfs::LockType::Shared)?;
-
-            // Check if there is a non empty WAL with a read lock applied.
-            // We use 'open' to force a stat refresh on fuse filesystems,
-            // it cannot be cached.
-            match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
-                Ok(mut wal) => {
-                    if wal.metadata()?.size > 0 {
+            match fs.metadata(WAL_NAME) {
+                Ok(md) => {
+                    if md.size > 0 {
                         drop(lock);
                         lock = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
                         lock.lock(vfs::LockType::Exclusive)?;
-
                         // Now we have the exclusive lock, apply the wal and try again.
                         apply_wal(fs, &lock)?;
                         continue 'try_again;
@@ -366,8 +361,7 @@ impl<'a> ReadTxn<'a> {
     }
 
     pub fn file_exists(&self, p: &str) -> Result<bool, std::io::Error> {
-        // Using open plays better with fuse caching.
-        match self.fs.open(p, vfs::OpenFlags::RDONLY) {
+        match self.fs.metadata(p) {
             Ok(_) => Ok(true),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(err) => Err(err),
@@ -397,10 +391,9 @@ impl<'a> WriteTxn<'a> {
         let mut lock_file = fs.open(LOCK_NAME, vfs::OpenFlags::RDWR)?;
         lock_file.lock(vfs::LockType::Exclusive)?;
 
-        // Use open as this forces a stat refresh on fuse filesystems.
-        match fs.open(WAL_NAME, vfs::OpenFlags::RDONLY) {
-            Ok(mut wal) => {
-                if wal.metadata()?.size > 0 {
+        match fs.metadata(WAL_NAME) {
+            Ok(md) => {
+                if md.size > 0 {
                     apply_wal(fs, &lock_file)?;
                 }
             }
@@ -799,8 +792,8 @@ mod tests {
         let txn = ReadTxn::begin_at(&fs).unwrap();
         assert_eq!(txn.read("append").unwrap(), vec![1, 2, 3]);
         assert_eq!(txn.read("write").unwrap(), vec![4, 5, 6]);
-        assert!(txn.metadata("renamed").is_ok());
-        assert!(txn.metadata("some_dir").is_ok());
+        assert!(txn.file_exists("renamed").unwrap());
+        assert!(txn.file_exists("some_dir").unwrap());
         txn.end();
     }
 }
