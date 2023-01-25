@@ -73,7 +73,8 @@ pub fn format_human_content_listing(
     };
     let size_padding: String = " ".repeat(widths.human_size_digits - size.len());
     std::fmt::write(&mut result, format_args!(" {}{}", size, size_padding)).unwrap();
-    let ts = chrono::NaiveDateTime::from_timestamp(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32);
+    let ts = chrono::NaiveDateTime::from_timestamp_opt(ent.ctime.0 as i64, ent.ctime_nsec.0 as u32)
+        .unwrap();
     let ts = chrono::DateTime::<chrono::Utc>::from_utc(ts, chrono::Utc);
     let ts = format_timestamp(&ts, utc_timestamps);
     std::fmt::write(&mut result, format_args!(" {}", ts)).unwrap();

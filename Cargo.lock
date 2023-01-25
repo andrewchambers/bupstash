@@ -1113,9 +1113,9 @@ dependencies = [
 
 [[package]]
 name = "zstd-safe"
-version = "4.1.4+zstd.1.5.2"
+version = "6.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f7cd17c9af1a4d6c24beb1cc54b17e2ef7b593dc92f19e9d9acad8b182bbaee"
+checksum = "a6cf39f730b440bab43da8fb5faf5f254574462f73f260f85f7987f32154ff17"
 dependencies = [
  "libc",
  "zstd-sys",
@@ -1123,10 +1123,11 @@ dependencies = [
 
 [[package]]
 name = "zstd-sys"
-version = "1.6.3+zstd.1.5.2"
+version = "2.0.5+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc49afa5c8d634e75761feda8c592051e7eeb4683ba827211eb0d731d3402ea8"
+checksum = "edc50ffce891ad571e9f9afe5039c4837bede781ac4bb13052ed7ae695518596"
 dependencies = [
  "cc",
  "libc",
+ "pkg-config",
 ]
