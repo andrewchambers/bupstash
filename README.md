@@ -125,7 +125,7 @@ $ bupstash gc
 
 ## From source
 
-First ensure you have a recent rust+cargo, pkg-config and libsodium-dev package installed.
+First ensure you have a recent rust+cargo, pkg-config and libsodium-dev (>= 1.0.14) package installed.
 
 Next clone the repository and run cargo build.
 ```
