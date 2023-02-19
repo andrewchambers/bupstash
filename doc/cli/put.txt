@@ -13,7 +13,7 @@ repeatedly it's own send log. This can dramatically reduce the amount of
 disk reading and network usage required to make a snapshot.
 
 Examples:
-  $ export BUPSTASH_REPOSTORY=$HOME/bupstash-repo
+  $ export BUPSTASH_REPOSITORY=$HOME/bupstash-repo
   $ export BUPSTASH_KEY=./my-secret-bupstash.key
 
   # To avoid resending data needlessly during backups, create job specific send log.

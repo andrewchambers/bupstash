@@ -28,7 +28,7 @@ Run one of the following `bupstash` subcommands.
 ## DESCRIPTION
 
 ```bupstash``` is a tool for storing (and retrieving)
-files and data in an encrypted bupstash-repostory(7).
+files and data in an encrypted bupstash-repository(7).
 
 Some notable features of ```bupstash``` include:
 
