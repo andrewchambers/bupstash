@@ -3,13 +3,18 @@
 // For more info see: https://www.sqlite.org/cksumvfs.html
 
 extern "C" {
+    #[cfg(feature = "bundled-sqlite")]
     fn cksumvfs_sqlite_version_number() -> ::std::os::raw::c_int;
+
     fn sqlite3_register_cksumvfs(unused: *const u8) -> ::std::os::raw::c_int;
 }
 
 pub fn register_cksumvfs() {
     // Because have our own copy of the sqlite3 header file, this
     // test ensures we are using the same header rusqlite used.
+    // This is not needed (nor desirable) when building with a
+    // system-provided libsqlite.
+    #[cfg(feature = "bundled-sqlite")]
     assert_eq!(
         unsafe { cksumvfs_sqlite_version_number() },
         rusqlite::version_number()
