@@ -40,6 +40,7 @@ pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
+use anyhow::Context;
 use plmap::PipelineMap;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as FmtWrite;
@@ -1172,7 +1173,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     action,
                     ty,
                     path.as_os_str().to_string_lossy()
-                )?;
+                )
+                .context("failed to write to stderr")?;
                 Ok(())
             }))
         } else {
@@ -1302,7 +1304,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &progress,
         ServeProcessCliOpts::default(),
         protocol::OpenMode::ReadWrite,
-    )?;
+    )
+    .context("could not start serve process")?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1328,7 +1331,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         threads,
     };
 
-    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
+    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)
+        .context("failed to backup the data")?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -3147,9 +3151,10 @@ fn main() {
         // Support unix style pipelines, don't print an error on EPIPE.
         match err.root_cause().downcast_ref::<std::io::Error>() {
             Some(io_error) if io_error.kind() == std::io::ErrorKind::BrokenPipe => {
-                std::process::exit(1)
+                // Use distinct exit code here for diagnostic
+                std::process::exit(2)
             }
-            _ => die(format!("bupstash {}: {}", subcommand, err)),
+            _ => die(format!("bupstash {}: {:?}", subcommand, err)),
         }
     }
 }

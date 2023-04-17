@@ -22,6 +22,7 @@ use super::oplog;
 use super::protocol;
 use super::rollsum;
 use super::sendlog;
+use anyhow::Context;
 use plmap::{PipelineMap, ScopedPipelineMap};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -590,7 +591,8 @@ impl<'a, 'b> plmap::Mapper<Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Err
         &mut self,
         file_batch: Result<Vec<(PathBuf, index::IndexEntry)>, anyhow::Error>,
     ) -> Self::Out {
-        self.process_batch(file_batch?)
+        self.process_batch(file_batch.context("received `Err` batch for processing")?)
+            .context("failed to process a batch")
     }
 }
 
@@ -672,7 +674,8 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                 .unwrap()
                 .lock()
                 .unwrap()
-                .stat_cache_lookup_and_update(&stat_cache_key.unwrap())?
+                .stat_cache_lookup_and_update(&stat_cache_key.unwrap())
+                .context("failed to update stat cache")?
         } else {
             None
         };
@@ -682,7 +685,10 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                 let mut uncompressed_data_size = 0;
                 for (i, (ref path, ref mut ent)) in file_batch.iter_mut().enumerate() {
                     uncompressed_data_size += ent.size.0;
-                    self.log_file_action('~', ent.type_display_char(), path)?;
+                    self.log_file_action('~', ent.type_display_char(), path)
+                        .with_context(|| {
+                            format!("failed to log file action for {}", path.display())
+                        })?;
                     ent.data_hash = cache_entry.hashes[i];
                     ent.data_cursor = cache_entry.data_cursors[i];
                 }
@@ -707,16 +713,23 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                 let file_batch_len = file_batch.len();
 
                 for (i, (ref path, ref mut ent)) in file_batch.iter_mut().enumerate() {
-                    self.log_file_action('+', ent.type_display_char(), path)?;
+                    self.log_file_action('+', ent.type_display_char(), path)
+                        .context("failed to log file action")?;
 
                     let ent_data_chunk_start_idx = data_addresses.len() as u64;
                     let ent_start_byte_offset = self.data_chunker.buffered_count() as u64;
 
                     if ent.is_file() {
                         match file_opener.next_file().unwrap() {
-                            (_, Ok(f)) => {
+                            (ent_path, Ok(f)) => {
                                 let stat_size = ent.size.0;
-                                self.chunk_and_hash_file_data(f, &mut data_addresses, ent)?;
+                                self.chunk_and_hash_file_data(f, &mut data_addresses, ent)
+                                    .with_context(|| {
+                                        format!(
+                                            "failed to process file data of {}",
+                                            ent_path.display()
+                                        )
+                                    })?;
                                 if stat_size != ent.size.0 {
                                     // The files size changed, don't cache
                                     // this result in the stat cache.
@@ -750,7 +763,9 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                                 crypto::keyed_content_address(&chunk, &self.ctx.data_hash_key);
                             let chunk = compression::compress(self.ctx.compression, chunk);
                             let chunk = self.ctx.data_ectx.encrypt_data(chunk);
-                            self.sender.write_chunk(&address, chunk)?;
+                            self.sender
+                                .write_chunk(&address, chunk)
+                                .context("failed to write chunk")?;
                             data_addresses.push(address);
                             self.ctx.progress.inc(chunk_len);
                         }
@@ -793,7 +808,8 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                                 data_cursors: Cow::Borrowed(&data_cursors),
                                 hashes: Cow::Borrowed(&content_hashes),
                             },
-                        )?;
+                        )
+                        .context("failed to add stat cache data")?;
                 }
 
                 data_addresses

@@ -274,7 +274,7 @@ impl Repo {
                 schema_version = txn.read_string("meta/schema_version")?;
                 if schema_version != CURRENT_SCHEMA_VERSION {
                     anyhow::bail!(
-                        "the current version of bupstash expects repository schema version {}, got {}",
+                        "the current version of bupstash expects repository schema version {}, got {} (if the latter number is greater than the former, this means that you need to update bupstash)",
                         CURRENT_SCHEMA_VERSION,
                         schema_version
                     );
