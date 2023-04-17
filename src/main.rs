@@ -436,11 +436,7 @@ fn cli_to_serve_process(
 
     let mut proc = match std::process::Command::new(bin)
         .args(serve_cmd_args)
-        .stderr(if progress.is_hidden() {
-            std::process::Stdio::inherit()
-        } else {
-            std::process::Stdio::piped()
-        })
+        .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -449,21 +445,39 @@ fn cli_to_serve_process(
         Err(err) => anyhow::bail!("error spawning serve command: {}", err),
     };
 
-    let stderr_reader = if progress.is_hidden() {
-        None
-    } else {
+    let stderr_reader = {
         let progress = progress.clone();
         let proc_stderr = proc.stderr.take().unwrap();
 
         let stderr_reader = std::thread::spawn(move || {
             let buf_reader = std::io::BufReader::new(proc_stderr);
             for line in buf_reader.lines().flatten() {
-                progress.println(&line);
-                // Theres a tiny race condition here where we may print an
-                // error line twice, I can't see how to fix this unless we
-                // rewrite the progress bar library to report if the print happened.
-                if progress.is_finished() || progress.is_hidden() {
+                if progress.is_hidden() {
+                    /*
+                     * Workaround for SSH rogue behavior.
+                     * It sets its file descriptors to O_NONBLOCK, and because these
+                     * are shared on Unix it would also affect our stderr if we simply
+                     * inherited that file descriptor. Instead, we always use `piped` and
+                     * simply read and forward the bytes in a thread.
+                     *
+                     * See also:
+                     * https://github.com/andrewchambers/bupstash/issues/378
+                     * https://public-inbox.org/git/20190909170403.GB30399@sigill.intra.peff.net/T/
+                     * https://lists.nongnu.org/archive/html/bug-cvs/2005-07/msg00008.html
+                     * https://www.spinics.net/lists/openssh-unix-dev/msg06047.html
+                     * https://github.com/rust-lang/rust/issues/13336
+                     * https://github.com/rust-lang/rust/issues/100673
+                     */
                     let _ = writeln!(std::io::stderr(), "{}", line);
+                } else {
+                    progress.println(&line);
+
+                    // Theres a tiny race condition here where we may print an
+                    // error line twice, I can't see how to fix this unless we
+                    // rewrite the progress bar library to report if the print happened.
+                    if progress.is_finished() || progress.is_hidden() {
+                        let _ = writeln!(std::io::stderr(), "{}", line);
+                    }
                 }
             }
         });
