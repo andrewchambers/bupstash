@@ -733,7 +733,9 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
                                 // or the file permissions were changed changed.
                                 // We simply skip this entry and don't cache the result.
                                 bad_cache_ent = true;
-                                ent.path = PathBuf::from(""); // Empty path as a marker for bad entries.
+                                // It is simpler to keep the file but assume it has zero size
+                                // rather than attempt to repair the previous chunk offsets.
+                                ent.size.0 = 0;
                             }
                             (ent_path, Err(err)) => {
                                 anyhow::bail!("unable to read {}: {}", ent_path.display(), err)
@@ -769,10 +771,6 @@ impl<'a, 'b> BatchFileProcessor<'a, 'b> {
 
                     data_cursors.push(ent.data_cursor);
                     content_hashes.push(ent.data_hash);
-                }
-
-                if bad_cache_ent {
-                    file_batch.retain(|(_, ent)| !ent.path.as_os_str().is_empty());
                 }
 
                 if self.ctx.send_log_session.is_some() && self.ctx.use_stat_cache && !bad_cache_ent

@@ -1197,3 +1197,16 @@ _concurrent_modify_worker () {
   rootuid=$(bupstash list-contents --format=jsonl1 --pick root/ id=$id | jq .uid)
   test 0 = $rootuid
 }
+
+@test "ignore permission errors on files" {
+  mkdir "$SCRATCH/fs"
+  fs="$SCRATCH/fs"
+  mkdir -p "$fs/etc/examples" "$fs/var"
+  echo -n b > "$fs/etc/examples/bgpd.conf"
+  echo -n a > "$fs/etc/examples/acme-client.conf"
+  echo -n z > "$fs/var/z"
+  chmod 000 "$fs/etc/examples/bgpd.conf"
+  id=$(bupstash put --no-send-log --ignore-permission-errors "$fs")
+  test "z" = "$(bupstash get --pick var/z id=$id)"
+  test "" = "$(bupstash get --pick etc/examples/bgpd.conf id=$id)"
+}
