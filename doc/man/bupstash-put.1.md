@@ -14,7 +14,7 @@ Put data into a bupstash repository.
 such that only the decryption key can decrypt it.
 
 For single files the contents are saved directly, for multiple files the data
-is saved such that is can be retrieved as a tar archive, and for commands the
+is saved such that it can be retrieved as a tar archive, and for commands the
 command is executed and stdout is sent to the repository.
 
 Data stored in a bupstash repository is automatically deduplicated

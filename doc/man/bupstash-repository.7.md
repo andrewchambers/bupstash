@@ -62,7 +62,7 @@ type RemoveItems {
 
 type RecoverRemoved {}
 
-type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata | V2VersionedItemMetadata)
+type VersionedItemMetadata = (V1VersionedItemMetadata | V2VersionedItemMetadata | V3VersionedItemMetadata)
 
 type V1VersionedItemMetadata {
   // deprecated
