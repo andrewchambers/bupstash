@@ -1,0 +1,6 @@
+[target.x86_64-unknown-linux-musl]
+image="rust:1.68-alpine"
+pre-build = [
+  "apk update && apk upgrade",
+  "apk add lz4-dev libsodium-dev libsodium-static libc-dev"
+]

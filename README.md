@@ -135,6 +135,15 @@ $ cargo build --release
 $ cp ./target/release/bupstash $INSTALL_DIR
 ```
 
+If you need a statically linked `musl` build for e.g. your NAS box, you can do
+this with [cross](https://github.com/cross-rs/cross). (You also need Docker
+installed and working).
+
+```sh
+$ cargo install cross --git https://github.com/cross-rs/cross
+$ cross build --target x86_64-unknown-linux-musl --release
+```
+
 ### Pkgconf
 
 You can use pkgconf instead of pkg-config (this is required on freebsd) by setting
