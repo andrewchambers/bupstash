@@ -71,7 +71,7 @@ pub enum OpLogSyncEvent {
     End,
 }
 
-pub const CURRENT_SCHEMA_VERSION: &str = "8";
+pub const CURRENT_SCHEMA_VERSION: &str = "10";
 const MIN_GC_BLOOM_SIZE: usize = 128 * 1024;
 const MAX_GC_BLOOM_SIZE: usize = 0xffffffff; // Current plugin protocol uses 32 bits.
 
@@ -197,6 +197,9 @@ impl Repo {
         {
             tx.add_mkdir("items")?;
             tx.add_mkdir("data")?;
+            for i in 0..16 {
+                tx.add_mkdir(&format!("data/{:x}", i))?;
+            }
             tx.add_mkdir("meta")?;
             tx.add_mkdir("wal")?;
             tx.add_write("repo.lock", vec![])?;
@@ -267,6 +270,14 @@ impl Repo {
                 }
                 if schema_version == "7" {
                     migrate::repo_upgrade_to_7_to_8(&repo_vfs)?;
+                    continue;
+                }
+                if schema_version == "8" {
+                    migrate::repo_upgrade_to_8_to_9(&repo_vfs)?;
+                    continue;
+                }
+                if schema_version == "9" {
+                    migrate::repo_upgrade_to_9_to_10(&repo_vfs)?;
                     continue;
                 }
                 // restart read transaction we cancelled...

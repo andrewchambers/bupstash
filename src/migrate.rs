@@ -8,8 +8,10 @@ use super::fstx2;
 use super::oplog;
 use super::vfs;
 use super::xid;
-use std::collections::HashSet;
+use plmap::PipelineMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
+use xattr::FileExt;
 
 pub fn repo_upgrade_to_5_to_6(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
     // This upgrade mainly just prevents clients from seeing index entries they
@@ -118,5 +120,116 @@ pub fn repo_upgrade_to_7_to_8(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
 
     eprintln!("repository upgrade successful...");
     std::mem::drop(lock_file);
+    Ok(())
+}
+
+pub fn repo_upgrade_to_8_to_9(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
+    // This upgrade is a part one of the upgrade from 8 to 10.
+    // First we upgrade the schema to stop old versions of bupstash from interacting
+    // with the repository further while we then complete the move to 10.
+    eprintln!("upgrading repository schema from version 8 to version 9...");
+
+    let mut lock_file = repo_fs.open("repo.lock", vfs::OpenFlags::RDWR)?;
+    eprintln!("getting exclusive repository lock for upgrade...");
+    lock_file.lock(vfs::LockType::Exclusive)?;
+
+    let mut fstx2 = fstx2::WriteTxn::begin_at(repo_fs)?;
+    let schema_version = fstx2.read_string("meta/schema_version")?;
+    if schema_version != "8" {
+        anyhow::bail!(
+            "unable to upgrade, expected schema version 5, got {}",
+            schema_version
+        )
+    }
+    fstx2.add_write("meta/schema_version", "9".to_string().into_bytes())?;
+    fstx2.commit()?;
+    eprintln!("repository upgrade successful...");
+    drop(lock_file);
+    Ok(())
+}
+
+pub fn repo_upgrade_to_9_to_10(repo_fs: &vfs::VFs) -> Result<(), anyhow::Error> {
+    // This upgrade creates 16 shards and renames the chunks into those dirs parallel.
+    eprintln!("upgrading repository schema from version 9 to version 10...");
+
+    let mut lock_file = repo_fs.open("repo.lock", vfs::OpenFlags::RDWR)?;
+    eprintln!("getting exclusive repository lock for upgrade...");
+    lock_file.lock(vfs::LockType::Exclusive)?;
+
+    let mut fstx2 = fstx2::WriteTxn::begin_at(repo_fs)?;
+    let schema_version = fstx2.read_string("meta/schema_version")?;
+    if schema_version != "9" {
+        anyhow::bail!(
+            "unable to upgrade, expected schema version 5, got {}",
+            schema_version
+        )
+    }
+    fstx2.add_write("meta/schema_version", "10".to_string().into_bytes())?;
+
+    let data_dir = std::sync::Arc::new(repo_fs.sub_fs("data")?);
+
+    let mut xattrs = HashMap::new();
+    // Copy across any detected xattrs to the shards.
+    match data_dir.as_ref() {
+        vfs::VFs::OsDir(d) => {
+            for xattr in d.f.list_xattr()? {
+                if let Some(v) = d.f.get_xattr(&xattr)? {
+                    xattrs.insert(xattr, v);
+                }
+            }
+        }
+    };
+
+    for i in 0..16 {
+        let shard = &format!("{:x}", i);
+        match data_dir.mkdir(shard) {
+            Ok(_) => (),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(err) => return Err(err.into()),
+        };
+        match data_dir.as_ref() {
+            vfs::VFs::OsDir(d) => {
+                let shard_f = d.open(shard, vfs::OpenFlags::RDONLY)?;
+                for (k, v) in xattrs.iter() {
+                    shard_f.f.set_xattr(k, v)?;
+                }
+            }
+        }
+    }
+
+    {
+        let data_dir = data_dir.clone();
+
+        eprintln!("enumerating data chunks...");
+        let dir_ents = data_dir.read_dir(".")?;
+
+        let mut progress: usize = 0;
+        eprintln!("moving chunks into directory shards...");
+        for batch in dir_ents.chunks(256).map(|sl| sl.to_vec()).plmap(
+            32,
+            move |ents: Vec<vfs::DirEntry>| -> Result<usize, std::io::Error> {
+                for ent in ents.iter() {
+                    let name = &ent.file_name;
+                    if name.len() != 64 {
+                        continue;
+                    }
+                    let shard = &name[..1];
+                    let truncated_name = &name[1..];
+                    data_dir.rename(name, &format!("{}/{}", shard, truncated_name))?;
+                }
+                Ok(ents.len())
+            },
+        ) {
+            progress += batch?;
+            eprintln!("moved {} chunks...", progress);
+        }
+    }
+
+    data_dir.sync()?;
+
+    // Release lock.
+    fstx2.commit()?;
+    eprintln!("repository upgrade successful...");
+    drop(lock_file);
     Ok(())
 }

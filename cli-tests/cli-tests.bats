@@ -137,7 +137,8 @@ teardown () {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
   id="$(bupstash put :: "$SCRATCH/foo.txt")"
-  echo 'XXXXXXXXXXXXXXXXXXXXX' > "$BUPSTASH_REPOSITORY/data/"*;
+  chunk=$(find "$BUPSTASH_REPOSITORY/data/" -type f)
+  echo 'XXXXXXXXXXXXXXXXXXXXX' > "$chunk";
   run bupstash get id=$id
   echo "$output"
   echo "$output" | grep -q "corrupt"
@@ -189,25 +190,25 @@ _concurrent_send_test_worker () {
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash rm id=$id1
   test 1 = $(bupstash list | expr $(wc -l))
   test 3 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep removed | expr $(wc -l))"
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed | expr $(wc -l))"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | grep removed | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | grep -v removed | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash gc
   test 1 = $(bupstash list | expr $(wc -l))
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash rm id=$id2
   bupstash gc
@@ -215,8 +216,8 @@ _concurrent_send_test_worker () {
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 0 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
+    test 0 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
 }
 
@@ -229,8 +230,8 @@ _concurrent_send_test_worker () {
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash rm id=$id1
   bupstash recover-removed
@@ -238,8 +239,8 @@ _concurrent_send_test_worker () {
   test 4 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed  | expr $(wc -l))"
-    test 2 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | grep -v removed  | expr $(wc -l))"
+    test 2 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash rm id=$id1
   bupstash gc
@@ -248,8 +249,8 @@ _concurrent_send_test_worker () {
   test 1 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY/items" | grep -v removed | expr $(wc -l))"
-    test 1 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | grep -v removed | expr $(wc -l))"
+    test 1 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
   bupstash rm id=$id2
   bupstash gc
@@ -258,8 +259,8 @@ _concurrent_send_test_worker () {
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
   then
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY/items" | expr $(wc -l))"
-    test 0 = "$(ls "$BUPSTASH_REPOSITORY"/data | expr $(wc -l))"
+    test 0 = "$(find "$BUPSTASH_REPOSITORY/items" -type f | expr $(wc -l))"
+    test 0 = "$(find "$BUPSTASH_REPOSITORY"/data -type f | expr $(wc -l))"
   fi
 }
 
@@ -1122,12 +1123,12 @@ _concurrent_modify_worker () {
   id2="$(echo bar | bupstash put -k "$PUT_KEY" -)"
 
   bupstash sync --to "$SCRATCH/sync1" id="$id1"
-  test 1 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+  test 1 = "$(find "$SCRATCH"/sync1/data -type f | expr $(wc -l))"
   bupstash sync --to "$SCRATCH/sync1" id="$id2"
-  test 2 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+  test 2 = "$(find "$SCRATCH"/sync1/data -type f | expr $(wc -l))"
   
   bupstash sync --to "$SCRATCH/sync2"
-  test 2 = "$(ls "$SCRATCH"/sync1/data | expr $(wc -l))"
+  test 2 = "$(find "$SCRATCH"/sync1/data -type f | expr $(wc -l))"
 
   bupstash gc -r "$SCRATCH/sync1"
   bupstash gc -r "$SCRATCH/sync2"
