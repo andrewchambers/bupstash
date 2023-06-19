@@ -36,7 +36,7 @@ Bupstash automatically inserts special tags that can be viewed and queried again
 ### decryption-key-id
 
 This special tag is inserted when the `--query-encrypted` option is used, it allows searching against the
-key id that would be uesd for decrypting the given item. This tag is mostly useful for pruning
+key id that would be used for decrypting the given item. This tag is mostly useful for pruning
 backups for which you do not have the decryption key.
 
 ### size
