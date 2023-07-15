@@ -799,8 +799,8 @@ mod tests {
         let txn = ReadTxn::begin_at(&fs).unwrap();
         assert_eq!(txn.read("append").unwrap(), vec![1, 2, 3]);
         assert_eq!(txn.read("write").unwrap(), vec![4, 5, 6]);
-        assert!(txn.metadata("renamed").is_ok());
-        assert!(txn.metadata("some_dir").is_ok());
+        assert!(txn.fs.metadata("renamed").is_ok());
+        assert!(txn.fs.metadata("some_dir").is_ok());
         txn.end();
     }
 }
