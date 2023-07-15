@@ -55,11 +55,7 @@ pub enum Query {
 }
 
 fn is_tag_char(c: char) -> bool {
-    ('a'..='z').contains(&c)
-        || ('A'..='Z').contains(&c)
-        || ('0'..='9').contains(&c)
-        || c == '-'
-        || c == '_'
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
 macro_rules! impl_binop {
