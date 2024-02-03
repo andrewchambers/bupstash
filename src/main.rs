@@ -900,7 +900,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 
     opts.optflag(
-        "e",
+        "",
         "exec",
         "Treat arguments as a command to run, ensuring it succeeds before committing the item.",
     );
