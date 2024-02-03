@@ -36,7 +36,7 @@ thrash_worker () {
   for i in $(seq 15)
   do
     expected=$(uuidgen)
-    id=$(bupstash put -q -e --no-send-log thrash_test=yes :: echo $expected)
+    id=$(bupstash put -q -e --no-send-log -t thrash_test=yes -- echo $expected)
 
     if test "$?" = 0
     then
@@ -66,7 +66,7 @@ thrash_worker () {
     fi
 
     expected=$(uuidgen)
-    id=$(bupstash put -r "$SCRATCH/sync-source-repo" -q -e --no-send-log thrash_test=yes :: echo $expected)
+    id=$(bupstash put -r "$SCRATCH/sync-source-repo" -q -e --no-send-log -t thrash_test=yes -- echo $expected)
     bupstash sync -r "$SCRATCH/sync-source-repo" -q id="$id" >&2
     if test "$?" = 0
     then

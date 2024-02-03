@@ -54,21 +54,21 @@ teardown () {
 @test "simple put+get primary key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -- "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
 @test "simple put+get put key" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -k "$PUT_KEY" -- "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
 @test "simple put+get no compression" {
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put --compression=none -k "$PUT_KEY" :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put --compression=none -k "$PUT_KEY" -- "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
@@ -78,12 +78,21 @@ teardown () {
   mkdir "$SCRATCH/d/f"
   echo foo > "$SCRATCH/d/foo.txt"
 
-  id="$(bupstash put name=x.tar "$SCRATCH/d")"
-  id="$(bupstash put name=foo "$SCRATCH/d/foo.txt")"
-  id="$(bupstash put name=bar.tar "$SCRATCH/d/e" "$SCRATCH/d/f")"
+  id="$(bupstash put -t name=x.tar "$SCRATCH/d")"
+  id="$(bupstash put -t name=foo "$SCRATCH/d/foo.txt")"
+  id="$(bupstash put -t name=bar.tar "$SCRATCH/d/e" "$SCRATCH/d/f")"
   bupstash get name=x.tar > /dev/null
   bupstash get name=foo > /dev/null
   bupstash get name=bar.tar > /dev/null
+}
+
+@test "put --tag CLI option" {
+  data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  echo -n "$data" > "$SCRATCH/foo.txt"
+
+  # Same tag twice
+  ! bupstash put -t foo=bar --tag foo=baz -- "$SCRATCH/foo.txt"
+  ! bupstash put -t foo=bar --tag foo=bar -- "$SCRATCH/foo.txt"
 }
 
 @test "random data" {
@@ -97,7 +106,7 @@ teardown () {
       # Workaround since macOS's head doesn't support a byte count of 0
       touch "$SCRATCH/rand.dat"
     fi
-    id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/rand.dat")"
+    id="$(bupstash put -k "$PUT_KEY" -- "$SCRATCH/rand.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
@@ -109,7 +118,7 @@ teardown () {
   do
     rm -f "$SCRATCH/yes.dat"
     dd if=/dev/zero of="$SCRATCH/yes.dat" bs=$i count=1
-    id="$(bupstash put -k "$PUT_KEY" :: "$SCRATCH/yes.dat")"
+    id="$(bupstash put -k "$PUT_KEY" -- "$SCRATCH/yes.dat")"
     bupstash get id=$id > "$SCRATCH/got.dat"
     bupstash gc
     cmp --silent "$SCRATCH/yes.dat" "$SCRATCH/got.dat"
@@ -119,7 +128,7 @@ teardown () {
 @test "key mismatch" {
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -- "$SCRATCH/foo.txt")"
   bupstash new-key -o "$SCRATCH/wrong.key"
   run bupstash get -k "$SCRATCH/wrong.key" id=$id
   echo "$output" | grep -q "key does not match"
@@ -136,7 +145,7 @@ teardown () {
   fi
   data="abc123"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -- "$SCRATCH/foo.txt")"
   echo 'XXXXXXXXXXXXXXXXXXXXX' > "$BUPSTASH_REPOSITORY/data/"*;
   run bupstash get id=$id
   echo "$output"
@@ -151,7 +160,7 @@ _concurrent_send_test_worker () {
   set -e
   for i in $(seq 50)
   do
-    id="$(bupstash put -e --no-send-log :: echo $i)"
+    id="$(bupstash put --exec --no-send-log -- echo $i)"
     test "$i" = "$(bupstash get id=$id)"
   done
 }
@@ -170,7 +179,7 @@ _concurrent_send_test_worker () {
 @test "simple search and listing" {
   for i in $(seq 100) # Enough to trigger more than one sync packet.
   do
-    bupstash put -e "i=$i" :: echo $i
+    bupstash put --exec -t "i=$i" -- echo $i
   done
   for k in $BUPSTASH_KEY $METADATA_KEY
   do
@@ -183,8 +192,8 @@ _concurrent_send_test_worker () {
 @test "rm and gc" {
   test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  id1="$(bupstash put -e :: echo hello1)"
-  id2="$(bupstash put -e :: echo hello2)"
+  id1="$(bupstash put --exec -- echo hello1)"
+  id2="$(bupstash put --exec -- echo hello2)"
   test 2 = $(bupstash list | expr $(wc -l))
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -223,8 +232,8 @@ _concurrent_send_test_worker () {
 @test "rm and recover-removed" {
   test 0 = $(bupstash list | expr $(wc -l))
   test 0 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
-  id1="$(bupstash put -e :: echo hello1)"
-  id2="$(bupstash put -e :: echo hello2)"
+  id1="$(bupstash put --exec -- echo hello1)"
+  id2="$(bupstash put --exec -- echo hello2)"
   test 2 = "$(bupstash list | expr $(wc -l))"
   test 2 = "$(sqlite3 "$SCRATCH/query-cache.sqlite3" 'select count(*) from ItemOpLog;')"
   if test -n "$BUPSTASH_REPOSITORY"
@@ -264,9 +273,9 @@ _concurrent_send_test_worker () {
 }
 
 @test "query sync" {
-  id1="$(bupstash put -e :: echo hello1)"
+  id1="$(bupstash put --exec -- echo hello1)"
   test 1 = $(bupstash list | expr $(wc -l))
-  id2="$(bupstash put -e :: echo hello2)"
+  id2="$(bupstash put --exec -- echo hello2)"
   test 2 = $(bupstash list | expr $(wc -l))
   bupstash rm id=$id1
   test 1 = $(bupstash list | expr $(wc -l))
@@ -279,16 +288,16 @@ _concurrent_send_test_worker () {
 }
 
 @test "get via query" {
-  bupstash put -e foo=bar  echo -n hello1 
-  bupstash put -e foo=baz  echo -n hello2 
-  bupstash put -e foo=bang echo -n hello2 
+  bupstash put --exec -t foo=bar  echo -n hello1 
+  bupstash put --exec -t foo=baz  echo -n hello2 
+  bupstash put --exec -t foo=bang echo -n hello2 
   test "hello2" = $(bupstash get "foo=ban*")
 }
 
 @test "rm via query" {
-  bupstash put -e  foo=bar  echo -n hello1 
-  bupstash put -e  foo=baz  echo -n hello2
-  bupstash put -e  foo=bang echo -n hello2
+  bupstash put --exec  -t foo=bar  echo -n hello1 
+  bupstash put --exec  -t foo=baz  echo -n hello2
+  bupstash put --exec  -t foo=bang echo -n hello2
   test 3 = $(bupstash list | expr $(wc -l))
   if bupstash rm "foo=*"
   then
@@ -306,12 +315,12 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
   # Test again to excercise stat caching.
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
-  id=$(bupstash put :: "$SCRATCH/foo/a.txt" "$SCRATCH/foo/b.txt")
+  id=$(bupstash put -- "$SCRATCH/foo/a.txt" "$SCRATCH/foo/b.txt")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
@@ -321,19 +330,19 @@ _concurrent_send_test_worker () {
   echo b > "$SCRATCH/foo/b.txt"
   mkdir "$SCRATCH/foo/bar"
   echo c > "$SCRATCH/foo/bar/c.txt"
-  id=$(bupstash put --no-send-log :: "$SCRATCH/foo")
+  id=$(bupstash put --no-send-log -- "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
-  id=$(bupstash put --no-stat-caching :: "$SCRATCH/foo")
+  id=$(bupstash put --no-stat-caching -- "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "stat cache invalidated" {
   mkdir "$SCRATCH/foo"
   echo a > "$SCRATCH/foo/a.txt"
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   bupstash rm id=$id
   bupstash gc
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   bupstash get id=$id > /dev/null
 }
 
@@ -346,7 +355,7 @@ _concurrent_send_test_worker () {
   unset BUPSTASH_REPOSITORY
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -- "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
@@ -354,7 +363,7 @@ _concurrent_send_test_worker () {
   export BUPSTASH_KEY_COMMAND="cat $BUPSTASH_KEY"
   data="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   echo -n "$data" > "$SCRATCH/foo.txt"
-  id="$(bupstash put :: "$SCRATCH/foo.txt")"
+  id="$(bupstash put -- "$SCRATCH/foo.txt")"
   test "$data" = "$(bupstash get id=$id )"
 }
 
@@ -365,7 +374,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa\
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaa
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 7 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
@@ -377,7 +386,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
 llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
     "$SCRATCH/foo/l"
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 2 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
@@ -405,38 +414,38 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   touch "$SCRATCH/foo/bar/baz/bang"
 
   # No exclude, everything should be in
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 6 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on multiple levels
   # As expected, this also excludes $SCRATCH/foo/bang
-  id=$(bupstash put --exclude="$SCRATCH/foo/**/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="$SCRATCH/foo/**/bang" -- "$SCRATCH/foo")
   bupstash get id=$id | tar -tf -
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on multiple levels (should be the same)
-  id=$(bupstash put --exclude="**/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="**/bang" -- "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on multiple levels (should still be the same)
-  id=$(bupstash put --exclude="/**/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="/**/bang" -- "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Still the same thing, but using the "match on name" shorthand (no slashes = only file name)
-  id=$(bupstash put --exclude="bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="bang" -- "$SCRATCH/foo")
   test 3 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on a single level
   # We want /foo /foo/bar /foo/bar/baz /foo/bang /foo/bar/baz/bang (that one's important)
-  id=$(bupstash put --exclude="$SCRATCH/foo/*/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="$SCRATCH/foo/*/bang" -- "$SCRATCH/foo")
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Exclude on a single level, but wrongly so (nothing gets excluded)
-  id=$(bupstash put --exclude="/*/bang" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude="/*/bang" -- "$SCRATCH/foo")
   test 6 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 
   # Invalid exclusion regex
-  ! bupstash put --exclude="*/bar" :: "$SCRATCH/foo"
+  ! bupstash put --exclude="*/bar" -- "$SCRATCH/foo"
 }
 
 # Test exclude marker files
@@ -450,7 +459,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   touch "$SCRATCH/foo/bar/baz/bang"
 
   # Keep . bang bar
-  id=$(bupstash put --exclude-if-present=".backupignore" :: "$SCRATCH/foo")
+  id=$(bupstash put --exclude-if-present=".backupignore" -- "$SCRATCH/foo")
   test 4 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
@@ -462,7 +471,7 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
   n=100000000
   export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possible
   head -c $n /dev/urandom > "$SCRATCH/rand.dat"
-  id="$(bupstash put :: "$SCRATCH/rand.dat")"
+  id="$(bupstash put -- "$SCRATCH/rand.dat")"
   bupstash get id=$id > "$SCRATCH/got.dat"
   bupstash gc
   cmp --silent "$SCRATCH/rand.dat" "$SCRATCH/got.dat"
@@ -481,14 +490,14 @@ llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll\
     echo foo > "$SCRATCH/foo/bar$i/data"
   done
   export BUPSTASH_CHECKPOINT_SECONDS=0 # Checkpoint as often as possible
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 101 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
 }
 
 @test "rm from stdin" {
-  id1="$(bupstash put -e echo hello1)"
-  id2="$(bupstash put -e echo hello2)"
-  id3="$(bupstash put -e echo hello3)"
+  id1="$(bupstash put --exec echo hello1)"
+  id2="$(bupstash put --exec echo hello2)"
+  id3="$(bupstash put --exec echo hello3)"
   test 3 = "$(bupstash list | expr $(wc -l))"
   echo "${id1}" | bupstash rm --ids-from-stdin
   test 2 = "$(bupstash list | expr $(wc -l))"
@@ -548,8 +557,8 @@ _concurrent_modify_worker () {
 }
 
 @test "list and rm no key" {
-  bupstash put -e echo hello1
-  bupstash put -e echo hello2
+  bupstash put --exec echo hello1
+  bupstash put --exec echo hello2
   unset BUPSTASH_KEY
   test 2 = "$(bupstash list --query-encrypted | expr $(wc -l))"
   bupstash rm --allow-many --query-encrypted id='*'
@@ -595,7 +604,7 @@ _concurrent_modify_worker () {
   mkdir "$SCRATCH/foo/bang"
   echo foo > "$SCRATCH/foo/bar/baz/a.txt"
 
-  id=$(bupstash put :: "$SCRATCH/foo/bar" "$SCRATCH/foo/bar/baz" "$SCRATCH/foo/bang")
+  id=$(bupstash put -- "$SCRATCH/foo/bar" "$SCRATCH/foo/bar/baz" "$SCRATCH/foo/bang")
   bupstash get id=$id | tar -tf -
   test 5 = "$(bupstash get id=$id | tar -tf - | expr $(wc -l))"
   test 5 = "$(bupstash list-contents id=$id | expr $(wc -l))"
@@ -609,7 +618,7 @@ _concurrent_modify_worker () {
   mkdir "$SCRATCH/foo/bang"
   echo foo > "$SCRATCH/foo/bar/baz/a.txt"
 
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   test 5 = "$(bupstash list-contents id=$id | expr $(wc -l))"
   test 5 = "$(bupstash list-contents --pick . id=$id | expr $(wc -l))"
   test 3 = "$(bupstash list-contents --pick bar id=$id | expr $(wc -l))"
@@ -620,7 +629,7 @@ _concurrent_modify_worker () {
   touch "$SCRATCH/foo/a"
   ln "$SCRATCH/foo/a" "$SCRATCH/foo/b"
 
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   mkdir "$SCRATCH/restore"
   bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
 
@@ -635,7 +644,7 @@ _concurrent_modify_worker () {
   touch "$SCRATCH/foo/$name"
   ln "$SCRATCH/foo/$name" "$SCRATCH/foo/b"
 
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   mkdir "$SCRATCH/restore"
 
   if test $(uname) != "Linux"
@@ -660,7 +669,7 @@ _concurrent_modify_worker () {
   ln -s "$SCRATCH/foo/a" "$SCRATCH/foo/b"
   ln -n "$SCRATCH/foo/b" "$SCRATCH/foo/c"
 
-  id=$(bupstash put :: "$SCRATCH/foo")
+  id=$(bupstash put -- "$SCRATCH/foo")
   mkdir "$SCRATCH/restore"
   bupstash get id=$id | tar -C "$SCRATCH/restore" -xvf -
 
@@ -721,14 +730,14 @@ _concurrent_modify_worker () {
   bupstash list
   bupstash list-contents id=$id
   if bupstash init ; then exit 1 ; fi
-  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash put --exec echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
   if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-put $REPO"
-  bupstash put -e echo hi
+  bupstash put --exec echo hi
   if bupstash init ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash list  ; then exit 1 ; fi
@@ -742,14 +751,14 @@ _concurrent_modify_worker () {
   bupstash list-contents id=$id
   if bupstash init ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
-  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash put --exec echo hi ; then exit 1 ; fi
   if bupstash rm id=$id ; then exit 1 ; fi
   if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
 
   export BUPSTASH_REPOSITORY_COMMAND="bupstash serve --allow-gc $REPO"
   if bupstash init ; then exit 1 ; fi
-  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash put --exec echo hi ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
   if bupstash list  ; then exit 1 ; fi
   if bupstash list-contents id=$id  ; then exit 1 ; fi
@@ -762,7 +771,7 @@ _concurrent_modify_worker () {
   bupstash list-contents id=$id
   if bupstash init ; then exit 1 ; fi
   if bupstash get id=$id > /dev/null ; then exit 1 ; fi
-  if bupstash put -e echo hi ; then exit 1 ; fi
+  if bupstash put --exec echo hi ; then exit 1 ; fi
   if bupstash recover-removed ; then exit 1 ; fi
   if bupstash gc ; then exit 1 ; fi
   # delete as the last test
@@ -783,7 +792,7 @@ _concurrent_modify_worker () {
   echo -n "abc" > "$SCRATCH/d/a.txt"
   id=$(bupstash put $SCRATCH/d)
   bupstash restore --into $SCRATCH/restore id=$id
-  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d -- $SCRATCH/restore | expr $(wc -l))"
 }
 
 @test "restore symlink" {
@@ -791,7 +800,7 @@ _concurrent_modify_worker () {
   ln -s missing.txt "$SCRATCH"/d/l
   id=$(bupstash put "$SCRATCH"/d)
   bupstash restore --into "$SCRATCH"/restore id=$id
-  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d -- "$SCRATCH"/restore | expr $(wc -l))"
 }
 
 @test "restore hardlink" {
@@ -800,7 +809,7 @@ _concurrent_modify_worker () {
   ln "$SCRATCH"/d/a.txt "$SCRATCH"/d/b.txt
   id=$(bupstash put "$SCRATCH"/d)
   bupstash restore --into "$SCRATCH"/restore id=$id
-  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d -- "$SCRATCH"/restore | expr $(wc -l))"
   echo -n "xxx" >> "$SCRATCH/restore/a.txt"
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
@@ -816,7 +825,7 @@ _concurrent_modify_worker () {
   
   id=$(bupstash put "$SCRATCH"/d)
   bupstash restore --into "$SCRATCH"/restore id=$id
-  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d :: "$SCRATCH"/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed "$SCRATCH"/d -- "$SCRATCH"/restore | expr $(wc -l))"
   echo -n "xxx" >> "$SCRATCH/restore/a.txt"
   test $(cat "$SCRATCH"/restore/a.txt) = $(cat "$SCRATCH"/restore/b.txt)
 }
@@ -836,7 +845,7 @@ _concurrent_modify_worker () {
 
   id=$(bupstash put "$SCRATCH"/d)
   bupstash restore --into $SCRATCH/restore id=$id
-  test 0 = "$(bupstash diff --relaxed $SCRATCH/d :: $SCRATCH/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d -- $SCRATCH/restore | expr $(wc -l))"
 }
 
 @test "restore pick" {
@@ -846,7 +855,7 @@ _concurrent_modify_worker () {
   echo -n "hij" > "$SCRATCH/d/c/c.txt"
   id=$(bupstash put "$SCRATCH"/d)
   bupstash restore --pick b --into $SCRATCH/restore id=$id
-  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b :: $SCRATCH/restore | expr $(wc -l))"
+  test 0 = "$(bupstash diff --relaxed $SCRATCH/d/b -- $SCRATCH/restore | expr $(wc -l))"
 }
 
 @test "restore sparse" {
@@ -864,7 +873,7 @@ _concurrent_modify_worker () {
   truncate -s 16M $sparse_dir/file_with_data2.img
   echo data >> $sparse_dir/file_with_data2.img
 
-  id=$(bupstash put :: "$sparse_dir")
+  id=$(bupstash put -- "$sparse_dir")
   bupstash restore --into "$restore_dir" "id=$id"
 
   diff -u \
@@ -892,13 +901,13 @@ _concurrent_modify_worker () {
     "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
 
     # Put twice so we test caching code paths.
-    id1=$(bupstash put :: "$rand_dir")
-    id2=$(bupstash put :: "$rand_dir")
+    id1=$(bupstash put -- "$rand_dir")
+    id2=$(bupstash put -- "$rand_dir")
 
     for id in $(echo $id1 $id2)
     do
       bupstash restore --into "$restore_dir" "id=$id"
-      test 0 = "$(bupstash diff --relaxed "$rand_dir" :: "$restore_dir" | expr $(wc -l))"
+      test 0 = "$(bupstash diff --relaxed "$rand_dir" -- "$restore_dir" | expr $(wc -l))"
 
       for i in $(seq 3)
       do
@@ -907,7 +916,7 @@ _concurrent_modify_worker () {
           rm "$to_delete"
         done
         bupstash restore --into "$restore_dir" "id=$id"
-        test 0 = "$(bupstash diff --relaxed "$rand_dir" :: "$restore_dir" | expr $(wc -l))"
+        test 0 = "$(bupstash diff --relaxed "$rand_dir" -- "$restore_dir" | expr $(wc -l))"
       done
 
       bupstash rm id=$id
@@ -927,8 +936,8 @@ _concurrent_modify_worker () {
   restore_dir="$SCRATCH/restore_dir"
   copy_dir="$SCRATCH/copy_dir"
   # Put twice so we test caching code paths.
-  id1=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
-  id2=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+  id1=$(bupstash put -- "$BUPSTASH_TORTURE_DIR")
+  id2=$(bupstash put -- "$BUPSTASH_TORTURE_DIR")
 
   for id in $(echo $id1 $id2)
   do
@@ -965,8 +974,8 @@ _concurrent_modify_worker () {
     "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
 
     # Put twice so we test caching code paths.
-    id1=$(bupstash put :: "$rand_dir")
-    id2=$(bupstash put :: "$rand_dir")
+    id1=$(bupstash put -- "$rand_dir")
+    id2=$(bupstash put -- "$rand_dir")
 
     for id in $(echo $id1 $id2)
     do
@@ -1004,8 +1013,8 @@ _concurrent_modify_worker () {
   restore_dir="$SCRATCH/restore_dir"
   copy_dir="$SCRATCH/copy_dir"
   # Put twice so we test caching code paths.
-  id1=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
-  id2=$(bupstash put :: "$BUPSTASH_TORTURE_DIR")
+  id1=$(bupstash put -- "$BUPSTASH_TORTURE_DIR")
+  id2=$(bupstash put -- "$BUPSTASH_TORTURE_DIR")
 
   for id in $(echo $id1 $id2)
   do
@@ -1047,8 +1056,8 @@ _concurrent_modify_worker () {
     "$BATS_TEST_DIRNAME/mk-random-dir.py" "$rand_dir"
 
     # Put twice so we test caching code paths.
-    id1=$(bupstash put :: "$rand_dir")
-    id2=$(bupstash put :: "$rand_dir")
+    id1=$(bupstash put -- "$rand_dir")
+    id2=$(bupstash put -- "$rand_dir")
 
     for id in $(echo $id1 $id2)
     do
@@ -1099,7 +1108,7 @@ _concurrent_modify_worker () {
   do
     # XXX This timeout scheme is very brittle.
     export BUPSTASH_REPOSITORY_COMMAND="timeout -s KILL 0.0$(($RANDOM % 10)) bupstash serve $REPO"
-    bupstash put -e echo $(uuidgen) || true
+    bupstash put --exec echo $(uuidgen) || true
     bupstash gc > /dev/null || true
     bupstash rm --allow-many "id=f*" || true
     if test "$(($RANDOM % 2))" = 0
@@ -1144,7 +1153,7 @@ _concurrent_modify_worker () {
   bupstash exec-with-locks sh -c \
     "rmdir \"$BUPSTASH_REPOSITORY/items\" && sleep 0.5 && mkdir \"$BUPSTASH_REPOSITORY/items\"" &
   sleep 0.2
-  bupstash put -q -e echo foo
+  bupstash put -q --exec echo foo
 }
 
 @test "parallel thrash" {
@@ -1193,7 +1202,7 @@ _concurrent_modify_worker () {
 
   # The indexer must handle EACCES in any path element, i.e. gracefully stop at
   # the first inaccessible parent directory.
-  id=$(bupstash put --ignore-permission-errors :: "$SCRATCH/userdir" /root/rootfile)
+  id=$(bupstash put --ignore-permission-errors -- "$SCRATCH/userdir" /root/rootfile)
   rootuid=$(bupstash list-contents --format=jsonl1 --pick root/ id=$id | jq .uid)
   test 0 = $rootuid
 }

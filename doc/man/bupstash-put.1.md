@@ -5,8 +5,8 @@ bupstash-put(1)
 
 Put data into a bupstash repository.
 
-`bupstash put [OPTIONS] [TAG=VAL...] [::] PATHS...`<br>
-`bupstash put --exec [OPTIONS] [TAG=VAL...] [::] COMMAND`<br>
+`bupstash put [OPTIONS] [--] PATHS...`<br>
+`bupstash put --exec [OPTIONS] [--] COMMAND...`<br>
 
 ## DESCRIPTION
 
@@ -20,14 +20,6 @@ command is executed and stdout is sent to the repository.
 Data stored in a bupstash repository is automatically deduplicated
 such that the same or similar snapshots take minimal additional disk space.
 For efficient incremental operation, use the --send-log option described in the usage notes section.
-
-All puts can associated with a set of arbitrary encrypted metadata tags, which
-can be queried using bupstash-list(1). Tags are specified in a simple
-`KEY=VALUE` format on the command line. Valid tag keys *must* match the
-regular expression `^([a-zA-Z0-9\\-_]+)=(.+)$`, that means tag keys must be alpha numeric 
-with the addition of `-` and `_`. Tag processing ends at the first argument that does not match the pattern.
-
-The special marker argument `::` may be used to force the end of tag parsing, but is usually not necessary.
 
 Note that multiple concurrent uploads to the same repository are safe and supported provided that all clients
 are accessing the repository from the same server and thus respect the repository file locks.
@@ -76,24 +68,32 @@ snapshots include ZFS, BTRFS and also LVM snapshots
 Another choice is to perform a put operation at a time when the files are less likely to be modified,
 this will provide backups that are good enough for many people without extra complications.
 
-### Default tags
+### Tags
+
+All puts can associated with a set of arbitrary encrypted metadata tags, which
+can be queried using bupstash-list(1). Tags are specified in a simple
+`KEY=VALUE` format on the command line via the `--tag`/`-t` flag. Valid tag keys *must* match the
+regular expression `^([a-zA-Z0-9\\-_]+)=(.+)$`, that means tag keys must be alpha numeric 
+with the addition of `-` and `_`.
+
+#### Default tags
 
 `bupstash` automatically sets default tags.
 
 Currently they are:
 
-- name, set to the `FILENAME`, or `DIRNAME.tar`, omitted when putting in --exec mode.
+- `name`, set to the `FILENAME`, or `DIRNAME.tar`, omitted when putting in --exec mode.
 
 Default tags can be overidden manually by simply specifying them.
 
-### Reserved tags
+#### Reserved tags
 
 The following tags are reserved and cannot be set manually:
 
-- id
-- decryption-key-id
-- size
-- timestamp
+- `id`
+- `decryption-key-id`
+- `size`
+- `timestamp`
 
 ### File actions
 
@@ -162,6 +162,9 @@ With possible types:
   Exclude a directory's content if it contains a file with the given name. May be passed multiple times.
   This will still backup the folder itself, containing the marker file. Common marker file names are `CACHEDIR.TAG`, `.backupexclude`
   or `.no-backup`.
+
+* -t, --tag KEY=VALUE:
+  Add a tag which the backup will be associated with. May be passed multiple times. No duplicate tag keys allowed.
 
 * --send-log PATH:
   Path to the send log file, defaults to one of the following, in order, provided
@@ -254,7 +257,7 @@ deduplicating repeated files.
 # Snapshot a directory.
 $ ID="$(bupstash put ./data)"
 # List snapshot contents.
-$ bupstash list-contents id="$ID"
+$ bupstash list-contents -t id="$ID"
 # Fetch the snapshot.
 $ bupstash get id="$ID" | tar -xf -
 ```
@@ -276,7 +279,7 @@ $ bupstash put ./multiple-files.txt ./directory
 
 ```
 # Snapshot a postgres database with pgdump
-$ bupstash put --exec name=dbdump.sql pgdump mydb
+$ bupstash put --exec -t name=dbdump.sql pgdump mydb
 ```
 
 ### Connecting to an ssh server with a specific ssh config.

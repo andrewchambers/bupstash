@@ -40,6 +40,7 @@ pub mod xglobset;
 pub mod xid;
 pub mod xtar;
 
+use anyhow::Context;
 use plmap::PipelineMap;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as FmtWrite;
@@ -436,11 +437,7 @@ fn cli_to_serve_process(
 
     let mut proc = match std::process::Command::new(bin)
         .args(serve_cmd_args)
-        .stderr(if progress.is_hidden() {
-            std::process::Stdio::inherit()
-        } else {
-            std::process::Stdio::piped()
-        })
+        .stderr(std::process::Stdio::piped())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -449,21 +446,39 @@ fn cli_to_serve_process(
         Err(err) => anyhow::bail!("error spawning serve command: {}", err),
     };
 
-    let stderr_reader = if progress.is_hidden() {
-        None
-    } else {
+    let stderr_reader = {
         let progress = progress.clone();
         let proc_stderr = proc.stderr.take().unwrap();
 
         let stderr_reader = std::thread::spawn(move || {
             let buf_reader = std::io::BufReader::new(proc_stderr);
             for line in buf_reader.lines().flatten() {
-                progress.println(&line);
-                // Theres a tiny race condition here where we may print an
-                // error line twice, I can't see how to fix this unless we
-                // rewrite the progress bar library to report if the print happened.
-                if progress.is_finished() || progress.is_hidden() {
+                if progress.is_hidden() {
+                    /*
+                     * Workaround for SSH rogue behavior.
+                     * It sets its file descriptors to O_NONBLOCK, and because these
+                     * are shared on Unix it would also affect our stderr if we simply
+                     * inherited that file descriptor. Instead, we always use `piped` and
+                     * simply read and forward the bytes in a thread.
+                     *
+                     * See also:
+                     * https://github.com/andrewchambers/bupstash/issues/378
+                     * https://public-inbox.org/git/20190909170403.GB30399@sigill.intra.peff.net/T/
+                     * https://lists.nongnu.org/archive/html/bug-cvs/2005-07/msg00008.html
+                     * https://www.spinics.net/lists/openssh-unix-dev/msg06047.html
+                     * https://github.com/rust-lang/rust/issues/13336
+                     * https://github.com/rust-lang/rust/issues/100673
+                     */
                     let _ = writeln!(std::io::stderr(), "{}", line);
+                } else {
+                    progress.println(&line);
+
+                    // Theres a tiny race condition here where we may print an
+                    // error line twice, I can't see how to fix this unless we
+                    // rewrite the progress bar library to report if the print happened.
+                    if progress.is_finished() || progress.is_hidden() {
+                        let _ = writeln!(std::io::stderr(), "{}", line);
+                    }
                 }
             }
         });
@@ -885,7 +900,7 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
     opts.optflag("q", "quiet", "Be quiet, implies --no-progress.");
 
     opts.optflag(
-        "e",
+        "",
         "exec",
         "Treat arguments as a command to run, ensuring it succeeds before committing the item.",
     );
@@ -926,6 +941,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
   or `.no-backup`.",
         "FILENAME",
     );
+    opts.optmulti(
+        "t",
+        "tag",
+        "Add a tag which the backup will be associated with. May be passed multiple times. No duplicate tag keys allowed.",
+        "KEY=VALUE",
+    );
     opts.optflag(
         "",
         "ignore-permission-errors",
@@ -951,35 +972,25 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let matches = parse_cli_opts(opts, &args);
 
+    let source_args = matches.free.clone();
+
     let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$").unwrap();
-
     let mut tags = BTreeMap::<String, String>::new();
-    let mut source_args = Vec::new();
 
-    {
-        let mut collecting_tags = true;
-
-        for a in &matches.free {
-            if collecting_tags && a == "::" {
-                collecting_tags = false;
-                continue;
-            }
-            if collecting_tags {
-                match tag_re.captures(a) {
-                    Some(caps) => {
-                        let t = &caps[1];
-                        let v = &caps[2];
-                        tags.insert(t.to_string(), v.to_string());
-                    }
-                    None => {
-                        collecting_tags = false;
-                        source_args.push(a.to_string());
-                    }
-                }
-            } else {
-                source_args.push(a.to_string());
-            }
-        }
+    for tag in matches.opt_strs("tag") {
+        let Some(caps) = tag_re.captures(&tag) else {
+            anyhow::bail!(
+                "Invalid tag '{tag}'. Tags must match the regex ^([a-zA-Z0-9\\-_]+)=(.+)$"
+            );
+        };
+        let key = &caps[1];
+        let val = &caps[2];
+        // Insert but check for duplicates
+        // TODO switch to try_insert once stable
+        anyhow::ensure!(
+            tags.insert(key.to_string(), val.to_string()).is_none(),
+            "Duplicated tag key '{key}'"
+        );
     }
 
     let want_xattrs = matches.opt_present("xattrs");
@@ -1158,7 +1169,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
                     action,
                     ty,
                     path.as_os_str().to_string_lossy()
-                )?;
+                )
+                .context("failed to write to stderr")?;
                 Ok(())
             }))
         } else {
@@ -1288,7 +1300,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         &progress,
         ServeProcessCliOpts::default(),
         protocol::OpenMode::ReadWrite,
-    )?;
+    )
+    .context("could not start serve process")?;
     let mut serve_out = serve_proc.proc.stdout.as_mut().unwrap();
     let mut serve_in = serve_proc.proc.stdin.as_mut().unwrap();
 
@@ -1314,7 +1327,8 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
         threads,
     };
 
-    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)?;
+    let (id, stats) = client::put(ctx, &mut serve_out, &mut serve_in, tags, data_source)
+        .context("failed to backup the data")?;
     client::hangup(&mut serve_in)?;
     serve_proc.wait()?;
 
@@ -3133,9 +3147,10 @@ fn main() {
         // Support unix style pipelines, don't print an error on EPIPE.
         match err.root_cause().downcast_ref::<std::io::Error>() {
             Some(io_error) if io_error.kind() == std::io::ErrorKind::BrokenPipe => {
-                std::process::exit(1)
+                // Use distinct exit code here for diagnostic
+                std::process::exit(2)
             }
-            _ => die(format!("bupstash {}: {}", subcommand, err)),
+            _ => die(format!("bupstash {}: {:?}", subcommand, err)),
         }
     }
 }
