@@ -6,7 +6,7 @@ bupstash-put(1)
 Put data into a bupstash repository.
 
 `bupstash put [OPTIONS] [TAG=VAL...] [::] PATHS...`<br>
-`bupstash put --exec [OPTIONS] [TAG=VAL...] [::] COMMAND`<br>
+`bupstash put --exec [OPTIONS] [TAG=VAL...] [::] COMMAND...`<br>
 
 ## DESCRIPTION
 
