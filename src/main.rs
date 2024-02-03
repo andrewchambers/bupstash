@@ -941,6 +941,12 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
   or `.no-backup`.",
         "FILENAME",
     );
+    opts.optmulti(
+        "t",
+        "tag",
+        "Add a tag which the backup will be associated with. May be passed multiple times. No duplicate tag keys allowed.",
+        "KEY=VALUE",
+    );
     opts.optflag(
         "",
         "ignore-permission-errors",
@@ -966,35 +972,25 @@ fn put_main(args: Vec<String>) -> Result<(), anyhow::Error> {
 
     let matches = parse_cli_opts(opts, &args);
 
+    let source_args = matches.free.clone();
+
     let tag_re = regex::Regex::new(r"^([a-zA-Z0-9\\-_]+)=(.+)$").unwrap();
-
     let mut tags = BTreeMap::<String, String>::new();
-    let mut source_args = Vec::new();
 
-    {
-        let mut collecting_tags = true;
-
-        for a in &matches.free {
-            if collecting_tags && a == "::" {
-                collecting_tags = false;
-                continue;
-            }
-            if collecting_tags {
-                match tag_re.captures(a) {
-                    Some(caps) => {
-                        let t = &caps[1];
-                        let v = &caps[2];
-                        tags.insert(t.to_string(), v.to_string());
-                    }
-                    None => {
-                        collecting_tags = false;
-                        source_args.push(a.to_string());
-                    }
-                }
-            } else {
-                source_args.push(a.to_string());
-            }
-        }
+    for tag in matches.opt_strs("tag") {
+        let Some(caps) = tag_re.captures(&tag) else {
+            anyhow::bail!(
+                "Invalid tag '{tag}'. Tags must match the regex ^([a-zA-Z0-9\\-_]+)=(.+)$"
+            );
+        };
+        let key = &caps[1];
+        let val = &caps[2];
+        // Insert but check for duplicates
+        // TODO switch to try_insert once stable
+        anyhow::ensure!(
+            tags.insert(key.to_string(), val.to_string()).is_none(),
+            "Duplicated tag key '{key}'"
+        );
     }
 
     let want_xattrs = matches.opt_present("xattrs");

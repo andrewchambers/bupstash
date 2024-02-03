@@ -38,7 +38,7 @@ thrash_worker () {
   do
     expected=$(uuidgen)
     
-    id=$(bupstash put -q -e --no-send-log thrash_test=yes :: echo $expected)
+    id=$(bupstash put -q -e --no-send-log -t thrash_test=yes -- echo $expected)
     
     if test "$?" = 0
     then
