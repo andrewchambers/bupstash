@@ -48,7 +48,7 @@ $ bupstash list hostname=server1 or hostname=server2
 
 Precedence grouping:
 ```
-$ bupstash list [hostname=server1 or hostname=server2] and date=2020-* 
+$ bupstash list [ hostname=server1 or hostname=server2 ] and date=2020-* 
 ...
 ```
 
